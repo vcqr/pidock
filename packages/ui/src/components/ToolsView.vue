@@ -22,46 +22,27 @@ interface Row {
   togglable: boolean;
 }
 
-const I = {
-  search: ["M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z", "m20 20-4-4"],
-  refresh: ["M21 12a9 9 0 1 1-2.64-6.36", "M21 3v6h-6"],
-  plus: ["M12 5v14M5 12h14"],
-  arrowL: ["M19 12H5m7-7-7 7 7 7"],
-  file: ["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z", "M14 2v6h6"],
-  grid: [
-    "M3 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5z",
-    "M13 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2V5z",
-    "M3 15a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2z",
-    "M13 15a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2v-2z",
-  ],
-  zap: ["M13 2 4 14h6l-1 8 9-12h-6l1-8z"],
-  mcp: ["M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0V8z", "M12 17v4"],
-  pencil: ["M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"],
-  trash: ["M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7", "M10 11v6M14 11v6"],
-  chevD: ["m6 9 6 6 6-6"],
-  x: ["M6 6l12 12M18 6 6 18"],
-};
 
 const meta = {
   plugins: {
     title: "插件",
     sub: "来源：~/.pi/agent/extensions（全局）与项目 .pi/extensions，改动对新会话生效。",
     placeholder: "搜索已安装的插件",
-    icon: I.grid,
+    icon: "grid-line",
     empty: "还没有安装插件。把 .ts 扩展文件放进 ~/.pi/agent/extensions 即可。",
   },
   skills: {
     title: "技能",
     sub: "来源：~/.pi/agent/skills（全局）与项目 .pi/skills，改动对新会话生效。",
     placeholder: "搜索已安装的技能",
-    icon: I.zap,
+    icon: "flashlight-line",
     empty: "还没有安装技能。把含 SKILL.md 的目录放进 ~/.pi/agent/skills 即可。",
   },
   mcp: {
     title: "MCP 服务器",
     sub: "pi 的 MCP 由扩展提供，这里管理 mcp.json 中的服务器配置。",
     placeholder: "搜索 MCP 服务器",
-    icon: I.mcp,
+    icon: "plug-line",
     empty: "还没有服务器配置，点右上角「添加」创建。",
   },
 } as const;
@@ -481,10 +462,10 @@ async function removeServer(it: Row): Promise<void> {
         </div>
         <div class="head-actions">
           <button class="ghost-btn" title="刷新" @click="load">
-            <Icon :paths="I.refresh" :size="15" />
+            <Icon name="refresh-line" :size="15" />
           </button>
           <button v-if="kind === 'mcp'" class="dark-btn" @click="openAdd">
-            <Icon :paths="I.plus" :size="14" :stroke="2" />添加
+            <Icon name="add-line" :size="14" />添加
           </button>
         </div>
       </header>
@@ -494,7 +475,7 @@ async function removeServer(it: Row): Promise<void> {
       </div>
 
       <div class="search-row">
-        <Icon :paths="I.search" :size="15" />
+        <Icon name="search-line" :size="15" />
         <input v-model="q" :placeholder="meta[kind].placeholder" />
       </div>
 
@@ -502,7 +483,7 @@ async function removeServer(it: Row): Promise<void> {
       <template v-if="detail">
         <header class="det-head">
           <button class="back-btn" title="返回" @click="closeDetail">
-            <Icon :paths="I.arrowL" :size="16" />
+            <Icon name="arrow-left-line" :size="16" />
           </button>
           <h1 class="det-title">{{ detail.name }}</h1>
           <span v-if="detail.badge" class="badge">{{ detail.badge }}</span>
@@ -512,7 +493,7 @@ async function removeServer(it: Row): Promise<void> {
           </label>
           <span class="flex-sp"></span>
           <button class="ghost-btn" title="刷新" @click="loadDetail">
-            <Icon :paths="I.refresh" :size="15" />
+            <Icon name="refresh-line" :size="15" />
           </button>
         </header>
         <p class="det-desc" :title="detail.sub">{{ detail.sub }}</p>
@@ -530,21 +511,21 @@ async function removeServer(it: Row): Promise<void> {
               :title="f.file"
               @click="readDetailFile(f.file)"
             >
-              <Icon :paths="I.file" :size="13" />
+              <Icon name="file-line" :size="13" />
               <span class="file-name">{{ f.file }}</span>
               <span v-if="f.binary" class="type-badge">二进制</span>
             </button>
           </aside>
           <section class="content">
             <div class="content-head">
-              <Icon :paths="I.file" :size="14" />
+              <Icon name="file-line" :size="14" />
               <span>{{ activeFile }}</span>
               <span class="flex-sp"></span>
               <span v-if="fileLoading" class="loading-mark">加载中…</span>
             </div>
             <div class="content-body">
               <div v-if="binaryFile" class="binary-note">
-                <Icon :paths="I.file" :size="16" />
+                <Icon name="file-line" :size="16" />
                 二进制文件，不展示内容
               </div>
               <MdContent v-else-if="isMarkdown" :source="fileText" />
@@ -558,7 +539,7 @@ async function removeServer(it: Row): Promise<void> {
       <template v-else-if="extDetail">
         <header class="det-head">
           <button class="back-btn" title="返回" @click="closeExtDetail">
-            <Icon :paths="I.arrowL" :size="16" />
+            <Icon name="arrow-left-line" :size="16" />
           </button>
           <h1 class="det-title">{{ extDetail.name }}</h1>
           <span v-if="extDetail.badge" class="badge">{{ extDetail.badge }}</span>
@@ -568,21 +549,21 @@ async function removeServer(it: Row): Promise<void> {
           </label>
           <span class="flex-sp"></span>
           <button class="ghost-btn" title="刷新" @click="loadExtDetail">
-            <Icon :paths="I.refresh" :size="15" />
+            <Icon name="refresh-line" :size="15" />
           </button>
         </header>
         <p class="sub mono det-dir" :title="extDetail.id">{{ extDetail.id }}</p>
 
         <div class="content ext-content">
           <div class="content-head">
-            <Icon :paths="I.file" :size="14" />
+            <Icon name="file-line" :size="14" />
             <span>{{ baseName(extDetail.id) }}</span>
             <span class="flex-sp"></span>
             <span v-if="extLoading" class="loading-mark">加载中…</span>
           </div>
           <div class="content-body">
             <div v-if="extBinary" class="binary-note">
-              <Icon :paths="I.file" :size="16" />
+              <Icon name="file-line" :size="16" />
               二进制文件，不展示内容
             </div>
             <MdContent v-else :source="extFenced" />
@@ -603,7 +584,7 @@ async function removeServer(it: Row): Promise<void> {
             }"
             @click="kind === 'skills' ? openDetail(it) : kind === 'plugins' ? openExtDetail(it) : undefined"
           >
-            <span class="tile"><Icon :paths="meta[kind].icon" :size="18" /></span>
+            <span class="tile"><Icon :name="meta[kind].icon" :size="18" /></span>
             <div class="info">
               <div class="name-row">
                 <span v-if="kind === 'mcp'" class="dot" :class="{ on: it.enabled }"></span>
@@ -619,10 +600,10 @@ async function removeServer(it: Row): Promise<void> {
             </label>
             <template v-if="kind === 'mcp'">
               <button class="row-btn" title="编辑" @click.stop="openEdit(it)">
-                <Icon :paths="I.pencil" :size="14" />
+                <Icon name="edit-2-line" :size="14" />
               </button>
               <button class="row-btn danger" title="删除" @click.stop="removeServer(it)">
-                <Icon :paths="I.trash" :size="14" />
+                <Icon name="delete-bin-line" :size="14" />
               </button>
             </template>
           </div>
@@ -641,7 +622,7 @@ async function removeServer(it: Row): Promise<void> {
         <header class="d-head">
           <h2>{{ formMode === "add" ? "添加 MCP 服务器" : "编辑 MCP 服务器" }}</h2>
           <button class="d-close" title="关闭" @click="showForm = false">
-            <Icon :paths="I.x" :size="15" />
+            <Icon name="close-line" :size="15" />
           </button>
         </header>
         <p class="d-sub">填写连接信息后保存，内容写入 mcp.json；其余配置可稍后直接编辑该文件调整。</p>
@@ -670,7 +651,7 @@ async function removeServer(it: Row): Promise<void> {
           <div class="advanced">
             <button class="adv-head" @click="advancedOpen = !advancedOpen">
               高级设置
-              <span class="adv-chev" :class="{ open: advancedOpen }"><Icon :paths="I.chevD" :size="13" :stroke="2" /></span>
+              <span class="adv-chev" :class="{ open: advancedOpen }"><Icon name="arrow-down-s-line" :size="13" /></span>
             </button>
             <div v-if="advancedOpen" class="field">
               <label>环境变量</label>

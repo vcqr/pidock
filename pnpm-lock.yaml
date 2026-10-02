@@ -109,6 +109,9 @@ importers:
       markdown-it:
         specifier: ^14.1.0
         version: 14.3.2
+      remixicon:
+        specifier: ^4.9.1
+        version: 4.9.1
       vue:
         specifier: ^3.5.13
         version: 3.5.43(typescript@5.9.3)
@@ -1225,6 +1228,9 @@ packages:
   punycode.js@2.3.1:
     resolution: {integrity: sha512-uxFIHU0YlHYhDQtV4R9J6a52SLx28BCjT+4ieh7IGbgwVJWO+km431c4yRlREUAsAmt/uMjQUyQHNEPf0M39CA==}
     engines: {node: '>=6'}
+
+  remixicon@4.9.1:
+    resolution: {integrity: sha512-36gLSoujkabnCFZFDyP17VNh9piuBA/rsXUb4auSJWLGsHVXtmxLj/EM5FjaEAGnk8oIAj1Azob/DZ2N+90lAQ==}
 
   retry@0.12.0:
     resolution: {integrity: sha512-9LkiTwjUh6rT555DtE9rTX+BKByPfrMzEAtnlEtdEwr3Nkffwiihqe2bWADg+OQRjt9gl6ICdmB/ZFDCGAtSow==}
@@ -2510,6 +2516,8 @@ snapshots:
       long: 5.3.2
 
   punycode.js@2.3.1: {}
+
+  remixicon@4.9.1: {}
 
   retry@0.12.0: {}
 

@@ -12,21 +12,6 @@ import Icon from "./Icon.vue";
  */
 const props = defineProps<{ bus: DataBus }>();
 
-const I = {
-  search: ["M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z", "m20 20-4-4"],
-  plus: ["M12 5v14M5 12h14"],
-  refresh: ["M21 12a9 9 0 1 1-2.64-6.36", "M21 3v6h-6"],
-  eye: ["M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z", "M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"],
-  eyeOff: ["M9.9 4.24A9.1 9.1 0 0 1 12 4c6.5 0 10 7 10 7a17.9 17.9 0 0 1-2.16 2.92", "M6.61 6.61A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.39-1.61", "m2 2 20 20"],
-  key: ["m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4", "m21 2-9.6 9.6", "M15.5 7.5 8 15l-3 3L3 20l1-2 3-3 8.5-7.5"],
-  trash: ["M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7", "M10 11v6M14 11v6"],
-  check: ["m5 12 5 5L20 7"],
-  gear: [
-    "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z",
-    "M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
-  ],
-  download: ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M7 10l5 5 5-5", "M12 15V3"],
-};
 
 const API_TYPES = [
   { value: "openai-completions", label: "OpenAI Chat Completions (openai-completions)" },
@@ -280,7 +265,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
     <!-- 左：供应商列表 -->
     <aside class="list-pane">
       <div class="search-box">
-        <Icon :paths="I.search" :size="14" />
+        <Icon name="search-line" :size="14" />
         <input v-model="query" placeholder="搜索模型平台…" />
       </div>
       <div class="provider-list">
@@ -299,7 +284,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
         <div v-if="!filtered.length && !loading" class="state small">没有匹配的供应商</div>
       </div>
       <button class="add-btn" @click="startAdd">
-        <Icon :paths="I.plus" :size="14" :stroke="2" />添加供应商
+        <Icon name="add-line" :size="14" />添加供应商
       </button>
     </aside>
 
@@ -334,12 +319,12 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
                 placeholder="留空可稍后在 auth.json 中配置"
               />
               <button class="eye" title="显示 / 隐藏" @click="formKeyVisible = !formKeyVisible">
-                <Icon :paths="formKeyVisible ? I.eyeOff : I.eye" :size="14" />
+                <Icon :name="formKeyVisible ? 'eye-off-line' : 'eye-line'" :size="14" />
               </button>
             </div>
           </div>
           <button class="fetch-btn" :disabled="formBusy" @click="fetchModels">
-            <Icon :paths="I.download" :size="14" />获取模型列表
+            <Icon name="download-cloud-2-line" :size="14" />获取模型列表
           </button>
           <div class="field">
             <label>候选模型 ID（逗号分隔，可点击上方「获取模型列表」自动填充）</label>
@@ -358,7 +343,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
           <span class="badge">自定义</span>
           <span class="flex-sp"></span>
           <button class="danger-btn" @click="removeCustom">
-            <Icon :paths="I.trash" :size="14" />删除
+            <Icon name="delete-bin-line" :size="14" />删除
           </button>
         </header>
         <p class="models-json-path" :title="modelsJsonPath">models.json · {{ selectedRow.baseUrl }}</p>
@@ -386,12 +371,12 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
                 :placeholder="selectedRow.hasEntryKey ? '••••••••' : '留空则保持不变'"
               />
               <button class="eye" title="显示 / 隐藏" @click="formKeyVisible = !formKeyVisible">
-                <Icon :paths="formKeyVisible ? I.eyeOff : I.eye" :size="14" />
+                <Icon :name="formKeyVisible ? 'eye-off-line' : 'eye-line'" :size="14" />
               </button>
             </div>
           </div>
           <button class="fetch-btn" :disabled="formBusy" @click="fetchModels">
-            <Icon :paths="I.download" :size="14" />获取模型列表
+            <Icon name="download-cloud-2-line" :size="14" />获取模型列表
           </button>
           <div class="field">
             <label>候选模型 ID（逗号分隔，可点击上方「获取模型列表」自动填充）</label>
@@ -410,7 +395,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
           <span class="badge">内置</span>
           <span class="flex-sp"></span>
           <button class="ghost-btn" title="刷新" @click="load">
-            <Icon :paths="I.refresh" :size="15" />
+            <Icon name="refresh-line" :size="15" />
           </button>
         </header>
         <p class="key-status">
@@ -426,7 +411,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
               :disabled="!keyEditing"
             />
             <button class="eye" title="显示 / 隐藏" @click="keyVisible = !keyVisible">
-              <Icon :paths="keyVisible ? I.eyeOff : I.eye" :size="14" />
+              <Icon :name="keyVisible ? 'eye-off-line' : 'eye-line'" :size="14" />
             </button>
           </div>
           <div class="key-actions">
@@ -436,7 +421,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
               <button class="ghost-btn wide" @click="keyEditing = false; keyDraft = ''">取消</button>
             </template>
             <button v-if="selectedRow.auth !== 'missing' && !keyEditing" class="ghost-btn wide danger" @click="removeKey">
-              <Icon :paths="I.trash" :size="13" />删除密钥
+              <Icon name="delete-bin-line" :size="13" />删除密钥
             </button>
           </div>
         </div>

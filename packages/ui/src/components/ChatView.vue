@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
-import type { AgentStore } from "../store.js";
-import { greeting } from "../utils/time.js";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import type { AgentStore, UiItem } from "../store.js";
+import { formatSpan, greeting } from "../utils/time.js";
 import MdContent from "./MdContent.vue";
 import Composer from "./Composer.vue";
 import Icon from "./Icon.vue";
@@ -46,30 +46,81 @@ const projects = computed(() => {
 });
 const defaultCwd = computed(() => props.store.sessions[0]?.cwd ?? projects.value[0] ?? "");
 
-const chips: { icon: string[]; text: string }[] = [
+// ---- 活动流辅助 ----
+const busy = computed(() => props.store.agentState !== "idle");
+/** callId → 结果状态（从 toolResult 消息汇总，合并进 toolCall 活动行） */
+const resultsMap = computed(() => {
+  const m: Record<string, "done" | "error"> = {};
+  for (const it of props.store.items) {
+    if (it.kind === "message" && it.role === "toolResult") {
+      for (const b of it.blocks ?? []) {
+        if (b.callId) m[b.callId] = b.isError ? "error" : "done";
+      }
+    }
+  }
+  return m;
+});
+const assistantCallIds = computed(() => {
+  const s = new Set<string>();
+  for (const it of props.store.items) {
+    if (it.kind === "message" && it.role === "assistant") {
+      for (const b of it.blocks ?? []) {
+        if (b.type === "toolCall" && b.callId) s.add(b.callId);
+      }
+    }
+  }
+  return s;
+});
+function isMergedResult(item: UiItem): boolean {
+  if (item.kind !== "message" || item.role !== "toolResult") return false;
+  const blocks = item.blocks ?? [];
+  return blocks.length > 0 && blocks.every((b) => b.callId !== undefined && assistantCallIds.value.has(b.callId));
+}
+/** 工作中分隔线：插在最后一条用户消息之后，时长每秒跳动 */
+const lastUserIndex = computed(() => {
+  const items = props.store.items;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it && it.kind === "message" && it.role === "user") return i;
+  }
+  return -1;
+});
+const nowTick = ref(Date.now());
+let dividerTimer: ReturnType<typeof setInterval> | undefined;
+watch(
+  busy,
+  (b) => {
+    if (b) dividerTimer = setInterval(() => (nowTick.value = Date.now()), 1000);
+    else if (dividerTimer) {
+      clearInterval(dividerTimer);
+      dividerTimer = undefined;
+    }
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() => {
+  if (dividerTimer) clearInterval(dividerTimer);
+});
+
+const chips: { name: string; text: string }[] = [
   {
-    icon: ["M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"],
+    name: "folder-line",
     text: "帮我看看这个项目的结构",
   },
   {
-    icon: ["M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"],
+    name: "bug-line",
     text: "修复当前项目里的报错",
   },
   {
-    icon: ["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z", "M14 2v6h6", "M16 13H8", "M16 17H8"],
+    name: "file-add-line",
     text: "给项目写一份 README",
   },
   {
-    icon: ["m16 18 6-6-6-6", "m8 6-6 6 6 6"],
+    name: "code-line",
     text: "代码评审最近的改动",
   },
 ];
 
-const errIcon = ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", "M12 8h.01", "M12 11v5"];
-const xIcon = ["M6 6l12 12M18 6 6 18"];
-const shieldIcon = [
-  "M20 13c0 5-3.5 7.5-7.7 9a.6.6 0 0 1-.6 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.2-2.7a1.2 1.2 0 0 1 1.6 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z",
-];
 
 function fillChip(text: string): void {
   preset.value = "";
@@ -123,10 +174,10 @@ watch(
       <div class="home-inner">
         <h1 class="greeting">{{ greeting() }}，接下来交给我吧</h1>
         <div v-if="store.lastError" class="errbar">
-          <Icon :paths="errIcon" :size="15" />
+          <Icon name="error-warning-line" :size="15" />
           <span class="err-text" :title="store.lastError">{{ store.lastError }}</span>
           <button class="err-close" title="忽略" @click="dismissError">
-            <Icon :paths="xIcon" :size="13" />
+            <Icon name="close-line" :size="13" />
           </button>
         </div>
         <Composer
@@ -143,7 +194,7 @@ watch(
         />
         <div class="chips">
           <button v-for="c in chips" :key="c.text" class="chip" @click="fillChip(c.text)">
-            <Icon :paths="c.icon" :size="14" />{{ c.text }}
+            <Icon :name="c.name" :size="14" />{{ c.text }}
           </button>
         </div>
       </div>
@@ -153,7 +204,7 @@ watch(
     <template v-else>
       <div ref="scroller" class="scroll">
         <div v-if="store.loadingHistory" class="hint">加载历史中…</div>
-        <template v-for="item in store.items" :key="item.key">
+        <template v-for="(item, index) in store.items" :key="item.key">
           <ToolCard
             v-if="item.kind === 'tool'"
             :tool-name="item.toolName"
@@ -161,12 +212,26 @@ watch(
             :args="item.args"
             :partial="item.partial"
             :output="item.output"
+            :dimmed="busy"
           />
-          <MessageItem v-else :item="item" />
+          <MessageItem
+            v-else-if="!isMergedResult(item)"
+            :item="item"
+            :dimmed="busy"
+            :results="resultsMap"
+          />
+          <div v-if="index === lastUserIndex && busy" class="turn-divider">
+            <span class="turn-label">工作中 · {{ formatSpan(Math.max(1000, nowTick - (store.turnStartedAt ?? nowTick))) }}</span>
+            <span class="turn-line"></span>
+          </div>
         </template>
+        <div v-if="busy && lastUserIndex === -1" class="turn-divider">
+          <span class="turn-label">工作中 · {{ formatSpan(Math.max(1000, nowTick - (store.turnStartedAt ?? nowTick))) }}</span>
+          <span class="turn-line"></span>
+        </div>
       </div>
       <div v-if="store.pendingApproval" class="approval">
-        <Icon :paths="shieldIcon" :size="15" />
+        <Icon name="shield-flash-line" :size="15" />
         <div class="approval-info">
           <b>请求执行：{{ store.pendingApproval.toolName }}</b>
           <span class="approval-args" :title="store.pendingApproval.args">{{ store.pendingApproval.args }}</span>
@@ -181,11 +246,11 @@ watch(
           :permission-mode="permissionMode"
           :thinking-level="thinkingLevel"
           :models="modelOptions"
-          @send="(t) => store.send(t)"
+          @send="(t: string) => store.send(t)"
           @abort="store.abort()"
-          @set-permission-mode="(m) => store.setPermissionMode(m)"
-          @set-thinking-level="(l) => store.setThinkingLevel(l)"
-          @set-model="(m) => store.setModel(m)"
+          @set-permission-mode="(m: string) => store.setPermissionMode(m)"
+          @set-thinking-level="(l: string) => store.setThinkingLevel(l)"
+          @set-model="(m: string) => store.setModel(m)"
           @open-settings="emit('open-settings', 'models')"
         />
       </div>
@@ -309,6 +374,25 @@ export default { components: { ToolCard, MessageItem } };
   font-size: 13px;
 }
 .dock { padding: 10px 16px 14px; }
+
+/* ---- 回合分隔线（工作中 · 耗时） ---- */
+.turn-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 6px;
+  user-select: none;
+}
+.turn-label {
+  flex: none;
+  font-size: 12px;
+  color: var(--pd-text-3);
+}
+.turn-line {
+  flex: 1;
+  height: 1px;
+  background: var(--pd-border-soft);
+}
 
 /* ---- 工具审批横幅 ---- */
 .approval {

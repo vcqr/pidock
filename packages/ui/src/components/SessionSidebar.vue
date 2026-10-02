@@ -30,28 +30,6 @@ const collapsed = ref(new Set<string>());
 const expanded = ref(new Set<string>());
 const PREVIEW = 5;
 
-const I = {
-  arrowL: ["M19 12H5m7-7-7 7 7 7"],
-  arrowR: ["M5 12h14m-7-7 7 7-7 7"],
-  plusCircle: ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", "M12 8v8M8 12h8"],
-  search: ["M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z", "m20 20-4-4"],
-  clock: ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", "M12 9v4l2.5 2.5"],
-  grid: [
-    "M3 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5z",
-    "M13 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2V5z",
-    "M3 15a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2z",
-    "M13 15a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2v-2z",
-  ],
-  zap: ["M13 2 4 14h6l-1 8 9-12h-6l1-8z"],
-  layers: ["M12 2 2 7l10 5 10-5-10-5z", "M2 12l10 5 10-5", "M2 17l10 5 10-5"],
-  mcp: ["M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0V8z", "M12 17v4"],
-  folder: ["M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"],
-  chevD: ["m6 9 6 6 6-6"],
-  gear: [
-    "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z",
-    "M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
-  ],
-};
 
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase();
@@ -142,33 +120,33 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   <aside class="sidebar">
     <div class="sb-head">
       <div class="logo">π</div>
-      <button class="icon-btn" disabled title="后退"><Icon :paths="I.arrowL" :size="16" /></button>
-      <button class="icon-btn" disabled title="前进"><Icon :paths="I.arrowR" :size="16" /></button>
+      <button class="icon-btn" disabled title="后退"><Icon name="arrow-left-line" :size="16" /></button>
+      <button class="icon-btn" disabled title="前进"><Icon name="arrow-right-line" :size="16" /></button>
       <span class="flex-sp"></span>
       <slot name="actions" />
     </div>
 
     <nav class="sb-nav">
       <div class="nav-item" @click="emit('new-task')">
-        <Icon :paths="I.plusCircle" :size="16" />新建任务<span class="kbd">Ctrl+N</span>
+        <Icon name="add-circle-line" :size="16" />新建任务<span class="kbd">Ctrl+N</span>
       </div>
       <div class="nav-item" @click="openSearch">
-        <Icon :paths="I.search" :size="16" />搜索<span class="kbd">Ctrl+K</span>
+        <Icon name="search-line" :size="16" />搜索<span class="kbd">Ctrl+K</span>
       </div>
       <div class="nav-item disabled" title="开发中">
-        <Icon :paths="I.clock" :size="16" />自动化
+        <Icon name="time-line" :size="16" />自动化
       </div>
       <div v-if="showToolNav" class="nav-item" :class="{ active: activeTool === 'plugins' }" @click="emit('open-tools', 'plugins')">
-        <Icon :paths="I.grid" :size="16" />插件
+        <Icon name="grid-line" :size="16" />插件
       </div>
       <div v-if="showToolNav" class="nav-item" :class="{ active: activeTool === 'skills' }" @click="emit('open-tools', 'skills')">
-        <Icon :paths="I.zap" :size="16" />技能
+        <Icon name="flashlight-line" :size="16" />技能
       </div>
       <div v-if="showToolNav" class="nav-item" :class="{ active: activeTool === 'providers' }" @click="emit('open-tools', 'providers')">
-        <Icon :paths="I.layers" :size="16" />模型供应商
+        <Icon name="stack-line" :size="16" />模型供应商
       </div>
       <div v-if="showToolNav" class="nav-item" :class="{ active: activeTool === 'mcp' }" @click="emit('open-tools', 'mcp')">
-        <Icon :paths="I.mcp" :size="16" />MCP
+        <Icon name="plug-line" :size="16" />MCP
       </div>
     </nav>
 
@@ -179,7 +157,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     <div class="sb-tools">
       <button class="seg-btn" :class="{ active: !grouped }" @click="grouped = false"># 分组</button>
       <button class="seg-btn" :class="{ active: grouped }" @click="grouped = true">
-        <Icon :paths="I.folder" :size="13" />项目
+        <Icon name="folder-line" :size="13" />项目
       </button>
       <span class="flex-sp"></span>
     </div>
@@ -191,9 +169,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <template v-for="g in groups" :key="g.cwd + g.project">
           <div class="folder-row" :title="g.cwd" @click="toggleGroup(g.project)">
             <span class="chev" :class="{ fold: collapsed.has(g.project) }">
-              <Icon :paths="I.chevD" :size="12" :stroke="2" />
+              <Icon name="arrow-down-s-line" :size="12" />
             </span>
-            <Icon :paths="I.folder" :size="15" />
+            <Icon name="folder-line" :size="15" />
             <span class="fname">{{ g.project }}</span>
             <span class="g-count">{{ g.sessions.length }}</span>
           </div>
@@ -251,7 +229,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         class="icon-btn"
         title="设置"
         @click="emit('open-settings')"
-      ><Icon :paths="I.gear" :size="15" /></button>
+      ><Icon name="settings-3-line" :size="15" /></button>
     </div>
   </aside>
 </template>

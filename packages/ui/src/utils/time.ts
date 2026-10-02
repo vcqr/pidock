@@ -28,3 +28,14 @@ export function greeting(): string {
   if (h < 18) return "下午好";
   return "晚上好";
 }
+
+/** 毫秒 → 「N 秒」/「M 分 S 秒」/「H 小时 M 分」 */
+export function formatSpan(ms: number): string {
+  const s = Math.max(1, Math.round(ms / 1000));
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m < 60) return r ? `${m} 分 ${r} 秒` : `${m} 分`;
+  const h = Math.floor(m / 60);
+  return `${h} 小时 ${m % 60} 分`;
+}

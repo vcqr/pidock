@@ -1,4 +1,4 @@
-import { reactive, ref } from "vue";
+import { reactive, ref, watch } from "vue";
 import type { DataBus } from "./databus.js";
 
 /**
@@ -35,6 +35,9 @@ export interface UiMessageItem {
   blocks: UiBlock[] | null;
   streaming: boolean;
   pending?: boolean;
+  /** 思考流开始时间（streaming 计时用），结束写回 thinkingMs */
+  thinkingStartedAt?: number;
+  thinkingMs?: number;
 }
 
 export interface UiToolItem {
@@ -91,6 +94,8 @@ export function createAgentStore(bus: DataBus) {
   const thinkingLevels = ref<Record<string, string>>({});
   /** 待用户审批的工具调用（仅活动会话展示） */
   const pendingApproval = ref<{ approvalId: string; toolName: string; args: string } | null>(null);
+  /** 当前回合开始时间（「工作中 · 耗时」分隔线），空闲时清空 */
+  const turnStartedAt = ref<number | null>(null);
 
   let liveTools = new Map<string, UiToolItem>();
   let streaming: UiMessageItem | null = null;
@@ -188,8 +193,17 @@ export function createAgentStore(bus: DataBus) {
       case "message_delta": {
         const { message_id, part, delta } = e.payload;
         const item = ensureStreaming(message_id);
-        if (part === "text") item.text += delta;
-        else item.thinking += delta;
+        if (part === "text") {
+          // 思考流结束 → 固定耗时
+          if (item.thinkingStartedAt && item.thinkingMs === undefined) {
+            item.thinkingMs = Date.now() - item.thinkingStartedAt;
+            item.thinkingStartedAt = undefined;
+          }
+          item.text += delta;
+        } else {
+          if (!item.thinkingStartedAt) item.thinkingStartedAt = Date.now();
+          item.thinking += delta;
+        }
         break;
       }
       case "message_snapshot": {
@@ -260,9 +274,13 @@ export function createAgentStore(bus: DataBus) {
   }
 
   async function start(): Promise<void> {
-    const unsubscribe = await bus.onEvent(applyEnvelope);
-    void unsubscribe; // lives for the app lifetime
-    await refreshSessions();
+  const unsubscribe = await bus.onEvent(applyEnvelope);
+  void unsubscribe; // lives for the app lifetime
+  // 回合结束（空闲）→ 清除「工作中」计时
+  watch(agentState, (state) => {
+    if (state === "idle") turnStartedAt.value = null;
+  });
+  await refreshSessions();
   }
 
   async function refreshSessions(): Promise<void> {
@@ -328,6 +346,7 @@ export function createAgentStore(bus: DataBus) {
 
   async function send(text: string): Promise<void> {
     if (!activeId.value || !text.trim()) return;
+    if (!turnStartedAt.value) turnStartedAt.value = Date.now();
     items.value.push({
       kind: "message",
       key: nextKey(),
@@ -404,6 +423,7 @@ export function createAgentStore(bus: DataBus) {
     permissionModes,
     thinkingLevels,
     pendingApproval,
+    turnStartedAt,
     // actions
     start,
     refreshSessions,

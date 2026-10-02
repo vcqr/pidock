@@ -35,26 +35,23 @@ const emit = defineEmits<{
 }>();
 
 const I = {
-  folder: ["M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"],
-  folderPlus: ["M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z", "M12 11v5M9.5 13.5h5"],
-  chevD: ["m6 9 6 6 6-6"],
-  x: ["M6 6l12 12M18 6 6 18"],
-  check: ["m5 12 5 5L20 7"],
-  search: ["M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z", "m20 20-4-4"],
-  cloud: ["M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"],
-  chat: ["M7.9 20A9 9 0 1 0 4 16.1L2 22Z"],
-  plus: ["M12 5v14M5 12h14"],
-  up: ["M12 19V5m-7 7 7-7 7 7"],
-  stop: ["M7 7h10v10H7z"],
-  bulb: ["M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.4 1 2.3h6c0-.9.4-1.8 1-2.3A7 7 0 0 0 12 2z"],
-  hand: ["M18 11V6a2 2 0 0 0-4 0v5", "M14 10V4a2 2 0 0 0-4 0v2", "M10 10.5V6a2 2 0 0 0-4 0v8", "M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-5.9-2.3l-3.4-3.3a1.9 1.9 0 0 1 2.7-2.7L8 15.5"],
-  shieldCheck: ["M20 13c0 5-3.5 7.5-7.7 9a.6.6 0 0 1-.6 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.2-2.7a1.2 1.2 0 0 1 1.6 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z", "m9 12 2 2 4-4"],
-  shield: ["M20 13c0 5-3.5 7.5-7.7 9a.6.6 0 0 1-.6 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.2-2.7a1.2 1.2 0 0 1 1.6 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"],
-  gear: [
-    "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z",
-    "M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
-  ],
-  gauge: ["m12 14 4-4", "M3.34 19a10 10 0 1 1 17.32 0"],
+  folder: "folder-line",
+  folderAdd: "folder-add-line",
+  chevD: "arrow-down-s-line",
+  x: "close-line",
+  check: "check-line",
+  search: "search-line",
+  cloud: "cloud-line",
+  chat: "chat-1-line",
+  plus: "add-line",
+  up: "arrow-up-line",
+  stop: "stop-line",
+  bulb: "lightbulb-line",
+  hand: "chat-check-line",
+  shieldCheck: "shield-check-line",
+  shield: "shield-flash-line",
+  gear: "settings-3-line",
+  gauge: "dashboard-2-line",
 };
 
 const text = ref("");
@@ -245,22 +242,22 @@ function onKeydown(e: KeyboardEvent): void {
     <div v-if="centered" class="c-folder" @click="menuOpen = !menuOpen">
       <template v-if="selected">
         <span class="c-clear" title="清除项目选择" @click.stop="clearSelected">
-          <Icon :paths="I.x" :size="11" :stroke="2" />
+          <Icon :name="I.x" :size="11" />
         </span>
-        <Icon :paths="I.folder" :size="14" />
+        <Icon :name="I.folder" :size="14" />
         <span class="c-name">{{ chipLabel }}</span>
       </template>
       <template v-else>
-        <Icon :paths="I.chat" :size="14" />
+        <Icon :name="I.chat" :size="14" />
         <span class="c-name">不在项目中工作</span>
       </template>
-      <span class="c-chev" :class="{ open: menuOpen }"><Icon :paths="I.chevD" :size="12" :stroke="2" /></span>
+      <span class="c-chev" :class="{ open: menuOpen }"><Icon :name="I.chevD" :size="12" /></span>
 
       <!-- 项目菜单：搜索 / 项目列表 / 打开文件夹 / 远程连接 / 不在项目中工作 -->
       <div v-if="menuOpen" class="c-menu" @click.stop>
         <div class="c-search">
-          <Icon :paths="I.search" :size="13" />
-          <input v-model="menuQuery" placeholder="搜索工作区" @keydown.enter="filteredProjects[0] && pick(filteredProjects[0])" />
+          <Icon :name="I.search" :size="13" />
+          <input v-model="menuQuery" placeholder="搜索工作区" @keydown.enter="filteredProjects[0] && pick(filteredProjects[0]!)" />
         </div>
         <div class="c-list">
           <button
@@ -271,9 +268,9 @@ function onKeydown(e: KeyboardEvent): void {
             :title="p"
             @click="pick(p)"
           >
-            <Icon :paths="I.folder" :size="14" />
+            <Icon :name="I.folder" :size="14" />
             <span class="c-item-name">{{ basename(p) }}</span>
-            <Icon v-if="p === selected" class="c-check" :paths="I.check" :size="14" :stroke="2" />
+            <Icon v-if="p === selected" class="c-check" :name="I.check" :size="14" />
           </button>
           <div v-if="!filteredProjects.length" class="c-empty">没有匹配的项目</div>
         </div>
@@ -285,15 +282,15 @@ function onKeydown(e: KeyboardEvent): void {
           </div>
         </template>
         <button v-else class="c-item c-action" @click="onOpenFolder">
-          <Icon :paths="I.folderPlus" :size="14" />
+          <Icon :name="I.folderAdd" :size="14" />
           <span>打开文件夹</span>
         </button>
         <button class="c-item c-action" @click="openRemote">
-          <Icon :paths="I.cloud" :size="14" />
+          <Icon :name="I.cloud" :size="14" />
           <span>远程连接</span>
         </button>
         <button class="c-item c-action" :class="{ on: !selected }" @click="selectNone">
-          <Icon :paths="I.chat" :size="14" />
+          <Icon :name="I.chat" :size="14" />
           <span>不在项目中工作</span>
         </button>
       </div>
@@ -308,15 +305,15 @@ function onKeydown(e: KeyboardEvent): void {
     />
     <div class="bar">
       <button class="plus-btn" disabled title="附件 / 图片 · 开发中">
-        <Icon :paths="I.plus" :size="16" :stroke="2" />
+        <Icon :name="I.plus" :size="16" />
       </button>
 
       <!-- 权限模式 -->
       <div class="dd">
         <button class="dd-btn dd-btn-boxed" @click="permOpen = !permOpen; thinkOpen = false; modelOpen = false">
-          <Icon :paths="permIcon" :size="13" />
+          <Icon :name="permIcon" :size="13" />
           <span>{{ permLabel }}</span>
-          <span class="c-chev" :class="{ open: permOpen }"><Icon :paths="I.chevD" :size="11" :stroke="2" /></span>
+          <span class="c-chev" :class="{ open: permOpen }"><Icon :name="I.chevD" :size="11" /></span>
         </button>
         <div v-if="permOpen" class="dd-menu up">
           <button
@@ -326,12 +323,12 @@ function onKeydown(e: KeyboardEvent): void {
             :class="{ on: m.value === permissionMode }"
             @click="selectPerm(m.value)"
           >
-            <span class="perm-icon"><Icon :paths="m.icon" :size="15" /></span>
+            <span class="perm-icon"><Icon :name="m.icon" :size="15" /></span>
             <span class="perm-text">
               <b>{{ m.label }}</b>
               <i>{{ m.desc }}</i>
             </span>
-            <Icon v-if="m.value === permissionMode" class="c-check" :paths="I.check" :size="14" :stroke="2" />
+            <Icon v-if="m.value === permissionMode" class="c-check" :name="I.check" :size="14" />
           </button>
         </div>
       </div>
@@ -343,7 +340,7 @@ function onKeydown(e: KeyboardEvent): void {
         <button class="dd-btn" @click="modelOpen = !modelOpen; permOpen = false; thinkOpen = false">
           <span class="ring"></span>
           <span>{{ model ?? "默认模型" }}</span>
-          <span class="c-chev" :class="{ open: modelOpen }"><Icon :paths="I.chevD" :size="11" :stroke="2" /></span>
+          <span class="c-chev" :class="{ open: modelOpen }"><Icon :name="I.chevD" :size="11" /></span>
         </button>
         <div v-if="modelOpen" class="dd-menu up right">
           <button
@@ -354,11 +351,11 @@ function onKeydown(e: KeyboardEvent): void {
             @click="selectModel(m)"
           >
             <span class="c-item-name">{{ m }}</span>
-            <Icon v-if="m === model" class="c-check" :paths="I.check" :size="14" :stroke="2" />
+            <Icon v-if="m === model" class="c-check" :name="I.check" :size="14" />
           </button>
           <div class="c-sep"></div>
           <button class="c-item c-action" @click="modelOpen = false; emit('openSettings')">
-            <Icon :paths="I.gear" :size="14" />
+            <Icon :name="I.gear" :size="14" />
             <span class="c-item-name">打开模型设置…</span>
           </button>
         </div>
@@ -367,9 +364,9 @@ function onKeydown(e: KeyboardEvent): void {
       <!-- 思考级别 -->
       <div class="dd">
         <button class="dd-btn" @click="thinkOpen = !thinkOpen; permOpen = false; modelOpen = false">
-          <Icon :paths="I.gauge" :size="13" />
+          <Icon :name="I.gauge" :size="13" />
           <span>{{ thinkLabel }}</span>
-          <span class="c-chev" :class="{ open: thinkOpen }"><Icon :paths="I.chevD" :size="11" :stroke="2" /></span>
+          <span class="c-chev" :class="{ open: thinkOpen }"><Icon :name="I.chevD" :size="11" /></span>
         </button>
         <div v-if="thinkOpen" class="dd-menu up right">
           <button
@@ -380,16 +377,16 @@ function onKeydown(e: KeyboardEvent): void {
             @click="selectThink(t.value)"
           >
             <span class="c-item-name">{{ t.label }}</span>
-            <Icon v-if="t.value === thinkingLevel" class="c-check" :paths="I.check" :size="14" :stroke="2" />
+            <Icon v-if="t.value === thinkingLevel" class="c-check" :name="I.check" :size="14" />
           </button>
         </div>
       </div>
 
       <button v-if="busy" class="abort" title="停止" @click="emit('abort')">
-        <Icon :paths="I.stop" :size="13" :stroke="2" />
+        <Icon :name="I.stop" :size="13" />
       </button>
       <button v-else class="send" :disabled="disabled || !text.trim()" @click="submit">
-        <Icon :paths="I.up" :size="15" :stroke="2" />
+        <Icon :name="I.up" :size="15" />
       </button>
     </div>
   </div>
@@ -554,22 +551,6 @@ textarea:disabled { opacity: 0.45; }
 }
 .plus-btn:hover:not(:disabled) { background: var(--pd-bg-hover); color: var(--pd-text); }
 .plus-btn:disabled { opacity: 0.45; cursor: default; }
-.model-btn {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--pd-text-2);
-  font-size: 13px;
-  padding: 6px 4px;
-  border-radius: 6px;
-  user-select: none;
-}
-.ring {
-  width: 9px;
-  height: 9px;
-  border: 2px solid var(--pd-text-4);
-  border-radius: 50%;
-}
 
 /* ---- 底栏下拉 ---- */
 .dd { position: relative; }
@@ -637,6 +618,14 @@ textarea:disabled { opacity: 0.45; }
   color: var(--pd-text-3);
   margin-top: 2px;
 }
+
+.ring {
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--pd-text-4);
+  border-radius: 50%;
+}
+
 button.send,
 button.abort {
   width: 32px;
@@ -647,6 +636,7 @@ button.abort {
   border: none;
   cursor: pointer;
   padding: 0;
+  flex: none;
 }
 .send {
   background: #4a4a4a;
