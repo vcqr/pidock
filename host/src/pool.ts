@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -93,6 +93,8 @@ export class SessionPool {
   private modelRuntimePromise: Promise<ModelRuntime> | null = null;
   /** 每会话权限模式（内置权限扩展实时读取） */
   private permissionStates = new Map<string, { mode: PermissionMode }>();
+  /** 每会话回合内被修改文件的快照（撤销/文件变更卡片的数据源） */
+  private fileSnapshots = new Map<string, Map<string, { existed: boolean; content: Buffer }>>();
   /** 等待用户审批的工具调用 */
   private pendingApprovals = new Map<
     string,
@@ -180,9 +182,10 @@ export class SessionPool {
         {
           name: "pidock-permission",
           factory: (pi: ExtensionAPI) => {
-            pi.on("tool_call", async (event) =>
-              this.enforcePermission(sessionIdRef.id, permission, event.toolName, event.input),
-            );
+            pi.on("tool_call", async (event) => {
+              this.snapshotBeforeMutation(sessionIdRef.id, cwd, event.toolName, event.input);
+              return this.enforcePermission(sessionIdRef.id, permission, event.toolName, event.input);
+            });
           },
         },
       ],
@@ -244,9 +247,10 @@ export class SessionPool {
         {
           name: "pidock-permission",
           factory: (pi: ExtensionAPI) => {
-            pi.on("tool_call", async (event) =>
-              this.enforcePermission(sessionIdRef.id, permission, event.toolName, event.input),
-            );
+            pi.on("tool_call", async (event) => {
+              this.snapshotBeforeMutation(sessionIdRef.id, cwd, event.toolName, event.input);
+              return this.enforcePermission(sessionIdRef.id, permission, event.toolName, event.input);
+            });
           },
         },
       ],
@@ -282,6 +286,7 @@ export class SessionPool {
     const tracked = this.sessions.get(params.session_id);
     if (!tracked) return { closed: false };
     this.denyApprovals(params.session_id);
+    this.fileSnapshots.delete(params.session_id);
     tracked.unsubscribe();
     tracked.session.dispose();
     this.sessions.delete(params.session_id);
@@ -465,6 +470,90 @@ export class SessionPool {
       this.writeRegistryEntry(entry);
     }
     return { ok: true, model: `${match.provider}/${match.id}` };
+  }
+
+  // ---------------------------------------------------------- file changes
+
+  /** 修改类工具执行前快照目标文件（每回合每路径只保留最早的版本） */
+  private snapshotBeforeMutation(sessionId: string, cwd: string, toolName: string, input: unknown): void {
+    if (toolName !== "edit" && toolName !== "write") return;
+    const rel = String((input ?? {}) as Record<string, unknown>["path"] ?? "");
+    if (!rel) return;
+    let map = this.fileSnapshots.get(sessionId);
+    if (!map) {
+      map = new Map();
+      this.fileSnapshots.set(sessionId, map);
+    }
+    const abs = resolve(cwd, rel);
+    if (map.has(abs)) return;
+    try {
+      const st = statSync(abs);
+      if (!st.isFile() || st.size > 4 * 1024 * 1024) return; // 过大不快照，不参与撤销
+      map.set(abs, { existed: true, content: readFileSync(abs) });
+    } catch {
+      map.set(abs, { existed: false, content: Buffer.alloc(0) }); // 新建文件
+    }
+  }
+
+  /** 回合内被修改的文件列表（快照 vs 磁盘当前内容的行级统计） */
+  fileChanges(params: { session_id: string }): {
+    files: Array<{ path: string; added: number; removed: number; isNew: boolean }>;
+  } {
+    const map = this.fileSnapshots.get(params.session_id);
+    if (!map) return { files: [] };
+    const files = [...map.entries()].map(([abs, snap]) => {
+      let current: string | null = null;
+      try {
+        if (existsSync(abs) && statSync(abs).isFile()) current = readFileSync(abs, "utf8");
+      } catch {
+        current = null;
+      }
+      const oldText = snap.existed ? snap.content.toString("utf8") : "";
+      const oldLines = oldText ? oldText.split("\n") : [];
+      const newLines = current ? current.split("\n") : [];
+      const oldSet = new Set(oldLines);
+      const newSet = new Set(newLines);
+      return {
+        path: abs,
+        added: newLines.filter((l) => !oldSet.has(l)).length,
+        removed: oldLines.filter((l) => !newSet.has(l)).length,
+        isNew: !snap.existed,
+      };
+    });
+    return { files };
+  }
+
+  /** 单个文件的快照与当前内容（供 UI 渲染 diff） */
+  fileDiff(params: { session_id: string; path: string }): { oldText: string; newText: string } {
+    const map = this.fileSnapshots.get(params.session_id);
+    const abs = resolve(params.path ?? "");
+    const snap = map?.get(abs);
+    if (!snap) throw new RpcError("not_found", "no snapshot for this path");
+    let newText = "";
+    try {
+      if (existsSync(abs) && statSync(abs).isFile()) newText = readFileSync(abs, "utf8");
+    } catch {
+      newText = "";
+    }
+    return { oldText: snap.existed ? snap.content.toString("utf8") : "", newText };
+  }
+
+  /** 撤销：恢复所有快照文件（新建的删除），返回恢复数量 */
+  revertFiles(params: { session_id: string }): { reverted: number } {
+    const map = this.fileSnapshots.get(params.session_id);
+    if (!map) return { reverted: 0 };
+    let reverted = 0;
+    for (const [abs, snap] of map) {
+      try {
+        if (snap.existed) writeFileSync(abs, snap.content);
+        else if (existsSync(abs)) rmSync(abs);
+        reverted++;
+      } catch {
+        // 无法恢复的文件跳过
+      }
+    }
+    this.fileSnapshots.delete(params.session_id);
+    return { reverted };
   }
 
   /**

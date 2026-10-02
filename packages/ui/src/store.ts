@@ -97,6 +97,8 @@ export function createAgentStore(bus: DataBus) {
   /** 当前回合开始时间；结束后保留并写入 turnEndedAt（「已工作 · 耗时」折叠行用） */
   const turnStartedAt = ref<number | null>(null);
   const turnEndedAt = ref<number | null>(null);
+  /** 回合内被修改的文件（快照 vs 磁盘统计），回合结束后拉取 */
+  const fileChanges = ref<Array<{ path: string; added: number; removed: number; isNew: boolean }>>([]);
 
   let liveTools = new Map<string, UiToolItem>();
   let streaming: UiMessageItem | null = null;
@@ -429,6 +431,29 @@ export function createAgentStore(bus: DataBus) {
     if (s && r?.model) s.model = r.model;
   }
 
+  /** 回合结束后拉取文件变更列表 */
+  async function fetchFileChanges(): Promise<void> {
+    if (!activeId.value) return;
+    try {
+      const r = await bus.request("session.file_changes", { session_id: activeId.value });
+      fileChanges.value = r.files ?? [];
+    } catch {
+      fileChanges.value = [];
+    }
+  }
+
+  /** 单文件快照 vs 当前的 diff 内容 */
+  async function fileDiff(path: string): Promise<{ oldText: string; newText: string }> {
+    return bus.request("session.file_diff", { session_id: activeId.value, path });
+  }
+
+  /** 撤销回合内全部文件更改 */
+  async function revertFiles(): Promise<void> {
+    if (!activeId.value) return;
+    await bus.request("session.revert_files", { session_id: activeId.value });
+    fileChanges.value = [];
+  }
+
   return reactive({
     // state
     sessions,
@@ -442,6 +467,7 @@ export function createAgentStore(bus: DataBus) {
     pendingApproval,
     turnStartedAt,
     turnEndedAt,
+    fileChanges,
     // actions
     start,
     refreshSessions,
@@ -454,6 +480,9 @@ export function createAgentStore(bus: DataBus) {
     resolveApproval,
     setThinkingLevel,
     setModel,
+    fetchFileChanges,
+    fileDiff,
+    revertFiles,
   });
 }
 

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import type { AgentStore, UiItem } from "../store.js";
 import { formatSpan, greeting } from "../utils/time.js";
+import DiffView from "./DiffView.vue";
 import MdContent from "./MdContent.vue";
 import Composer from "./Composer.vue";
 import Icon from "./Icon.vue";
@@ -127,6 +128,49 @@ const finalTextIndex = computed(() => {
   }
   return -1;
 });
+// ---- 文件变更卡片（回合结束后） ----
+const fileChangesOpen = ref(true);
+const expandedFileDiffs = ref(new Set<string>());
+const fileDiffCache = reactive<Record<string, { oldText: string; newText: string }>>({});
+const totalAdd = computed(() => props.store.fileChanges.reduce((n, f) => n + f.added, 0));
+const totalDel = computed(() => props.store.fileChanges.reduce((n, f) => n + f.removed, 0));
+
+function extOf(p: string): string {
+  const b = p.replace(/\\/g, "/").split("/").pop() ?? "";
+  const i = b.lastIndexOf(".");
+  return i > 0 ? b.slice(i + 1, i + 5) : "txt";
+}
+function baseOf(p: string): string {
+  const norm = p.replace(/\\/g, "/");
+  return norm.slice(norm.lastIndexOf("/") + 1);
+}
+function dirOfPath(p: string): string {
+  const segs = p.replace(/\\/g, "/").split("/").filter(Boolean);
+  segs.pop();
+  return segs.length ? segs.slice(-2).join("/") + "/" : "";
+}
+function diffOpen(path: string): boolean {
+  return expandedFileDiffs.value.has(path);
+}
+async function toggleFileDiff(path: string): Promise<void> {
+  if (expandedFileDiffs.value.has(path)) {
+    const next = new Set(expandedFileDiffs.value);
+    next.delete(path);
+    expandedFileDiffs.value = next;
+    return;
+  }
+  const r = await props.store.fileDiff(path);
+  fileDiffCache[path] = { oldText: r.oldText, newText: r.newText };
+  const next = new Set(expandedFileDiffs.value);
+  next.add(path);
+  expandedFileDiffs.value = next;
+}
+async function revertAll(): Promise<void> {
+  if (!props.store.fileChanges.length) return;
+  if (!window.confirm(`撤销本轮全部 ${props.store.fileChanges.length} 个文件的更改？`)) return;
+  await props.store.revertFiles();
+}
+
 const nowTick = ref(Date.now());
 let dividerTimer: ReturnType<typeof setInterval> | undefined;
 watch(
@@ -139,6 +183,19 @@ watch(
     }
   },
   { immediate: true },
+);
+watch(finishedTurn, (done) => {
+  if (done) void props.store.fetchFileChanges();
+});
+watch(busy, (b) => {
+  if (b) props.store.fileChanges = [];
+});
+watch(
+  () => props.store.activeId,
+  () => {
+    props.store.fileChanges = [];
+    expandedFileDiffs.value = new Set();
+  },
 );
 onBeforeUnmount(() => {
   if (dividerTimer) clearInterval(dividerTimer);
@@ -282,6 +339,40 @@ watch(
         <div v-if="busy && lastUserIndex === -1" class="turn-divider">
           <span class="turn-label">工作中 · {{ formatSpan(Math.max(1000, nowTick - (store.turnStartedAt ?? nowTick))) }}</span>
           <span class="turn-line"></span>
+        </div>
+
+        <!-- 文件变更卡片 -->
+        <div v-if="finishedTurn && store.fileChanges.length" class="files-card">
+          <button class="files-head" @click="fileChangesOpen = !fileChangesOpen">
+            <Icon name="arrow-down-s-line" :size="13" :class="{ fold: !fileChangesOpen }" />
+            <span>{{ store.fileChanges.length }} 个文件已更改</span>
+            <span v-if="totalAdd" class="t-add">+{{ totalAdd }}</span>
+            <span v-if="totalDel" class="t-del">−{{ totalDel }}</span>
+            <span class="flex-sp"></span>
+            <span class="revert" @click.stop="revertAll">
+              <Icon name="history-line" :size="13" />撤销
+            </span>
+          </button>
+          <div v-if="fileChangesOpen" class="files-list">
+            <template v-for="f in store.fileChanges" :key="f.path">
+              <div class="file-row">
+                <span class="tile">{{ extOf(f.path) }}</span>
+                <span class="f-name" :title="f.path">{{ baseOf(f.path) }}</span>
+                <span class="f-dir">{{ dirOfPath(f.path) }}</span>
+                <span class="t-add">+{{ f.added }}</span>
+                <span class="t-del">−{{ f.removed }}</span>
+                <button class="review-btn" @click="toggleFileDiff(f.path)">
+                  {{ diffOpen(f.path) ? "收起" : "审查" }}
+                </button>
+              </div>
+              <DiffView
+                v-if="diffOpen(f.path) && fileDiffCache[f.path]"
+                :old-text="fileDiffCache[f.path]!.oldText"
+                :new-text="fileDiffCache[f.path]!.newText"
+                :file="f.path"
+              />
+            </template>
+          </div>
         </div>
       </div>
       <div v-if="store.pendingApproval" class="approval">
@@ -468,6 +559,88 @@ export default { components: { ToolCard, MessageItem } };
   transition: transform 0.12s;
 }
 .turn-header svg.fold { transform: rotate(-90deg); }
+
+/* ---- 文件变更卡片 ---- */
+.files-card {
+  margin-top: 14px;
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-border-soft);
+  border-radius: 12px;
+  padding: 4px 14px 10px;
+}
+.files-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 10px 2px;
+  color: var(--pd-text-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.files-head:hover { color: var(--pd-text); }
+.files-head svg { color: var(--pd-text-4); transition: transform 0.12s; }
+.files-head svg.fold { transform: rotate(-90deg); }
+.files-head .revert {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--pd-text-3);
+  font-size: 12.5px;
+  padding: 4px 8px;
+  border-radius: 7px;
+}
+.files-head .revert:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+.files-list { border-top: 1px solid var(--pd-border-soft); }
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--pd-border-soft);
+  font-size: 13px;
+}
+.file-row:last-child { border-bottom: none; }
+.tile {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: var(--pd-accent-soft);
+  color: var(--pd-accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.f-name {
+  color: var(--pd-text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.f-dir {
+  color: var(--pd-text-4);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.review-btn {
+  flex: none;
+  background: none;
+  border: 1px solid var(--pd-border);
+  border-radius: 7px;
+  padding: 4px 10px;
+  color: var(--pd-text-3);
+  font-size: 12px;
+  cursor: pointer;
+}
+.review-btn:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
 
 /* ---- 工具审批横幅 ---- */
 .approval {
