@@ -47,7 +47,8 @@ const entries = computed<Entry[]>(() => {
   if (it.kind !== "message") return [];
   const out: Entry[] = [];
   if (it.role === "assistant") {
-    if (it.thinking && !it.blocks) {
+    // 思考只作为流式阶段的实时活动展示；一旦有正文（总结）就不再单独出现
+    if (it.streaming && it.thinking && !it.blocks) {
       out.push({
         kind: "thinking",
         text: it.thinking,
@@ -56,7 +57,7 @@ const entries = computed<Entry[]>(() => {
       });
     }
     for (const b of it.blocks ?? []) {
-      if (b.type === "thinking") out.push({ kind: "thinking", text: b.thinking ?? "" });
+      if (b.type === "thinking") continue;
       else if (b.type === "text") out.push({ kind: "text", text: b.text ?? "" });
       else if (b.type === "toolCall") {
         out.push({
