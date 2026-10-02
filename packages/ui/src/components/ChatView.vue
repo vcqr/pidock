@@ -48,13 +48,25 @@ const defaultCwd = computed(() => props.store.sessions[0]?.cwd ?? projects.value
 
 // ---- 活动流辅助 ----
 const busy = computed(() => props.store.agentState !== "idle");
-/** callId → 结果状态（从 toolResult 消息汇总，合并进 toolCall 活动行） */
+/** callId → 结果状态与输出（从 toolResult 消息汇总，合并进 toolCall 活动行） */
 const resultsMap = computed(() => {
-  const m: Record<string, "done" | "error"> = {};
+  const m: Record<string, { status: "done" | "error"; output: string }> = {};
   for (const it of props.store.items) {
     if (it.kind === "message" && it.role === "toolResult") {
       for (const b of it.blocks ?? []) {
-        if (b.callId) m[b.callId] = b.isError ? "error" : "done";
+        if (b.callId) m[b.callId] = { status: b.isError ? "error" : "done", output: b.output ?? "" };
+      }
+    }
+  }
+  return m;
+});
+/** callId → 工具调用参数（assistant toolCall 块），供 toolResult 行回填展示 */
+const argsMap = computed(() => {
+  const m: Record<string, string> = {};
+  for (const it of props.store.items) {
+    if (it.kind === "message" && it.role === "assistant") {
+      for (const b of it.blocks ?? []) {
+        if (b.type === "toolCall" && b.callId) m[b.callId] = b.args ?? "";
       }
     }
   }
@@ -258,6 +270,7 @@ watch(
               :item="item"
               :dimmed="busy"
               :results="resultsMap"
+              :args-map="argsMap"
             />
           </template>
           <div v-if="index === lastUserIndex && busy" class="turn-divider">

@@ -71,7 +71,7 @@ export function messageToPayload(msg: Unknown, messageId?: string): MessageCompl
       if (part?.type === "text") {
         blocks.push({ type: "text", text: part.text });
       } else if (part?.type === "thinking") {
-        blocks.push({ type: "thinking", text: part.thinking ?? "" });
+        blocks.push({ type: "thinking", thinking: part.thinking ?? "" });
       } else if (part?.type === "toolCall") {
         const argsJson = JSON.stringify(part.arguments ?? {});
         const { text, attachment } = maybeAttach(argsJson);

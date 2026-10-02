@@ -16,8 +16,10 @@ const props = withDefaults(
   defineProps<{
     item: UiMessageItem;
     dimmed?: boolean;
-    /** callId → 结果状态（由 ChatView 从 toolResult 消息汇总） */
-    results?: Record<string, "done" | "error">;
+    /** callId → 结果状态与输出（由 ChatView 从 toolResult 消息汇总） */
+    results?: Record<string, { status: "done" | "error"; output: string }>;
+    /** callId → 工具调用参数（来自 assistant 的 toolCall 块，补全 toolResult 行的展示） */
+    argsMap?: Record<string, string>;
   }>(),
   { dimmed: false, results: undefined },
 );
@@ -45,7 +47,7 @@ const entries = computed<Entry[]>(() => {
   if (it.kind !== "message") return [];
   const out: Entry[] = [];
   if (it.role === "assistant") {
-    if (it.thinking) {
+    if (it.thinking && !it.blocks) {
       out.push({
         kind: "thinking",
         text: it.thinking,
@@ -62,6 +64,7 @@ const entries = computed<Entry[]>(() => {
           toolName: b.toolName ?? "",
           args: b.args ?? "",
           callId: b.callId,
+          output: props.results?.[b.callId ?? ""]?.output,
         });
       }
     }
@@ -73,7 +76,7 @@ const entries = computed<Entry[]>(() => {
         out.push({
           kind: "tool",
           toolName: b.toolName ?? "",
-          args: "",
+          args: props.argsMap?.[b.callId ?? ""] ?? "",
           status: b.isError ? "error" : "done",
           output: b.output ?? "",
         });
@@ -110,7 +113,7 @@ const toolEntries = computed(
         v-else-if="e.kind === 'tool'"
         :tool-name="e.toolName"
         :args="e.args"
-        :status="e.status ?? results?.[e.callId ?? ''] ?? 'done'"
+        :status="e.status ?? results?.[e.callId ?? '']?.status ?? 'done'"
         :output="e.output"
       />
       <div v-else class="text-block">

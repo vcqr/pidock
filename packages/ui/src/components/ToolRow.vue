@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import DiffView from "./DiffView.vue";
 import Icon from "./Icon.vue";
 
 /**
@@ -97,11 +98,25 @@ const fullTarget = computed(() => {
   const a = parsed.value;
   return String(a.path ?? a.command ?? props.args);
 });
+
+/** edit/write 展开为 diff（参数里的 oldText/newText / content） */
+const hasDiff = computed(() => {
+  if (props.toolName === "edit") return !!(parsed.value.oldText ?? parsed.value.newText);
+  if (props.toolName === "write") return !!parsed.value.content;
+  return false;
+});
+const diffOld = computed(() => String(parsed.value.oldText ?? ""));
+const diffNew = computed(() => {
+  if (props.toolName === "write") return String(parsed.value.content ?? "");
+  return String(parsed.value.newText ?? "");
+});
+const hasOutput = computed(() => !!props.output);
+const expandable = computed(() => hasDiff.value || hasOutput.value);
 </script>
 
 <template>
   <div class="tool-wrap">
-    <div class="tool-row" :class="{ clickable: !!output }" @click="output && (expanded = !expanded)">
+    <div class="tool-row" :class="{ clickable: expandable }" @click="expandable && (expanded = !expanded)">
       <span class="t-icon"><Icon :name="info.icon" :size="13" /></span>
       <span class="t-verb">{{ info.verb }}</span>
       <span class="t-target" :title="fullTarget">{{ info.target }}</span>
@@ -113,7 +128,13 @@ const fullTarget = computed(() => {
       <span v-else-if="status === 'done'" class="t-ok"><Icon name="check-line" :size="12" /></span>
       <span v-else-if="status === 'running'" class="t-spin"></span>
     </div>
-    <pre v-if="expanded && output" class="t-output">{{ output.slice(-4000) }}</pre>
+    <DiffView
+      v-if="expanded && hasDiff"
+      :old-text="diffOld"
+      :new-text="diffNew"
+      :file="fullTarget"
+    />
+    <pre v-else-if="expanded && hasOutput" class="t-output">{{ output!.slice(-4000) }}</pre>
   </div>
 </template>
 

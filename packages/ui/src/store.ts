@@ -210,8 +210,17 @@ export function createAgentStore(bus: DataBus) {
       case "message_snapshot": {
         const { message_id, text, thinking } = e.payload;
         const item = ensureStreaming(message_id);
-        if ((text ?? "").length >= item.text.length) item.text = text ?? "";
-        if ((thinking ?? "").length >= item.thinking.length) item.thinking = thinking ?? "";
+        if ((text ?? "").length >= item.text.length) {
+          if (item.thinkingStartedAt && item.thinkingMs === undefined) {
+            item.thinkingMs = Date.now() - item.thinkingStartedAt;
+            item.thinkingStartedAt = undefined;
+          }
+          item.text = text ?? "";
+        }
+        if ((thinking ?? "").length >= item.thinking.length) {
+          if (!item.thinkingStartedAt) item.thinkingStartedAt = Date.now();
+          item.thinking = thinking ?? "";
+        }
         break;
       }
       case "message_complete":
