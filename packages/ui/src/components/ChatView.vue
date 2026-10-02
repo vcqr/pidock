@@ -271,6 +271,7 @@ watch(
               :dimmed="busy"
               :results="resultsMap"
               :args-map="argsMap"
+              :hide-thinking="finishedTurn && turnCollapsed && index === finalTextIndex"
             />
           </template>
           <div v-if="index === lastUserIndex && busy" class="turn-divider">

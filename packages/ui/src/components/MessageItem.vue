@@ -20,6 +20,8 @@ const props = withDefaults(
     results?: Record<string, { status: "done" | "error"; output: string }>;
     /** callId → 工具调用参数（来自 assistant 的 toolCall 块，补全 toolResult 行的展示） */
     argsMap?: Record<string, string>;
+    /** 折叠态的总结正文：不渲染思考行（内容仍可在「已工作」展开卡片里查看） */
+    hideThinking?: boolean;
   }>(),
   { dimmed: false, results: undefined },
 );
@@ -48,7 +50,7 @@ const entries = computed<Entry[]>(() => {
   const out: Entry[] = [];
   if (it.role === "assistant") {
     // 思考行始终展示（默认折叠，点击展开原文）；流式阶段带实时计时
-    if (it.thinking && !it.blocks) {
+    if (it.thinking && !it.blocks && !props.hideThinking) {
       out.push({
         kind: "thinking",
         text: it.thinking,
@@ -57,7 +59,7 @@ const entries = computed<Entry[]>(() => {
       });
     }
     for (const b of it.blocks ?? []) {
-      if (b.type === "thinking") out.push({ kind: "thinking", text: b.thinking ?? "" });
+      if (b.type === "thinking" && !props.hideThinking) out.push({ kind: "thinking", text: b.thinking ?? "" });
       else if (b.type === "text") out.push({ kind: "text", text: b.text ?? "" });
       else if (b.type === "toolCall") {
         out.push({
