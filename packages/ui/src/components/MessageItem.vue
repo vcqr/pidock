@@ -154,7 +154,7 @@ const toolEntries = computed(
 }
 .user-bubble {
   background: var(--pd-accent);
-  color: #1a1a1a;
+  color: #fff;
   white-space: pre-wrap;
   word-break: break-word;
   border-bottom-right-radius: 4px;
