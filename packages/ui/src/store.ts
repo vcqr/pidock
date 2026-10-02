@@ -94,8 +94,9 @@ export function createAgentStore(bus: DataBus) {
   const thinkingLevels = ref<Record<string, string>>({});
   /** 待用户审批的工具调用（仅活动会话展示） */
   const pendingApproval = ref<{ approvalId: string; toolName: string; args: string } | null>(null);
-  /** 当前回合开始时间（「工作中 · 耗时」分隔线），空闲时清空 */
+  /** 当前回合开始时间；结束后保留并写入 turnEndedAt（「已工作 · 耗时」折叠行用） */
   const turnStartedAt = ref<number | null>(null);
+  const turnEndedAt = ref<number | null>(null);
 
   let liveTools = new Map<string, UiToolItem>();
   let streaming: UiMessageItem | null = null;
@@ -276,9 +277,13 @@ export function createAgentStore(bus: DataBus) {
   async function start(): Promise<void> {
   const unsubscribe = await bus.onEvent(applyEnvelope);
   void unsubscribe; // lives for the app lifetime
-  // 回合结束（空闲）→ 清除「工作中」计时
+  // 回合结束 → 记录结束时间（折叠行显示总耗时）；新回合发送时重置
   watch(agentState, (state) => {
-    if (state === "idle") turnStartedAt.value = null;
+    if (state === "idle") {
+      if (turnStartedAt.value && !turnEndedAt.value) turnEndedAt.value = Date.now();
+    } else {
+      turnEndedAt.value = null;
+    }
   });
   await refreshSessions();
   }
@@ -346,7 +351,10 @@ export function createAgentStore(bus: DataBus) {
 
   async function send(text: string): Promise<void> {
     if (!activeId.value || !text.trim()) return;
-    if (!turnStartedAt.value) turnStartedAt.value = Date.now();
+    if (!turnStartedAt.value || turnEndedAt.value) {
+      turnStartedAt.value = Date.now();
+      turnEndedAt.value = null;
+    }
     items.value.push({
       kind: "message",
       key: nextKey(),
@@ -424,6 +432,7 @@ export function createAgentStore(bus: DataBus) {
     thinkingLevels,
     pendingApproval,
     turnStartedAt,
+    turnEndedAt,
     // actions
     start,
     refreshSessions,

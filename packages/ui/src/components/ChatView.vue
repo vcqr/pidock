@@ -85,6 +85,36 @@ const lastUserIndex = computed(() => {
   }
   return -1;
 });
+/** 回合结束 → 活动流折叠为「已工作 · 耗时」一行；点击展开卡片，总结正文保持可见 */
+const turnCollapsed = ref(true);
+const finishedTurn = computed(
+  () =>
+    !busy.value &&
+    lastUserIndex.value >= 0 &&
+    !!props.store.turnStartedAt &&
+    !!props.store.turnEndedAt &&
+    props.store.items.length > lastUserIndex.value + 1,
+);
+const turnDuration = computed(() =>
+  props.store.turnStartedAt && props.store.turnEndedAt
+    ? formatSpan(props.store.turnEndedAt - props.store.turnStartedAt)
+    : "",
+);
+watch(finishedTurn, (done) => {
+  if (done) turnCollapsed.value = true;
+});
+/** 折叠时仍可见的总结正文（回合内最后一条带文本的助手消息） */
+const finalTextIndex = computed(() => {
+  if (!finishedTurn.value) return -1;
+  const items = props.store.items;
+  for (let i = items.length - 1; i > lastUserIndex.value; i--) {
+    const it = items[i];
+    if (it && it.kind === "message" && it.role === "assistant" && (it.text || (it.blocks ?? []).some((b) => b.type === "text"))) {
+      return i;
+    }
+  }
+  return -1;
+});
 const nowTick = ref(Date.now());
 let dividerTimer: ReturnType<typeof setInterval> | undefined;
 watch(
@@ -205,21 +235,31 @@ watch(
       <div ref="scroller" class="scroll">
         <div v-if="store.loadingHistory" class="hint">加载历史中…</div>
         <template v-for="(item, index) in store.items" :key="item.key">
-          <ToolCard
-            v-if="item.kind === 'tool'"
-            :tool-name="item.toolName"
-            :status="item.status"
-            :args="item.args"
-            :partial="item.partial"
-            :output="item.output"
-            :dimmed="busy"
-          />
-          <MessageItem
-            v-else-if="!isMergedResult(item)"
-            :item="item"
-            :dimmed="busy"
-            :results="resultsMap"
-          />
+          <button
+            v-if="finishedTurn && index === lastUserIndex + 1"
+            class="turn-header"
+            @click="turnCollapsed = !turnCollapsed"
+          >
+            <span>已工作 · {{ turnDuration }}</span>
+            <Icon name="arrow-down-s-line" :size="13" :class="{ fold: turnCollapsed }" />
+          </button>
+          <template v-if="index <= lastUserIndex || !finishedTurn || !turnCollapsed || index === finalTextIndex">
+            <ToolCard
+              v-if="item.kind === 'tool'"
+              :tool-name="item.toolName"
+              :status="item.status"
+              :args="item.args"
+              :partial="item.partial"
+              :output="item.output"
+              :dimmed="busy"
+            />
+            <MessageItem
+              v-else-if="!isMergedResult(item)"
+              :item="item"
+              :dimmed="busy"
+              :results="resultsMap"
+            />
+          </template>
           <div v-if="index === lastUserIndex && busy" class="turn-divider">
             <span class="turn-label">工作中 · {{ formatSpan(Math.max(1000, nowTick - (store.turnStartedAt ?? nowTick))) }}</span>
             <span class="turn-line"></span>
@@ -393,6 +433,27 @@ export default { components: { ToolCard, MessageItem } };
   height: 1px;
   background: var(--pd-border-soft);
 }
+
+/* ---- 回合结束折叠行（已工作 · 耗时） ---- */
+.turn-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 4px;
+  background: none;
+  border: none;
+  color: var(--pd-text-3);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
+}
+.turn-header:hover { color: var(--pd-text-2); }
+.turn-header svg {
+  color: var(--pd-text-4);
+  transition: transform 0.12s;
+}
+.turn-header svg.fold { transform: rotate(-90deg); }
 
 /* ---- 工具审批横幅 ---- */
 .approval {
