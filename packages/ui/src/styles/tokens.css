@@ -1,0 +1,113 @@
+/**
+ * PiDock design tokens — dual theme via CSS variables.
+ * Components must only reference var(--pd-*); never hardcode colors.
+ * Dark palette mirrors demo/ui.html (ZCode-style neutral gray + orange accent).
+ */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --pd-bg: #1a1a1a;
+  --pd-bg-panel: #232323;
+  --pd-bg-card: #252525;
+  --pd-bg-raised: #2a2a2a;
+  --pd-bg-hover: #2f2f2f;
+  --pd-bg-active: #333333;
+  --pd-border: #343434;
+  --pd-border-soft: #2c2c2c;
+  --pd-text: #ececec;
+  --pd-text-2: #b3b3b3;
+  --pd-text-3: #8a8a8a;
+  --pd-text-4: #666666;
+  --pd-accent: #e8a33d;
+  --pd-accent-hover: #f2b254;
+  --pd-accent-soft: #3a2d16;
+  --pd-accent-text: #f3c887;
+  --pd-green: #34c184;
+  --pd-green-soft: #17301f;
+  --pd-green-text: #8fe0b4;
+  --pd-red: #ef4444;
+  --pd-red-soft: #3a1a1a;
+  --pd-red-text: #fca5a5;
+  --pd-yellow: #e8a33d;
+  --pd-yellow-soft: #3a2d16;
+  --pd-yellow-text: #f3c887;
+  --pd-purple: #a78bfa;
+  --pd-cyan: #4cc9e8;
+  --pd-code-bg: #1e1e1e;
+  --pd-code-border: #343434;
+  --pd-diff-del: rgba(239, 68, 68, 0.12);
+  --pd-diff-del-text: #fca5a5;
+  --pd-diff-add: rgba(52, 193, 132, 0.12);
+  --pd-diff-add-text: #8fe0b4;
+  --pd-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --pd-scrollbar: #3a3a3a;
+  --pd-watermark-line: rgba(236, 236, 236, 0.06);
+  --pd-radius: 8px;
+  --pd-radius-lg: 16px;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --pd-bg: #f5f5f5;
+  --pd-bg-panel: #ffffff;
+  --pd-bg-card: #ffffff;
+  --pd-bg-raised: #fafafa;
+  --pd-bg-hover: #efefef;
+  --pd-bg-active: #e7e7e7;
+  --pd-border: #e0e0e0;
+  --pd-border-soft: #ececec;
+  --pd-text: #1f1f1f;
+  --pd-text-2: #555555;
+  --pd-text-3: #8a8a8a;
+  --pd-text-4: #b0b0b0;
+  --pd-accent: #b8791f;
+  --pd-accent-hover: #9c6512;
+  --pd-accent-soft: #fdf1dc;
+  --pd-accent-text: #8a5a10;
+  --pd-green: #1e9e63;
+  --pd-green-soft: #ddf3e7;
+  --pd-green-text: #167a4b;
+  --pd-red: #dc2626;
+  --pd-red-soft: #fee2e2;
+  --pd-red-text: #b91c1c;
+  --pd-yellow: #b8791f;
+  --pd-yellow-soft: #fdf1dc;
+  --pd-yellow-text: #8a5a10;
+  --pd-purple: #7c3aed;
+  --pd-cyan: #0891b2;
+  --pd-code-bg: #f6f6f6;
+  --pd-code-border: #e0e0e0;
+  --pd-diff-del: rgba(220, 38, 38, 0.08);
+  --pd-diff-del-text: #b91c1c;
+  --pd-diff-add: rgba(30, 158, 99, 0.1);
+  --pd-diff-add-text: #167a4b;
+  --pd-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --pd-scrollbar: #d4d4d4;
+  --pd-watermark-line: rgba(0, 0, 0, 0.06);
+}
+
+/* hljs token colors follow the theme via variables */
+[data-theme="dark"] .hljs-keyword,
+[data-theme="dark"] .hljs-selector-tag,
+[data-theme="dark"] .hljs-literal { color: #c678dd; }
+[data-theme="dark"] .hljs-string,
+[data-theme="dark"] .hljs-attr { color: #98c379; }
+[data-theme="dark"] .hljs-title,
+[data-theme="dark"] .hljs-name { color: #61afef; }
+[data-theme="dark"] .hljs-number { color: #d19a66; }
+[data-theme="dark"] .hljs-comment { color: #5c6370; font-style: italic; }
+[data-theme="dark"] .hljs-built_in,
+[data-theme="dark"] .hljs-type { color: #e5c07b; }
+
+[data-theme="light"] .hljs-keyword,
+[data-theme="light"] .hljs-selector-tag,
+[data-theme="light"] .hljs-literal { color: #7c3aed; }
+[data-theme="light"] .hljs-string,
+[data-theme="light"] .hljs-attr { color: #0e7490; }
+[data-theme="light"] .hljs-title,
+[data-theme="light"] .hljs-name { color: #1d4ed8; }
+[data-theme="light"] .hljs-number { color: #b45309; }
+[data-theme="light"] .hljs-comment { color: #9ca3af; font-style: italic; }
+[data-theme="light"] .hljs-built_in,
+[data-theme="light"] .hljs-type { color: #b45309; }

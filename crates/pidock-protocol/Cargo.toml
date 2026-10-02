@@ -1,0 +1,13 @@
+[package]
+name = "pidock-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PiDock unified wire protocol (stdio JSONL between Tauri core and pi-host, and cloud sync)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+ts-rs = { workspace = true, features = ["serde-json-impl", "uuid-impl", "chrono-impl"] }
+uuid = { workspace = true }
+chrono = { workspace = true }

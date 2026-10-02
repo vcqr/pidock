@@ -1,0 +1,26 @@
+{
+  "name": "@pidock/ui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PiDock shared Vue components + DataBus (used by desktop and web with different transports)",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "vue": "^3.5.13",
+    "@pidock/protocol": "workspace:*",
+    "markdown-it": "^14.1.0",
+    "highlight.js": "^11.10.0",
+    "dompurify": "^3.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^7.1.0",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "vue-tsc": "^3.0.0",
+    "@types/markdown-it": "^14.1.2"
+  }
+}

@@ -1,0 +1,11 @@
+# keep docker build context small (repo root is the context)
+node_modules/
+**/node_modules/
+target/
+dist/
+.git/
+*.log
+.env
+docker/.env
+apps/desktop/src-tauri/gen/
+host/../target/

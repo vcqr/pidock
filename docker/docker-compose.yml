@@ -1,0 +1,116 @@
+name: pidock
+
+# PiDock server stack — runs in WSL/docker.
+#   docker compose up -d kafka mongo redis rustfs   # infrastructure only
+#   docker compose up -d --build server             # + PiDock server
+# Pipeline: PIPELINE=kafka (default) or redis (Redis Streams drop-in).
+
+services:
+  kafka:
+    image: apache/kafka:latest
+    container_name: pidock-kafka
+    ports:
+      - "9092:9092"   # host debugging access
+    environment:
+      # apache/kafka image: KAFKA_* env vars directly (no KAFKA_CFG_ prefix)
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_LISTENERS=INTERNAL://:29092,CONTROLLER://:9093,HOST://:9092
+      - KAFKA_ADVERTISED_LISTENERS=INTERNAL://kafka:29092,HOST://localhost:9092
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL
+      # single-node: replication factors must be 1
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_LOG_RETENTION_HOURS=168
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  mongo:
+    image: mongo:7
+    container_name: pidock-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: pidock-redis
+    # runtime state only: persistence disabled (all state self-heals)
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: pidock-rustfs
+    ports:
+      - "7000:7000"
+    environment:
+      - RUSTFS_ROOT_USER=${RUSTFS_ROOT_USER:-pidock}
+      - RUSTFS_ROOT_PASSWORD=${RUSTFS_ROOT_PASSWORD:-pidock-secret}
+      - RUSTFS_ADDRESS=:7000
+      - RUSTFS_VOLUMES=/data
+    volumes:
+      - rustfs_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:7000/minio/health/live >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: ..
+      dockerfile: docker/server.Dockerfile
+    container_name: pidock-server
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    environment:
+      - PIDOCK_BIND=0.0.0.0:8080
+      - PIDOCK_MONGO_URI=mongodb://mongo:27017
+      - PIDOCK_REDIS_URL=redis://redis:6379
+      - PIDOCK_KAFKA_BROKERS=kafka:29092
+      - PIDOCK_KAFKA_TOPIC=pidock.events
+      - PIDOCK_PIPELINE=kafka
+      - PIDOCK_JWT_SECRET=${PIDOCK_JWT_SECRET:-dev-secret-change-me}
+      - PIDOCK_RUSTFS_ENDPOINT=http://rustfs:7000
+      - PIDOCK_RUSTFS_BUCKET=pidock-attachments
+      - PIDOCK_RUSTFS_ACCESS_KEY=${RUSTFS_ROOT_USER:-pidock}
+      - PIDOCK_RUSTFS_SECRET_KEY=${RUSTFS_ROOT_PASSWORD:-pidock-secret}
+
+volumes:
+  kafka_data:
+  mongo_data:
+  rustfs_data:

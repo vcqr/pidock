@@ -1,0 +1,26 @@
+# dependencies
+node_modules/
+
+# build artifacts
+dist/
+target/
+gen/
+apps/desktop/src-tauri/binaries/
+
+# runtime / local state
+*.log
+.env
+.env.*
+
+# OS
+Thumbs.db
+.DS_Store
+
+# editors
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ZCode workspace data
+.zcode/
+*.tsbuildinfo

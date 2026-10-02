@@ -1,0 +1,28 @@
+{
+  "name": "@pidock/host",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PiDock pi-host: stdio daemon embedding the pi coding agent SDK (multi-session)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "bun build ./src/main.ts --compile --outfile ../target/pidock-host.exe",
+    "smoke": "bun run scripts/smoke.ts",
+    "smoke:node": "node --experimental-strip-types scripts/smoke.ts",
+    "smoke:extension": "bun run scripts/extension-smoke.ts",
+    "smoke:config": "bun run scripts/config-smoke.ts",
+    "e2e:server": "bun run ../server/scripts/fake-desktop.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@pidock/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^24",
+    "ws": "^8.18.0"
+  }
+}

@@ -1,0 +1,740 @@
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  getAgentDir,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+  VERSION as PI_VERSION,
+  type AgentSession,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
+import { emitEvent } from "./emit.js";
+import { entryToPayload, metaPayloadFromSession } from "./map.js";
+import {
+  ATTACHMENT_THRESHOLD_BYTES,
+  Event,
+  INLINE_PREVIEW_BYTES,
+  type AgentState,
+  type Block,
+} from "@pidock/protocol";
+
+export const HOST_VERSION = "0.1.0";
+
+/** 工具调用权限模式（输入卡片左下角下拉） */
+export type PermissionMode = "plan" | "confirm" | "edit-auto" | "full";
+const PERMISSION_MODES: PermissionMode[] = ["plan", "confirm", "edit-auto", "full"];
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
+
+export class RpcError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+interface TrackedSession {
+  session: AgentSession;
+  cwd: string;
+  provider?: string;
+  model?: string;
+  /**
+   * Number of JSONL entries already drained (seeded from the entries present
+   * at open). Persisted events get seq = ++lastSeq, i.e. the 1-based entry
+   * index — identical mapping for live events and replay.
+   */
+  lastSeq: number;
+  /** streaming identity for the in-flight assistant message (deltas/snapshots) */
+  turnCounter: number;
+  pendingTurnId: string | null;
+  unsubscribe: () => void;
+  drain: () => void;
+  snapshot: {
+    messageId: string | null;
+    text: string;
+    thinking: string;
+    dirty: boolean;
+    lastEmit: number;
+  };
+}
+
+interface RegistryEntry {
+  session_id: string;
+  file: string;
+  cwd: string;
+  provider?: string;
+  model?: string;
+  name?: string;
+  created_at: string;
+}
+
+export interface SessionSummary {
+  session_id: string;
+  file: string;
+  cwd: string;
+  provider?: string;
+  model?: string;
+  name?: string;
+  created_at: string;
+  open: boolean;
+  state: AgentState;
+}
+
+const SNAPSHOT_INTERVAL_MS = 2000;
+
+export class SessionPool {
+  private sessions = new Map<string, TrackedSession>();
+  private modelRuntimePromise: Promise<ModelRuntime> | null = null;
+  /** 每会话权限模式（内置权限扩展实时读取） */
+  private permissionStates = new Map<string, { mode: PermissionMode }>();
+  /** 等待用户审批的工具调用 */
+  private pendingApprovals = new Map<
+    string,
+    { sessionId: string; resolve: (approved: boolean) => void }
+  >();
+
+  // ---------------------------------------------------------------- model
+
+  /** shared ModelRuntime (also used by the config service) */
+  modelRuntime(): Promise<ModelRuntime> {
+    this.modelRuntimePromise ??= ModelRuntime.create();
+    return this.modelRuntimePromise;
+  }
+
+  private async resolveModel(ref?: string): Promise<object | undefined> {
+    if (!ref) return undefined;
+    const slash = ref.indexOf("/");
+    if (slash <= 0) {
+      throw new RpcError("bad_model_ref", `model must be "provider/model-id", got "${ref}"`);
+    }
+    const provider = ref.slice(0, slash);
+    const id = ref.slice(slash + 1);
+    const mr = await this.modelRuntime();
+    const model = mr.getModel(provider, id);
+    if (!model) {
+      throw new RpcError("model_not_found", `model "${ref}" not found in registry (check models.json / auth)`);
+    }
+    return model;
+  }
+
+  // ------------------------------------------------------------- registry
+
+  private registryPath(): string {
+    return join(getAgentDir(), "pidock", "registry.json");
+  }
+
+  private readRegistry(): RegistryEntry[] {
+    try {
+      const raw = readFileSync(this.registryPath(), "utf8");
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private writeRegistryEntry(entry: RegistryEntry): void {
+    const path = this.registryPath();
+    mkdirSync(dirname(path), { recursive: true });
+    const all = this.readRegistry().filter((e) => e.session_id !== entry.session_id);
+    all.push(entry);
+    writeFileSync(path, JSON.stringify({ sessions: all }, null, 2));
+  }
+
+  private removeRegistryEntry(sessionId: string): void {
+    const path = this.registryPath();
+    const all = this.readRegistry().filter((e) => e.session_id !== sessionId);
+    writeFileSync(path, JSON.stringify({ sessions: all }, null, 2));
+  }
+
+  // ---------------------------------------------------------------- state
+
+  private setState(tracked: TrackedSession, sessionId: string, state: AgentState): void {
+    emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state });
+  }
+
+  // ------------------------------------------------------------- creation
+
+  async createSession(params: {
+    cwd?: string;
+    model?: string;
+    thinking_level?: string;
+  }): Promise<{ session_id: string; file: string; cwd: string }> {
+    // 无头模式下没有"当前项目"概念：缺省落在用户主目录而不是 host 进程目录
+    const cwd = params.cwd ?? homedir();
+    const model = await this.resolveModel(params.model);
+    const sessionManager = SessionManager.create(cwd);
+    const permission = { mode: "full" as PermissionMode };
+    const sessionIdRef = { id: "" };
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir: getAgentDir(),
+      settingsManager: SettingsManager.create(cwd, getAgentDir()),
+      extensionFactories: [
+        {
+          name: "pidock-permission",
+          factory: (pi: ExtensionAPI) => {
+            pi.on("tool_call", async (event) =>
+              this.enforcePermission(sessionIdRef.id, permission, event.toolName, event.input),
+            );
+          },
+        },
+      ],
+    });
+    await loader.reload();
+    const { session } = await createAgentSession({
+      cwd,
+      model: model as never,
+      ...(params.thinking_level
+        ? { thinkingLevel: params.thinking_level as never }
+        : {}),
+      modelRuntime: await this.modelRuntime(),
+      sessionManager,
+      resourceLoader: loader,
+    });
+    const sessionId = session.sessionId;
+    sessionIdRef.id = sessionId;
+    this.permissionStates.set(sessionId, permission);
+    const tracked: TrackedSession = {
+      session,
+      cwd,
+      provider: undefined,
+      model: params.model,
+      lastSeq: sessionManager.getEntries().length,
+      turnCounter: 0,
+      pendingTurnId: null,
+      unsubscribe: () => {},
+      drain: () => {},
+      snapshot: { messageId: null, text: "", thinking: "", dirty: false, lastEmit: 0 },
+    };
+    tracked.unsubscribe = this.wire(sessionId, tracked);
+    this.sessions.set(sessionId, tracked);
+
+    const file = session.sessionFile ?? "";
+    this.writeRegistryEntry({
+      session_id: sessionId,
+      file,
+      cwd,
+      model: params.model,
+      created_at: new Date().toISOString(),
+    });
+
+    emitEvent(sessionId, Event.SESSION_META, metaPayloadFromSession({ cwd, model: params.model }), {
+      persist: false,
+    });
+    return { session_id: sessionId, file, cwd };
+  }
+
+  async openSession(params: { file: string }): Promise<{ session_id: string; file: string; cwd: string }> {
+    const sessionManager = SessionManager.open(params.file);
+    const cwd = sessionManager.getCwd() || process.cwd();
+    const permission = { mode: "full" as PermissionMode };
+    const sessionIdRef = { id: "" };
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir: getAgentDir(),
+      settingsManager: SettingsManager.create(cwd, getAgentDir()),
+      extensionFactories: [
+        {
+          name: "pidock-permission",
+          factory: (pi: ExtensionAPI) => {
+            pi.on("tool_call", async (event) =>
+              this.enforcePermission(sessionIdRef.id, permission, event.toolName, event.input),
+            );
+          },
+        },
+      ],
+    });
+    await loader.reload();
+    const { session } = await createAgentSession({
+      cwd,
+      modelRuntime: await this.modelRuntime(),
+      sessionManager,
+      resourceLoader: loader,
+    });
+    const sessionId = session.sessionId;
+    sessionIdRef.id = sessionId;
+    this.permissionStates.set(sessionId, permission);
+    const tracked: TrackedSession = {
+      session,
+      cwd,
+      lastSeq: sessionManager.getEntries().length,
+      turnCounter: 0,
+      pendingTurnId: null,
+      unsubscribe: () => {},
+      drain: () => {},
+      snapshot: { messageId: null, text: "", thinking: "", dirty: false, lastEmit: 0 },
+    };
+    tracked.unsubscribe = this.wire(sessionId, tracked);
+    this.sessions.set(sessionId, tracked);
+
+    emitEvent(sessionId, Event.SESSION_META, metaPayloadFromSession({ cwd }), { persist: false });
+    return { session_id: sessionId, file: params.file, cwd };
+  }
+
+  closeSession(params: { session_id: string }): { closed: boolean } {
+    const tracked = this.sessions.get(params.session_id);
+    if (!tracked) return { closed: false };
+    this.denyApprovals(params.session_id);
+    tracked.unsubscribe();
+    tracked.session.dispose();
+    this.sessions.delete(params.session_id);
+    return { closed: true };
+  }
+
+  // ------------------------------------------------------------- querying
+
+  listSessions(): { sessions: SessionSummary[] } {
+    const openIds = new Set(this.sessions.keys());
+    const summaries: SessionSummary[] = this.readRegistry().map((entry) => ({
+      session_id: entry.session_id,
+      file: entry.file,
+      cwd: entry.cwd,
+      ...(entry.provider ? { provider: entry.provider } : {}),
+      ...(entry.model ? { model: entry.model } : {}),
+      ...(entry.name ? { name: entry.name } : {}),
+      created_at: entry.created_at,
+      open: openIds.has(entry.session_id),
+      state: this.stateOf(entry.session_id),
+    }));
+    return { sessions: summaries };
+  }
+
+  private stateOf(sessionId: string): AgentState {
+    const tracked = this.sessions.get(sessionId);
+    if (!tracked) return "idle";
+    const s = tracked.session;
+    if (s.isCompacting) return "compacting";
+    if (s.retryAttempt > 0) return "retrying";
+    if (s.isStreaming) return "responding";
+    return s.isIdle ? "idle" : "thinking";
+  }
+
+  /**
+   * Replay persisted events derived from session entries (live pool entry or
+   * closed session file). Used by the desktop UI for history and by the sync
+   * layer for backfill after reconnect.
+   */
+  async replayEvents(params: {
+    session_id: string;
+    after_seq?: number;
+  }): Promise<{ events: Array<{ seq: number; ts: string; kind: string; payload: unknown }> }> {
+    let entries: Record<string, any>[];
+    const tracked = this.sessions.get(params.session_id);
+    if (tracked) {
+      entries = tracked.session.sessionManager.getEntries() as unknown as Record<string, any>[];
+    } else {
+      const file = this.readRegistry().find((e) => e.session_id === params.session_id)?.file;
+      if (!file) throw new RpcError("session_not_found", `unknown session "${params.session_id}"`);
+      const { parseSessionEntries } = await import("@earendil-works/pi-coding-agent");
+      const raw = parseSessionEntries(readFileSync(file, "utf8")) as unknown as Record<string, any>[];
+      entries = raw.filter((e) => e?.type !== "session");
+    }
+    const events: Array<{ seq: number; ts: string; kind: string; payload: unknown }> = [];
+    entries.forEach((entry, index) => {
+      const seq = index + 1;
+      if (params.after_seq !== undefined && seq <= params.after_seq) return;
+      const mapped = entryToPayload(entry);
+      if (!mapped) return;
+      events.push({
+        seq,
+        ts: typeof entry.timestamp === "string" ? entry.timestamp : new Date().toISOString(),
+        kind: mapped.kind,
+        payload: mapped.payload,
+      });
+    });
+    return { events };
+  }
+
+  // ---------------------------------------------------------------- agent
+
+  prompt(params: { session_id: string; text: string }): { accepted: boolean } {
+    const tracked = this.require(params.session_id);
+    this.autoTitle(params.session_id, params.text);
+    tracked.session
+      .prompt(params.text)
+      .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: String(err) }))
+      .finally(() => tracked.drain());
+    return { accepted: true };
+  }
+
+  /**
+   * 权限模式对修改类工具（bash/write/edit）的拦截与审批。
+   * 作为内置扩展在会话创建时注入，tool_call 处理器可异步等待用户审批。
+   */
+  private async enforcePermission(
+    sessionId: string,
+    permission: { mode: PermissionMode },
+    toolName: string,
+    input: unknown,
+  ): Promise<{ block: true; reason: string } | undefined> {
+    const mode = permission.mode;
+    if (mode === "full") return undefined;
+    const mutating = toolName === "bash" || toolName === "write" || toolName === "edit";
+    if (!mutating) return undefined;
+    if (mode === "plan") {
+      return { block: true, reason: "计划模式下不允许执行修改类工具（bash/write/edit）" };
+    }
+    if (mode === "edit-auto" && toolName !== "bash") return undefined;
+    // confirm 模式（或 auto-edit 下的 bash）：请求用户审批并等待回复
+    const approvalId = randomUUID();
+    const pending = new Promise<boolean>((resolve) => {
+      this.pendingApprovals.set(approvalId, { sessionId, resolve });
+    });
+    emitEvent(
+      sessionId,
+      Event.TOOL_APPROVAL,
+      { approval_id: approvalId, tool_name: toolName, args: JSON.stringify(input ?? {}) },
+      { persist: false },
+    );
+    emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "waiting_approval" }, { persist: false });
+    const approved = await pending;
+    emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "thinking" }, { persist: false });
+    return approved ? undefined : { block: true, reason: "用户拒绝了本次工具调用" };
+  }
+
+  setPermissionMode(params: { session_id: string; mode: PermissionMode }): { ok: true } {
+    const state = this.permissionStates.get(params.session_id);
+    if (!state) throw new RpcError("session_not_found", `unknown session "${params.session_id}"`);
+    if (!PERMISSION_MODES.includes(params.mode)) {
+      throw new RpcError("bad_request", `invalid permission mode "${params.mode}"`);
+    }
+    state.mode = params.mode;
+    return { ok: true };
+  }
+
+  resolveApproval(params: { approval_id: string; approved: boolean }): { ok: boolean } {
+    const pending = this.pendingApprovals.get(params.approval_id);
+    if (!pending) return { ok: false };
+    this.pendingApprovals.delete(params.approval_id);
+    pending.resolve(params.approved);
+    return { ok: true };
+  }
+
+  private denyApprovals(sessionId: string): void {
+    for (const [id, pending] of this.pendingApprovals) {
+      if (pending.sessionId === sessionId) {
+        this.pendingApprovals.delete(id);
+        pending.resolve(false);
+      }
+    }
+  }
+
+  setThinkingLevel(params: { session_id: string; level: string }): { ok: true } {
+    const tracked = this.require(params.session_id);
+    if (!THINKING_LEVELS.includes(params.level)) {
+      throw new RpcError("bad_request", `invalid thinking level "${params.level}"`);
+    }
+    tracked.session.setThinkingLevel(params.level as never);
+    return { ok: true };
+  }
+
+  /** 按名称（id/name/provider/id）唯一匹配后切换会话模型 */
+  async setModel(params: { session_id: string; model: string }): Promise<{ ok: true; model: string }> {
+    const tracked = this.require(params.session_id);
+    const mr = await this.modelRuntime();
+    const target = params.model.trim().toLowerCase();
+    const matches: Array<{ provider: string; id: string }> = [];
+    for (const p of mr.getProviders()) {
+      for (const m of mr.getModels(p.id)) {
+        const id = String(m.id ?? "").toLowerCase();
+        const name = String(m.name ?? "").toLowerCase();
+        if (id === target || name === target || `${p.id}/${id}` === target) {
+          matches.push({ provider: p.id, id: m.id });
+        }
+      }
+    }
+    const match = matches[0];
+    if (!match) {
+      throw new RpcError("model_not_found", `no model matching "${params.model}"`);
+    }
+    if (matches.length > 1) {
+      throw new RpcError("ambiguous_model", `multiple models match "${params.model}"`);
+    }
+    const resolved = await this.resolveModel(`${match.provider}/${match.id}`);
+    await tracked.session.setModel(resolved as never);
+    const entry = this.readRegistry().find((e) => e.session_id === params.session_id);
+    if (entry) {
+      entry.model = `${match.provider}/${match.id}`;
+      this.writeRegistryEntry(entry);
+    }
+    return { ok: true, model: `${match.provider}/${match.id}` };
+  }
+
+  /**
+   * 会话尚无标题时，用首条用户消息生成（registry 持久化 + SESSION_META 实时推送）。
+   * pi 本体只在 TUI /name 命令里命名会话，无头 RPC 模式不会有名字。
+   */
+  private autoTitle(sessionId: string, text: string): void {
+    const entry = this.readRegistry().find((e) => e.session_id === sessionId);
+    if (!entry || entry.name) return;
+    const title = text.replace(/\s+/g, " ").trim().slice(0, 40);
+    if (!title) return;
+    entry.name = title;
+    this.writeRegistryEntry(entry);
+    emitEvent(sessionId, Event.SESSION_META, { name: title });
+  }
+
+  steer(params: { session_id: string; text: string }): { accepted: boolean } {
+    const tracked = this.require(params.session_id);
+    tracked.session
+      .steer(params.text)
+      .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: String(err) }));
+    return { accepted: true };
+  }
+
+  followUp(params: { session_id: string; text: string }): { accepted: boolean } {
+    const tracked = this.require(params.session_id);
+    tracked.session
+      .followUp(params.text)
+      .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: String(err) }));
+    return { accepted: true };
+  }
+
+  async abort(params: { session_id: string }): Promise<{ aborted: boolean }> {
+    const tracked = this.require(params.session_id);
+    // 中断时挂起的工具审批全部按拒绝处理，避免工具卡在等待状态
+    this.denyApprovals(params.session_id);
+    await tracked.session.abort();
+    return { aborted: true };
+  }
+
+  // ---------------------------------------------------------------- wiring
+
+  private require(sessionId: string): TrackedSession {
+    const tracked = this.sessions.get(sessionId);
+    if (!tracked) throw new RpcError("session_not_found", `session "${sessionId}" is not open`);
+    return tracked;
+  }
+
+  /** subscribe to pi session events and map them to pidock envelopes */
+  private wire(sessionId: string, tracked: TrackedSession): () => void {
+    const snap = tracked.snapshot;
+
+    /**
+     * Emit persistable events for entries not yet drained. The SessionManager
+     * entry array is the sole source of truth: live pipeline and replay both
+     * map entry index -> seq, so the two can never disagree.
+     */
+    const drainEntries = (): void => {
+      const entries = tracked.session.sessionManager.getEntries() as unknown as Record<string, any>[];
+      if (entries.length < tracked.lastSeq) {
+        // compaction rewrote the session: history shrank, so the cloud copy
+        // must be rebuilt — server deletes the old events on this marker
+        emitEvent(sessionId, Event.SESSION_RESYNCED, { reason: "compaction" });
+        tracked.lastSeq = 0;
+      }
+      while (tracked.lastSeq < entries.length) {
+        tracked.lastSeq += 1;
+        const entry = entries[tracked.lastSeq - 1];
+        if (!entry) continue;
+        let messageId: string | undefined;
+        if (entry?.type === "message" && (entry.message as any)?.role === "assistant") {
+          messageId = tracked.pendingTurnId ?? `${sessionId}:assistant#${tracked.lastSeq}`;
+          tracked.pendingTurnId = null;
+        }
+        const mapped = entryToPayload(entry, messageId);
+        if (mapped) {
+          emitEvent(sessionId, mapped.kind, mapped.payload, { persist: true, seq: tracked.lastSeq });
+        }
+      }
+    };
+    // safety net for entry appends that coincide with no SDK event
+    const drainTimer = setInterval(drainEntries, 1000);
+    tracked.drain = drainEntries;
+
+    /**
+     * Snapshot throttle: inline, time-based. On each delta, if enough time has
+     * passed since the last snapshot, push the accumulated partial content.
+     * (A timer-based flush races with short turns; the inline check cannot.)
+     */
+    const maybeSnapshot = (): void => {
+      if (!snap.dirty) return;
+      const now = Date.now();
+      if (now - snap.lastEmit < SNAPSHOT_INTERVAL_MS) return;
+      snap.lastEmit = now;
+      snap.dirty = false;
+      emitEvent(sessionId, Event.MESSAGE_SNAPSHOT, {
+        message_id: snap.messageId ?? `${sessionId}:assistant`,
+        text: snap.text,
+        thinking: snap.thinking,
+      });
+    };
+
+    const resetSnap = (): void => {
+      snap.messageId = null;
+      snap.text = "";
+      snap.thinking = "";
+      snap.dirty = false;
+    };
+
+    const unsubscribe = tracked.session.subscribe((event) => {
+      // entries may have been appended since the previous event
+      drainEntries();
+      switch (event.type) {
+        // ---- delta channel (local UI streaming) ----
+        case "message_update": {
+          const ame = event.assistantMessageEvent as Record<string, any>;
+          const messageId = snap.messageId ?? `${sessionId}:assistant`;
+          if (ame?.type === "text_delta" && typeof ame.delta === "string") {
+            if (snap.messageId !== messageId) {
+              snap.messageId = messageId;
+              snap.text = "";
+              snap.thinking = "";
+            }
+            snap.text += ame.delta;
+            snap.dirty = true;
+            maybeSnapshot();
+            emitEvent(sessionId, Event.MESSAGE_DELTA, {
+              message_id: messageId,
+              part: "text",
+              delta: ame.delta,
+            });
+          } else if (ame?.type === "thinking_delta" && typeof ame.delta === "string") {
+            snap.thinking += ame.delta;
+            snap.dirty = true;
+            maybeSnapshot();
+            emitEvent(sessionId, Event.MESSAGE_DELTA, {
+              message_id: messageId,
+              part: "thinking",
+              delta: ame.delta,
+            });
+          }
+          break;
+        }
+
+        // ---- ephemeral state ----
+        case "agent_start":
+          this.setState(tracked, sessionId, "thinking");
+          break;
+        case "turn_start":
+          this.setState(tracked, sessionId, "thinking");
+          break;
+        case "message_start": {
+          if ((event.message as Record<string, any>)?.role === "assistant") {
+            tracked.turnCounter += 1;
+            tracked.pendingTurnId = `${sessionId}#${tracked.turnCounter}`;
+            snap.messageId = tracked.pendingTurnId;
+            this.setState(tracked, sessionId, "responding");
+          }
+          break;
+        }
+        case "tool_execution_start": {
+          this.setState(tracked, sessionId, "executing_tool");
+          const args = JSON.stringify(event.args ?? {});
+          emitEvent(sessionId, Event.TOOL_EXECUTION_START, {
+            call_id: event.toolCallId,
+            tool_name: event.toolName,
+            args: args.length > INLINE_PREVIEW_BYTES ? args.slice(0, INLINE_PREVIEW_BYTES) : args,
+          });
+          break;
+        }
+        case "tool_execution_update": {
+          const partial =
+            typeof event.partialResult === "string"
+              ? event.partialResult
+              : JSON.stringify(event.partialResult ?? "");
+          emitEvent(sessionId, Event.TOOL_EXECUTION_UPDATE, {
+            call_id: event.toolCallId,
+            tool_name: event.toolName,
+            partial: partial.length > INLINE_PREVIEW_BYTES ? partial.slice(0, INLINE_PREVIEW_BYTES) : partial,
+          });
+          break;
+        }
+        case "tool_execution_end": {
+          this.setState(tracked, sessionId, "thinking");
+          const result =
+            typeof event.result === "string"
+              ? event.result
+              : JSON.stringify(event.result ?? "");
+          emitEvent(sessionId, Event.TOOL_EXECUTION_END, {
+            call_id: event.toolCallId,
+            tool_name: event.toolName,
+            is_error: event.isError,
+            output: result.length > ATTACHMENT_THRESHOLD_BYTES ? result.slice(0, INLINE_PREVIEW_BYTES) : result,
+            ...(result.length > ATTACHMENT_THRESHOLD_BYTES ? { truncated: true } : {}),
+          });
+          break;
+        }
+        case "agent_end":
+          if (!event.willRetry) this.setState(tracked, sessionId, "idle");
+          resetSnap();
+          break;
+        case "agent_settled":
+          this.setState(tracked, sessionId, "idle");
+          resetSnap();
+          break;
+        case "queue_update":
+          emitEvent(sessionId, Event.QUEUE_CHANGED, {
+            steering_count: event.steering.length,
+            follow_up_count: event.followUp.length,
+          });
+          break;
+        case "compaction_start":
+          this.setState(tracked, sessionId, "compacting");
+          emitEvent(sessionId, Event.COMPACTION_LIFECYCLE, { phase: "start", reason: event.reason });
+          break;
+        case "compaction_end":
+          this.setState(tracked, sessionId, event.willRetry ? "thinking" : "idle");
+          emitEvent(sessionId, Event.COMPACTION_LIFECYCLE, {
+            phase: "end",
+            reason: event.reason,
+            aborted: event.aborted,
+            ...(event.errorMessage ? { error: event.errorMessage } : {}),
+          });
+          break;
+        case "auto_retry_start":
+          this.setState(tracked, sessionId, "retrying");
+          emitEvent(sessionId, Event.AUTO_RETRY, {
+            phase: "start",
+            attempt: event.attempt,
+            max_attempts: event.maxAttempts,
+            error: event.errorMessage,
+          });
+          break;
+        case "auto_retry_end":
+          this.setState(tracked, sessionId, event.success ? "idle" : "thinking");
+          emitEvent(sessionId, Event.AUTO_RETRY, {
+            phase: "end",
+            attempt: event.attempt,
+            success: event.success,
+            ...(event.finalError ? { error: event.finalError } : {}),
+          });
+          break;
+        case "session_info_changed":
+          emitEvent(sessionId, Event.SESSION_META, {
+            ...(event.name !== undefined ? { name: event.name } : {}),
+          });
+          break;
+
+        default:
+          break;
+      }
+    });
+    return () => {
+      clearInterval(drainTimer);
+      unsubscribe();
+    };
+  }
+
+  disposeAll(): void {
+    for (const [id, tracked] of this.sessions) {
+        tracked.unsubscribe();
+      try {
+        tracked.session.dispose();
+      } catch {
+        // already disposed
+      }
+      this.sessions.delete(id);
+    }
+  }
+}
+
+/** re-export for the dispatcher */
+export { Event as Events, type Block };

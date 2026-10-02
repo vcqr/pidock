@@ -1,0 +1,18 @@
+{
+  "name": "pidock",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PiDock - desktop cockpit & cloud mirror for the pi coding agent",
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "host:smoke": "pnpm --filter @pidock/host smoke",
+    "protocol:gen": "cargo test -p pidock-protocol --quiet",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "bundle:host": "bun build ./host/src/main.ts --compile --outfile apps/desktop/src-tauri/binaries/pidock-host-x86_64-pc-windows-msvc.exe",
+    "bundle:app": "pnpm bundle:host && pnpm --filter @pidock/desktop tauri build"
+  }
+}

@@ -1,0 +1,186 @@
+/* PiDock web layout */
+.login-screen {
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--pd-bg);
+}
+.login-card {
+  width: 340px;
+  background: var(--pd-bg-panel);
+  border: 1px solid var(--pd-border);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--pd-text);
+  margin-bottom: 8px;
+}
+.logo {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  background: var(--pd-accent);
+  border-radius: 7px;
+  color: white;
+}
+.login-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--pd-text-2);
+}
+.login-card input {
+  background: var(--pd-bg-card);
+  color: var(--pd-text);
+  border: 1px solid var(--pd-border);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 13px;
+}
+.login-card input:focus {
+  outline: none;
+  border-color: var(--pd-accent);
+}
+button.primary {
+  background: var(--pd-accent);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+button.primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.login-error {
+  color: var(--pd-red-text);
+  font-size: 12.5px;
+}
+
+.layout {
+  display: flex;
+  height: 100vh;
+}
+.machines {
+  width: 210px;
+  min-width: 210px;
+  background: var(--pd-bg-panel);
+  border-right: 1px solid var(--pd-border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.side-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--pd-border);
+  color: var(--pd-text);
+}
+.brand-sm {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  background: var(--pd-accent);
+  border-radius: 6px;
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
+}
+.ghost {
+  margin-left: auto;
+  background: transparent;
+  color: var(--pd-text-3);
+  border: none;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ghost:hover { color: var(--pd-text); }
+.machine {
+  padding: 10px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--pd-border-soft);
+}
+.machine:hover { background: var(--pd-bg-hover); }
+.machine.active { background: var(--pd-bg-active); }
+.m-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--pd-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pd-text-4);
+  flex: none;
+}
+.dot.on { background: var(--pd-green); }
+.m-sub { color: var(--pd-text-3); font-size: 11px; margin-top: 3px; }
+.col {
+  width: 250px;
+  min-width: 250px;
+  display: flex;
+  flex-direction: column;
+  background: var(--pd-bg-panel);
+  border-right: 1px solid var(--pd-border);
+}
+.col > :deep(.sidebar) {
+  width: 100%;
+  min-width: 0;
+  border-right: none;
+  flex: 1;
+}
+.sessions-head { border-bottom: none; padding-bottom: 4px; }
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--pd-border);
+  background: var(--pd-bg-panel);
+}
+.transport { font-size: 12px; color: var(--pd-text-4); }
+.who {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--pd-text-4);
+  font-family: monospace;
+}
+.hint {
+  color: var(--pd-text-4);
+  font-size: 13px;
+  padding: 40px;
+  text-align: center;
+}
+.empty {
+  color: var(--pd-text-4);
+  font-size: 12px;
+  padding: 16px 12px;
+  line-height: 1.6;
+}

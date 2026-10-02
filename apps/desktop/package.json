@@ -1,0 +1,27 @@
+{
+  "name": "@pidock/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PiDock desktop app (Tauri 2)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@pidock/protocol": "workspace:*",
+    "@pidock/ui": "workspace:*",
+    "@tauri-apps/api": "^2.9.0",
+    "vue": "^3.5.13",
+    "naive-ui": "^2.41.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.0",
+    "vue-tsc": "^3.0.0"
+  }
+}
