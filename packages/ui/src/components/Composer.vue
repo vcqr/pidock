@@ -31,7 +31,7 @@ const emit = defineEmits<{
   setPermissionMode: [mode: string];
   setThinkingLevel: [level: string];
   setModel: [model: string];
-  openSettings: [];
+  openProviders: [];
 }>();
 
 const I = {
@@ -354,9 +354,9 @@ function onKeydown(e: KeyboardEvent): void {
             <Icon v-if="m === model" class="c-check" :name="I.check" :size="14" />
           </button>
           <div class="c-sep"></div>
-          <button class="c-item c-action" @click="modelOpen = false; emit('openSettings')">
+          <button class="c-item c-action" @click="modelOpen = false; emit('openProviders')">
             <Icon :name="I.gear" :size="14" />
-            <span class="c-item-name">打开模型设置…</span>
+            <span class="c-item-name">管理模型供应商…</span>
           </button>
         </div>
       </div>

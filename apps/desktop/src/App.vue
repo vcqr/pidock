@@ -168,6 +168,7 @@ onMounted(async () => {
           :new-task="newTaskMode"
           :model="store.sessions.find((s) => s.session_id === store?.activeId)?.model"
           @open-settings="(tab) => { settingsTab = (tab as any) ?? 'models'; showSettings = true; }"
+          @open-providers="() => { mainView = 'providers'; }"
         />
         <ProvidersView v-else-if="mainView === 'providers'" :bus="bus" />
         <ToolsView v-else :kind="mainView" :bus="bus" />

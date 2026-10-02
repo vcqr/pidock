@@ -19,7 +19,7 @@ const props = withDefaults(
   { disabled: false },
 );
 
-const emit = defineEmits<{ "open-settings": [tab?: string] }>();
+const emit = defineEmits<{ "open-settings": [tab?: string]; "open-providers": [] }>();
 
 const scroller = ref<HTMLElement | null>(null);
 const preset = ref("");
@@ -452,7 +452,7 @@ watch(
           @set-permission-mode="(m: string) => store.setPermissionMode(m)"
           @set-thinking-level="(l: string) => store.setThinkingLevel(l)"
           @set-model="(m: string) => store.setModel(m)"
-          @open-settings="emit('open-settings', 'models')"
+          @open-providers="emit('open-providers')"
         />
       </div>
     </template>
