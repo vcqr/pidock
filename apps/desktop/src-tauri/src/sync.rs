@@ -506,7 +506,7 @@ pub struct SyncConfigureBody {
 
 #[tauri::command]
 pub async fn sync_configure(
-    app: AppHandle,
+    _app: AppHandle,
     state: tauri::State<'_, SyncManager>,
     body: SyncConfigureBody,
 ) -> Result<Value, String> {
