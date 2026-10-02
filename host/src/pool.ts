@@ -477,7 +477,8 @@ export class SessionPool {
   /** 修改类工具执行前快照目标文件（每回合每路径只保留最早的版本） */
   private snapshotBeforeMutation(sessionId: string, cwd: string, toolName: string, input: unknown): void {
     if (toolName !== "edit" && toolName !== "write") return;
-    const rel = String((input ?? {}) as Record<string, unknown>["path"] ?? "");
+    const a = (input ?? {}) as Record<string, unknown>;
+    const rel = String(a.path ?? "");
     if (!rel) return;
     let map = this.fileSnapshots.get(sessionId);
     if (!map) {
