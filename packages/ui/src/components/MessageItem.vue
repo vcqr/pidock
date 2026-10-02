@@ -47,8 +47,8 @@ const entries = computed<Entry[]>(() => {
   if (it.kind !== "message") return [];
   const out: Entry[] = [];
   if (it.role === "assistant") {
-    // 思考只作为流式阶段的实时活动展示；一旦有正文（总结）就不再单独出现
-    if (it.streaming && it.thinking && !it.blocks) {
+    // 思考行始终展示（默认折叠，点击展开原文）；流式阶段带实时计时
+    if (it.thinking && !it.blocks) {
       out.push({
         kind: "thinking",
         text: it.thinking,
@@ -57,7 +57,7 @@ const entries = computed<Entry[]>(() => {
       });
     }
     for (const b of it.blocks ?? []) {
-      if (b.type === "thinking") continue;
+      if (b.type === "thinking") out.push({ kind: "thinking", text: b.thinking ?? "" });
       else if (b.type === "text") out.push({ kind: "text", text: b.text ?? "" });
       else if (b.type === "toolCall") {
         out.push({
