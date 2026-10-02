@@ -98,36 +98,98 @@ const lastUserIndex = computed(() => {
   }
   return -1;
 });
-/** 回合结束 → 活动流折叠为「已工作 · 耗时」一行；点击展开卡片，总结正文保持可见 */
-const turnCollapsed = ref(true);
-const finishedTurn = computed(
-  () =>
-    !busy.value &&
-    lastUserIndex.value >= 0 &&
-    !!props.store.turnStartedAt &&
-    !!props.store.turnEndedAt &&
-    props.store.items.length > lastUserIndex.value + 1,
-);
-const turnDuration = computed(() =>
-  props.store.turnStartedAt && props.store.turnEndedAt
-    ? formatSpan(props.store.turnEndedAt - props.store.turnStartedAt)
-    : "",
-);
-watch(finishedTurn, (done) => {
-  if (done) turnCollapsed.value = true;
-});
-/** 折叠时仍可见的总结正文（回合内最后一条带文本的助手消息） */
-const finalTextIndex = computed(() => {
-  if (!finishedTurn.value) return -1;
+/** 回合分组：每条用户消息开启一个回合，结束后折叠为「已工作 · 耗时」（重启后依然折叠） */
+interface TurnGroup {
+  key: string;
+  userIndex: number;
+  endIndex: number;
+  finished: boolean;
+  duration: string | null;
+  hasActivity: boolean;
+}
+const expandedTurns = ref(new Set<string>());
+const turnGroups = computed(() => {
   const items = props.store.items;
-  for (let i = items.length - 1; i > lastUserIndex.value; i--) {
-    const it = items[i];
-    if (it && it.kind === "message" && it.role === "assistant" && (it.text || (it.blocks ?? []).some((b) => b.type === "text"))) {
-      return i;
+  const userIdx: number[] = [];
+  items.forEach((it, i) => {
+    if (it.kind === "message" && it.role === "user") userIdx.push(i);
+  });
+  const groups: TurnGroup[] = [];
+  userIdx.forEach((u, gi) => {
+    const endIndex = gi + 1 < userIdx.length ? userIdx[gi + 1]! - 1 : items.length - 1;
+    const isLast = gi === userIdx.length - 1;
+    const finished = !isLast || !busy.value;
+    const uIt = items[u];
+    const lastIt = items[endIndex];
+    let duration: string | null = null;
+    if (isLast && props.store.turnStartedAt && props.store.turnEndedAt) {
+      duration = formatSpan(props.store.turnEndedAt - props.store.turnStartedAt);
+    } else if (uIt && uIt.kind === "message" && uIt.ts && lastIt && lastIt.kind === "message" && lastIt.ts) {
+      const ms = new Date(lastIt.ts).getTime() - new Date(uIt.ts).getTime();
+      if (ms > 0) duration = formatSpan(ms);
     }
+    groups.push({
+      key: uIt && uIt.kind === "message" ? uIt.key : `turn-${u}`,
+      userIndex: u,
+      endIndex,
+      finished,
+      duration,
+      hasActivity: endIndex > u,
+    });
+  });
+  return groups;
+});
+const groupByIndex = computed(() => {
+  const m = new Map<number, TurnGroup>();
+  for (const g of turnGroups.value) {
+    for (let i = g.userIndex; i <= g.endIndex; i++) m.set(i, g);
+  }
+  return m;
+});
+function groupAt(index: number): TurnGroup | undefined {
+  return groupByIndex.value.get(index);
+}
+function isTurnCollapsed(g: TurnGroup): boolean {
+  return g.finished && !expandedTurns.value.has(g.key);
+}
+function finalTextIndexOf(g: TurnGroup): number {
+  const items = props.store.items;
+  for (let i = g.endIndex; i > g.userIndex; i--) {
+    const it = items[i];
+    if (it && it.kind === "message" && it.role === "assistant" && (it.text || (it.blocks ?? []).some((b) => b.type === "text"))) return i;
   }
   return -1;
-});
+}
+function showHeader(index: number): boolean {
+  const g = groupAt(index);
+  return !!g && index === g.userIndex + 1 && g.finished && g.hasActivity;
+}
+function headerDuration(index: number): string {
+  return groupAt(index)?.duration ?? "";
+}
+function turnExpanded(index: number): boolean {
+  const g = groupAt(index);
+  return !!g && expandedTurns.value.has(g.key);
+}
+function toggleHeader(index: number): void {
+  const g = groupAt(index);
+  if (!g) return;
+  const next = new Set(expandedTurns.value);
+  next.has(g.key) ? next.delete(g.key) : next.add(g.key);
+  expandedTurns.value = next;
+}
+function showItem(index: number): boolean {
+  const g = groupAt(index);
+  if (!g) return true;
+  if (index <= g.userIndex) return true; // 用户气泡
+  if (!g.finished) return true; // 进行中的回合
+  if (!isTurnCollapsed(g)) return true; // 已展开的卡片
+  return index === finalTextIndexOf(g); // 折叠时只显示总结正文
+}
+function textOnlyFor(index: number): boolean {
+  const g = groupAt(index);
+  return !!g && isTurnCollapsed(g) && index === finalTextIndexOf(g);
+}
 // ---- 文件变更卡片（回合结束后） ----
 const fileChangesOpen = ref(true);
 const expandedFileDiffs = ref(new Set<string>());
@@ -184,11 +246,9 @@ watch(
   },
   { immediate: true },
 );
-watch(finishedTurn, (done) => {
-  if (done) void props.store.fetchFileChanges();
-});
 watch(busy, (b) => {
   if (b) props.store.fileChanges = [];
+  else void props.store.fetchFileChanges();
 });
 watch(
   () => props.store.activeId,
@@ -304,15 +364,11 @@ watch(
       <div ref="scroller" class="scroll">
         <div v-if="store.loadingHistory" class="hint">加载历史中…</div>
         <template v-for="(item, index) in store.items" :key="item.key">
-          <button
-            v-if="finishedTurn && index === lastUserIndex + 1"
-            class="turn-header"
-            @click="turnCollapsed = !turnCollapsed"
-          >
-            <span>已工作 · {{ turnDuration }}</span>
-            <Icon name="arrow-down-s-line" :size="13" :class="{ fold: turnCollapsed }" />
+          <button v-if="showHeader(index)" class="turn-header" @click="toggleHeader(index)">
+            <span>已工作<template v-if="headerDuration(index)"> · {{ headerDuration(index) }}</template></span>
+            <Icon name="arrow-down-s-line" :size="13" :class="{ fold: !turnExpanded(index) }" />
           </button>
-          <template v-if="index <= lastUserIndex || !finishedTurn || !turnCollapsed || index === finalTextIndex">
+          <template v-if="showItem(index)">
             <ToolCard
               v-if="item.kind === 'tool'"
               :tool-name="item.toolName"
@@ -328,7 +384,7 @@ watch(
               :dimmed="busy"
               :results="resultsMap"
               :args-map="argsMap"
-              :hide-thinking="finishedTurn && turnCollapsed && index === finalTextIndex"
+              :text-only="textOnlyFor(index)"
             />
           </template>
           <div v-if="index === lastUserIndex && busy" class="turn-divider">
@@ -342,7 +398,7 @@ watch(
         </div>
 
         <!-- 文件变更卡片 -->
-        <div v-if="finishedTurn && store.fileChanges.length" class="files-card">
+        <div v-if="store.fileChanges.length" class="files-card">
           <button class="files-head" @click="fileChangesOpen = !fileChangesOpen">
             <Icon name="arrow-down-s-line" :size="13" :class="{ fold: !fileChangesOpen }" />
             <span>{{ store.fileChanges.length }} 个文件已更改</span>

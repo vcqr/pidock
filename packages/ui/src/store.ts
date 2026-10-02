@@ -38,6 +38,8 @@ export interface UiMessageItem {
   /** 思考流开始时间（streaming 计时用），结束写回 thinkingMs */
   thinkingStartedAt?: number;
   thinkingMs?: number;
+  /** 消息时间戳（历史回放来自 session 条目），用于回合耗时统计 */
+  ts?: string;
 }
 
 export interface UiToolItem {
@@ -121,11 +123,13 @@ export function createAgentStore(bus: DataBus) {
     return Array.isArray(payload?.blocks) ? payload.blocks : [];
   }
 
-  function applyMessageComplete(p: any): void {
+  function applyMessageComplete(p: any, ts?: string): void {
+    const itemTs = ts ?? new Date().toISOString();
     const role = p?.role;
     if (role === "assistant") {
       if (streaming && p.message_id && streaming.key === p.message_id) {
         streaming.blocks = asBlocks(p);
+        streaming.ts = itemTs;
         streaming.streaming = false;
         streaming = null;
         return;
@@ -139,6 +143,7 @@ export function createAgentStore(bus: DataBus) {
         thinking: "",
         blocks: asBlocks(p),
         streaming: false,
+        ts: itemTs,
       });
       return;
     }
@@ -150,6 +155,7 @@ export function createAgentStore(bus: DataBus) {
       );
       if (pendingUser) {
         pendingUser.pending = false;
+        if (!pendingUser.ts) pendingUser.ts = itemTs;
         return;
       }
       pushItem(items.value, {
@@ -160,6 +166,7 @@ export function createAgentStore(bus: DataBus) {
         thinking: "",
         blocks: null,
         streaming: false,
+        ts: itemTs,
       });
       return;
     }
@@ -177,6 +184,7 @@ export function createAgentStore(bus: DataBus) {
         thinking: "",
         blocks: asBlocks(p),
         streaming: false,
+        ts: itemTs,
       });
     }
   }
@@ -322,8 +330,8 @@ export function createAgentStore(bus: DataBus) {
     else sessions.value.unshift(normalized);
   }
 
-  function applyPersisted(ev: { kind: string; payload: any }): void {
-    if (ev.kind === "message_complete") applyMessageComplete(ev.payload);
+  function applyPersisted(ev: { kind: string; payload: any; ts?: string }): void {
+    if (ev.kind === "message_complete") applyMessageComplete(ev.payload, ev.ts);
     else if (ev.kind === "session_meta" && ev.payload?.name !== undefined) {
       /* name shown from sessions list */
     }
@@ -375,6 +383,7 @@ export function createAgentStore(bus: DataBus) {
       blocks: null,
       streaming: false,
       pending: true,
+      ts: new Date().toISOString(),
     });
     try {
       await bus.request("agent.prompt", { session_id: activeId.value, text });

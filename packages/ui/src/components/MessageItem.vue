@@ -20,8 +20,8 @@ const props = withDefaults(
     results?: Record<string, { status: "done" | "error"; output: string }>;
     /** callId → 工具调用参数（来自 assistant 的 toolCall 块，补全 toolResult 行的展示） */
     argsMap?: Record<string, string>;
-    /** 折叠态的总结正文：不渲染思考行（内容仍可在「已工作」展开卡片里查看） */
-    hideThinking?: boolean;
+    /** 折叠态的总结正文：只渲染文本条目（思考/工具行留在「已工作」展开卡片里） */
+    textOnly?: boolean;
   }>(),
   { dimmed: false, results: undefined },
 );
@@ -50,7 +50,7 @@ const entries = computed<Entry[]>(() => {
   const out: Entry[] = [];
   if (it.role === "assistant") {
     // 思考行始终展示（默认折叠，点击展开原文）；流式阶段带实时计时
-    if (it.thinking && !it.blocks && !props.hideThinking) {
+    if (it.thinking && !it.blocks) {
       out.push({
         kind: "thinking",
         text: it.thinking,
@@ -59,7 +59,7 @@ const entries = computed<Entry[]>(() => {
       });
     }
     for (const b of it.blocks ?? []) {
-      if (b.type === "thinking" && !props.hideThinking) out.push({ kind: "thinking", text: b.thinking ?? "" });
+      if (b.type === "thinking") out.push({ kind: "thinking", text: b.thinking ?? "" });
       else if (b.type === "text") out.push({ kind: "text", text: b.text ?? "" });
       else if (b.type === "toolCall") {
         out.push({
@@ -89,6 +89,10 @@ const entries = computed<Entry[]>(() => {
   return out;
 });
 
+const visibleEntries = computed(() =>
+  props.textOnly ? entries.value.filter((e) => e.kind === "text") : entries.value,
+);
+
 const toolEntries = computed(
   () => entries.value.filter((e) => e.kind === "tool") as Extract<Entry, { kind: "tool" }>[],
 );
@@ -105,7 +109,7 @@ const toolEntries = computed(
 
   <!-- assistant: 活动流 -->
   <div v-else-if="item.role === 'assistant'" class="stream" :class="{ dimmed }">
-    <template v-for="(e, i) in entries" :key="i">
+    <template v-for="(e, i) in visibleEntries" :key="i">
       <ThinkingRow
         v-if="e.kind === 'thinking'"
         :text="e.text"
