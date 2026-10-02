@@ -46,7 +46,7 @@ export interface Envelope {
 
 export type Block =
   | { type: "text"; text: string }
-  | { type: "thinking"; text: string }
+  | { type: "thinking"; thinking: string }
   | {
       type: "toolCall";
       callId: string;
