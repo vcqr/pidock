@@ -350,6 +350,7 @@ watch(
           placeholder="描述你的任务，Enter 发送"
           :preset="preset"
           @send="sendFromHome"
+          @open-providers="emit('open-providers')"
         />
         <div class="chips">
           <button v-for="c in chips" :key="c.text" class="chip" @click="fillChip(c.text)">
