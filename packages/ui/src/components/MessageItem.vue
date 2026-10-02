@@ -153,11 +153,12 @@ const toolEntries = computed(
   min-width: 0;
 }
 .user-bubble {
-  background: var(--pd-accent);
-  color: #fff;
+  background: var(--pd-bg-hover);
+  border: 1px solid var(--pd-border);
+  color: var(--pd-text);
+  border-radius: 10px;
   white-space: pre-wrap;
   word-break: break-word;
-  border-bottom-right-radius: 4px;
 }
 .user-bubble.pending { opacity: 0.65; }
 .pending-mark { font-size: 11px; opacity: 0.75; margin-left: 6px; }
