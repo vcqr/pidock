@@ -20,11 +20,6 @@ async function refresh(): Promise<void> {
 }
 onMounted(() => {
   refresh();
-  // 输入卡片项目菜单里的「远程连接」：唤起云同步面板
-  window.addEventListener("pidock:open-sync", (() => {
-    open.value = true;
-    void refresh();
-  }) as EventListener);
   setInterval(refresh, 5000);
 });
 

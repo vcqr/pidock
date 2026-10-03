@@ -42,7 +42,6 @@ const I = {
   x: "close-line",
   check: "check-line",
   search: "search-line",
-  cloud: "cloud-line",
   chat: "chat-1-line",
   plus: "add-line",
   up: "arrow-up-line",
@@ -222,11 +221,6 @@ function addFolder(): void {
   newPath.value = "";
 }
 
-function openRemote(): void {
-  menuOpen.value = false;
-  window.dispatchEvent(new CustomEvent("pidock:open-sync"));
-}
-
 function onDocClick(e: MouseEvent): void {
   if (rootEl.value && !rootEl.value.contains(e.target as Node)) {
     menuOpen.value = false;
@@ -273,7 +267,7 @@ function onKeydown(e: KeyboardEvent): void {
       </template>
       <span class="c-chev" :class="{ open: menuOpen }"><Icon :name="I.chevD" :size="12" /></span>
 
-      <!-- 项目菜单：搜索 / 项目列表 / 打开文件夹 / 远程连接 / 不在项目中工作 -->
+      <!-- 项目菜单：搜索 / 项目列表 / 打开文件夹 / 不在项目中工作 -->
       <div v-if="menuOpen" class="c-menu" @click.stop>
         <div class="c-search">
           <Icon :name="I.search" :size="13" />
@@ -304,10 +298,6 @@ function onKeydown(e: KeyboardEvent): void {
         <button v-else class="c-item c-action" @click="onOpenFolder">
           <Icon :name="I.folderAdd" :size="14" />
           <span>打开文件夹</span>
-        </button>
-        <button class="c-item c-action" @click="openRemote">
-          <Icon :name="I.cloud" :size="14" />
-          <span>远程连接</span>
         </button>
         <button class="c-item c-action" :class="{ on: !selected }" @click="selectNone">
           <Icon :name="I.chat" :size="14" />
