@@ -401,7 +401,10 @@ export function createAgentStore(bus: DataBus) {
     await openSession(created.session_id);
   }
 
-  async function send(text: string): Promise<void> {
+  async function send(
+    text: string,
+    images?: Array<{ data: string; mime_type: string }>,
+  ): Promise<void> {
     if (!activeId.value || !text.trim()) return;
     if (!turnStartedAt.value || turnEndedAt.value) {
       turnStartedAt.value = Date.now();
@@ -419,7 +422,11 @@ export function createAgentStore(bus: DataBus) {
       ts: new Date().toISOString(),
     });
     try {
-      await bus.request("agent.prompt", { session_id: activeId.value, text });
+      await bus.request("agent.prompt", {
+        session_id: activeId.value,
+        text,
+        ...(images?.length ? { images } : {}),
+      });
       lastError.value = null;
     } catch (err) {
       // remove the optimistic bubble and surface the failure
@@ -502,6 +509,20 @@ export function createAgentStore(bus: DataBus) {
     }
   }
 
+  /** 技能列表（$ 选择技能用），仅返回启用的 */
+  async function listSkills(
+    cwd?: string,
+  ): Promise<Array<{ name: string; description: string }>> {
+    try {
+      const r = await bus.request("config.skills.list", cwd ? { cwd } : {});
+      return (r?.skills ?? [])
+        .filter((s: any) => s.enabled !== false)
+        .map((s: any) => ({ name: String(s.name ?? ""), description: String(s.description ?? "") }));
+    } catch {
+      return [];
+    }
+  }
+
   /** 回合结束后拉取各回合文件变更（按轮分组） */
   async function fetchFileChanges(): Promise<void> {
     if (!activeId.value) return;
@@ -565,6 +586,7 @@ export function createAgentStore(bus: DataBus) {
     abort,
     setPermissionMode,
     renameSession,
+    listSkills,
     listWorkspaceFiles,
     resolveApproval,
     setThinkingLevel,

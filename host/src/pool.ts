@@ -375,11 +375,20 @@ export class SessionPool {
 
   // ---------------------------------------------------------------- agent
 
-  prompt(params: { session_id: string; text: string }): { accepted: boolean } {
+  prompt(params: {
+    session_id: string;
+    text: string;
+    /** 图片附件（base64，不带 data: 前缀），随 prompt 一起发给模型 */
+    images?: Array<{ data: string; mime_type: string }>;
+  }): { accepted: boolean } {
     const tracked = this.require(params.session_id);
     this.autoTitle(params.session_id, params.text);
+    const images = (params.images ?? [])
+      .slice(0, 6)
+      .filter((img) => img?.data)
+      .map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mime_type || "image/png" }));
     tracked.session
-      .prompt(params.text)
+      .prompt(params.text, images.length ? { images } : undefined)
       .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: String(err) }))
       .finally(() => tracked.drain());
     return { accepted: true };

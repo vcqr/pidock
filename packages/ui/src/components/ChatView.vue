@@ -74,6 +74,10 @@ const activeSession = computed(() => props.store.sessions.find((s) => s.session_
 function mentionLoader(cwd: string): Promise<Array<{ path: string; name: string; dir: boolean }>> {
   return props.store.listWorkspaceFiles(cwd);
 }
+/** $ 技能列表加载器（会话内含项目级技能） */
+function skillsLoader(): Promise<Array<{ name: string; description: string }>> {
+  return props.store.listSkills(activeSession.value?.cwd);
+}
 
 // distinct project dirs for the composer folder selector
 const projects = computed(() => {
@@ -414,7 +418,11 @@ function fillChip(text: string): void {
   requestAnimationFrame(() => (preset.value = text));
 }
 
-async function sendFromHome(text: string, cwd?: string | null): Promise<void> {
+async function sendFromHome(
+  text: string,
+  cwd?: string | null,
+  images?: Array<{ data: string; mime_type: string }>,
+): Promise<void> {
   // cwd 为 null = 「不在项目中工作」（host 落到主目录）；
   // 未指定时用最近会话的目录兜底；首页选中的模型随新会话生效
   const last = props.store.sessions[0];
@@ -431,7 +439,7 @@ async function sendFromHome(text: string, cwd?: string | null): Promise<void> {
     homePermissionMode.value = null;
     homeThinkingLevel.value = null;
   }
-  await props.store.send(text);
+  await props.store.send(text, images);
 }
 
 function dismissError(): void {
@@ -488,6 +496,7 @@ watch(
           :thinking-level="composerThinkingLevel"
           :mention-cwd="store.homeDir ?? undefined"
           :mention-loader="mentionLoader"
+          :skills-loader="skillsLoader"
           centered
           :projects="projects"
           :preset-cwd="newTaskCwd"
@@ -612,8 +621,9 @@ watch(
           :thinking-level="composerThinkingLevel"
           :mention-cwd="activeSession?.cwd"
           :mention-loader="mentionLoader"
+          :skills-loader="skillsLoader"
           :models="modelOptions"
-          @send="(t: string) => store.send(t)"
+          @send="(t: string, _cwd: unknown, imgs?: Array<{ data: string; mime_type: string }>) => store.send(t, imgs)"
           @abort="store.abort()"
           @set-permission-mode="setPermissionMode"
           @set-thinking-level="setThinkingLevel"

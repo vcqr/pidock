@@ -28,11 +28,13 @@ const props = withDefaults(
     mentionCwd?: string;
     /** @ 提及的文件列表加载器（来自 store，走 host/中继） */
     mentionLoader?: (cwd: string) => Promise<Array<{ path: string; name: string; dir: boolean }>>;
+    /** 技能列表加载器（+ 菜单 $ 选择技能用，来自 store） */
+    skillsLoader?: () => Promise<Array<{ name: string; description: string }>>;
   }>(),
   { placeholder: "输入消息，Enter 发送，Shift+Enter 换行" },
 );
 const emit = defineEmits<{
-  send: [text: string, cwd?: string | null];
+  send: [text: string, cwd?: string | null, images?: Array<{ data: string; mime_type: string }>];
   abort: [];
   setPermissionMode: [mode: string];
   setThinkingLevel: [level: string];
@@ -57,6 +59,8 @@ const I = {
   shield: "shield-flash-line",
   gear: "settings-3-line",
   gauge: "dashboard-2-line",
+  img: "image-add-line",
+  magic: "magic-line",
 };
 
 const text = ref("");
@@ -71,9 +75,99 @@ const rootEl = ref<HTMLElement | null>(null);
 const folderPicker = inject(FOLDER_PICKER, null);
 
 /** 底栏下拉状态 */
+const plusOpen = ref(false);
 const permOpen = ref(false);
 const thinkOpen = ref(false);
 const modelOpen = ref(false);
+
+// ---- + 菜单：图片附件 / 文件提及 / 技能 ----
+interface PendingImage {
+  data: string; // base64，不带 data: 前缀
+  mime_type: string;
+  name: string;
+}
+const pendingImages = ref<PendingImage[]>([]);
+const fileInput = ref<HTMLInputElement | null>(null);
+const skills = ref<Array<{ name: string; description: string }>>([]);
+const skillsLoading = ref(false);
+const MAX_IMAGES = 6;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+function togglePlus(): void {
+  plusOpen.value = !plusOpen.value;
+  permOpen.value = false;
+  thinkOpen.value = false;
+  modelOpen.value = false;
+  mention.value = null; // + 菜单与提及弹层互斥
+  if (plusOpen.value && !skillsLoading.value && skills.value.length === 0 && props.skillsLoader) {
+    skillsLoading.value = true;
+    props
+      .skillsLoader()
+      .then((list) => (skills.value = list))
+      .catch(() => (skills.value = []))
+      .finally(() => (skillsLoading.value = false));
+  }
+}
+
+function pickImages(): void {
+  fileInput.value?.click();
+  plusOpen.value = false;
+}
+
+function onFilesPicked(e: Event): void {
+  const input = e.target as HTMLInputElement;
+  const slots = Math.max(0, MAX_IMAGES - pendingImages.value.length);
+  for (const f of [...(input.files ?? [])].slice(0, slots)) {
+    if (!f.type.startsWith("image/") || f.size > MAX_IMAGE_BYTES) continue;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result ?? "");
+      const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+      if (base64) {
+        pendingImages.value.push({ data: base64, mime_type: f.type || "image/png", name: f.name });
+      }
+    };
+    reader.readAsDataURL(f);
+  }
+  input.value = "";
+}
+
+function removeImage(i: number): void {
+  pendingImages.value.splice(i, 1);
+}
+
+/** 在光标处插入文本并移动光标 */
+function insertAtCaret(s: string): void {
+  const el = ta.value;
+  const caret = el ? (el.selectionStart ?? text.value.length) : text.value.length;
+  text.value = text.value.slice(0, caret) + s + text.value.slice(caret);
+  void nextTick(() => {
+    const t = ta.value;
+    if (t) {
+      t.focus();
+      const pos = caret + s.length;
+      t.setSelectionRange(pos, pos);
+    }
+  });
+}
+
+/** 插入 @ 并打开文件提及弹层 */
+function addFileMention(): void {
+  plusOpen.value = false;
+  if (!mentionBase.value) return;
+  const el = ta.value;
+  const caret = el ? (el.selectionStart ?? text.value.length) : text.value.length;
+  text.value = text.value.slice(0, caret) + "@" + text.value.slice(caret);
+  mention.value = { start: caret, query: "", active: 0 };
+  void ensureMentionFiles();
+  void nextTick(() => ta.value?.focus());
+}
+
+/** 选择技能：插入 pi 的技能命令（/skill:name args） */
+function pickSkill(name: string): void {
+  plusOpen.value = false;
+  insertAtCaret(`/skill:${name} `);
+}
 
 const PERMISSION_ITEMS = [
   { value: "plan", label: "计划模式", desc: "编辑前先出计划。", icon: I.bulb },
@@ -318,6 +412,7 @@ function onDocClick(e: MouseEvent): void {
     permOpen.value = false;
     thinkOpen.value = false;
     modelOpen.value = false;
+    plusOpen.value = false;
     modelQuery.value = "";
   }
 }
@@ -328,8 +423,10 @@ function submit(): void {
   const value = text.value.trim();
   if (!value || props.busy || props.disabled) return;
   const cwd = props.centered ? selected.value : undefined;
-  emit("send", value, cwd === null ? null : cwd || undefined);
+  const images = pendingImages.value.map((p) => ({ data: p.data, mime_type: p.mime_type }));
+  emit("send", value, cwd === null ? null : cwd || undefined, images.length ? images : undefined);
   text.value = "";
+  pendingImages.value = [];
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -446,17 +543,61 @@ function onKeydown(e: KeyboardEvent): void {
       </button>
     </div>
 
+    <!-- 图片附件缩略图 -->
+    <div v-if="pendingImages.length" class="imgs-row">
+      <div v-for="(p, i) in pendingImages" :key="i" class="img-chip" :title="p.name">
+        <img :src="'data:' + p.mime_type + ';base64,' + p.data" alt="" />
+        <button class="img-x" title="移除" @click="removeImage(i)">
+          <Icon :name="I.x" :size="10" />
+        </button>
+      </div>
+    </div>
     <div class="bar">
-      <button class="plus-btn" disabled title="附件 / 图片 · 开发中">
-        <Icon :name="I.plus" :size="16" />
-      </button>
+      <!-- + 菜单：图片 / 文件提及 / 技能 -->
+      <div class="dd plus-dd">
+        <button class="plus-btn" title="添加图片 / 文件 / 技能" @click="togglePlus">
+          <Icon :name="I.plus" :size="16" />
+        </button>
+        <div v-if="plusOpen" class="dd-menu up plus-menu" @click.stop>
+          <button class="plus-item" @click="pickImages">
+            <Icon :name="I.img" :size="15" />
+            <span>添加图片</span>
+            <span class="plus-hint">≤ 6 张</span>
+          </button>
+          <button class="plus-item" @click="addFileMention">
+            <Icon :name="I.folderAdd" :size="15" />
+            <span>添加文件</span>
+            <span class="plus-hint">@</span>
+          </button>
+          <div class="plus-sep"></div>
+          <div class="plus-title">
+            <span>技能</span>
+            <span class="plus-hint">$</span>
+          </div>
+          <div class="plus-skills">
+            <button
+              v-for="s in skills"
+              :key="s.name"
+              class="plus-item"
+              :title="s.description"
+              @click="pickSkill(s.name)"
+            >
+              <Icon :name="I.magic" :size="15" />
+              <span class="plus-name">{{ s.name }}</span>
+              <span class="plus-desc">{{ s.description }}</span>
+            </button>
+            <div v-if="!skills.length" class="plus-empty">{{ skillsLoading ? "加载中…" : "暂无技能" }}</div>
+          </div>
+        </div>
+        <input ref="fileInput" type="file" accept="image/*" multiple hidden @change="onFilesPicked" />
+      </div>
 
       <!-- 权限模式 -->
       <div class="dd">
         <button
           class="dd-btn dd-btn-boxed"
           :class="{ active: permissionMode != null && permissionMode !== 'full' }"
-          @click="permOpen = !permOpen; thinkOpen = false; modelOpen = false"
+          @click="permOpen = !permOpen; thinkOpen = false; modelOpen = false; mention = null"
         >
           <Icon class="mode-ico" :name="permIcon" :size="13" />
           <span>{{ permLabel }}</span>
@@ -523,7 +664,7 @@ function onKeydown(e: KeyboardEvent): void {
 
       <!-- 思考级别 -->
       <div class="dd">
-        <button class="dd-btn" @click="thinkOpen = !thinkOpen; permOpen = false; modelOpen = false">
+        <button class="dd-btn" @click="thinkOpen = !thinkOpen; permOpen = false; modelOpen = false; mention = null">
           <Icon :name="I.gauge" :size="13" />
           <span>{{ thinkLabel }}</span>
           <span class="c-chev" :class="{ open: thinkOpen }"><Icon :name="I.chevD" :size="11" /></span>
@@ -754,6 +895,75 @@ textarea:disabled { opacity: 0.45; }
 }
 .plus-btn:hover:not(:disabled) { background: var(--pd-bg-hover); color: var(--pd-text); }
 .plus-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* ---- + 菜单与附件缩略图 ---- */
+.plus-menu { min-width: 252px; }
+.plus-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: none;
+  border: none;
+  color: var(--pd-text-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.plus-item:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+.plus-item svg { color: var(--pd-text-3); flex: none; }
+.plus-hint { margin-left: auto; font-size: 11px; color: var(--pd-text-4); }
+.plus-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px 3px;
+  font-size: 11px;
+  color: var(--pd-text-4);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+.plus-skills { max-height: 220px; overflow-y: auto; }
+.plus-name { font-weight: 500; color: var(--pd-text); flex: none; }
+.plus-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--pd-text-4);
+}
+.plus-empty { padding: 10px; font-size: 12px; color: var(--pd-text-4); }
+.plus-sep { height: 1px; background: var(--pd-border-soft); margin: 4px; }
+.imgs-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.img-chip {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--pd-border);
+}
+.img-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.img-x {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
 
 /* ---- 底栏下拉 ---- */
 .dd { position: relative; }
