@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { NModal } from "naive-ui";
 import type { DataBus } from "../databus.js";
 import Icon from "./Icon.vue";
 
@@ -29,7 +30,7 @@ interface ProviderRow {
   api?: string;
   customModels: string[];
   /** 自定义模型的原始行（含能力标记），供表单编辑 */
-  customModelRows: Array<{ id: string; image: boolean; reasoning: boolean }>;
+  customModelRows: Array<ModelRow>;
   hasEntryKey: boolean;
 }
 
@@ -57,10 +58,76 @@ const formApiKey = ref("");
 const formModelsText = ref("");
 const formKeyVisible = ref(false);
 const formBusy = ref(false);
-/** 逐模型能力行（视觉/推理），由候选模型 ID 派生并随文本同步 */
-const formModelRows = ref<Array<{ id: string; image: boolean; reasoning: boolean }>>([]);
+/** 逐模型配置行：能力（视觉/推理）+ 上下文窗口 / 最大输出 / 推理参数映射 */
+interface ModelRow {
+  id: string;
+  image: boolean;
+  reasoning: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+  thinkingLevelMap?: unknown;
+}
+
+const formModelRows = ref<Array<ModelRow>>([]);
+
+// ---- 模型编辑弹窗 ----
+const editingModel = ref<{
+  index: number;
+  id: string;
+  contextWindow: string;
+  maxTokens: string;
+  image: boolean;
+  reasoning: boolean;
+  tlmText: string;
+} | null>(null);
+const advOpen = ref(false);
+/** 弹窗保存同步候选文本时，抑制行重建（否则改 id 会丢能力标记） */
+let suppressRowsSync = false;
+
+function openModelEditor(i: number): void {
+  const r = formModelRows.value[i];
+  if (!r) return;
+  editingModel.value = {
+    index: i,
+    id: r.id,
+    contextWindow: r.contextWindow != null ? String(r.contextWindow) : "",
+    maxTokens: r.maxTokens != null ? String(r.maxTokens) : "",
+    image: r.image,
+    reasoning: r.reasoning,
+    tlmText: r.thinkingLevelMap ? JSON.stringify(r.thinkingLevelMap, null, 2) : "",
+  };
+  advOpen.value = false;
+}
+
+function saveModelEditor(): void {
+  const e = editingModel.value;
+  if (!e) return;
+  let tlm: unknown;
+  if (e.tlmText.trim()) {
+    try {
+      tlm = JSON.parse(e.tlmText);
+    } catch {
+      flash("推理参数映射不是合法 JSON");
+      return;
+    }
+  }
+  const r = formModelRows.value[e.index];
+  if (r) {
+    r.id = e.id.trim() || r.id;
+    r.image = e.image;
+    r.reasoning = e.reasoning;
+    r.contextWindow = Number(e.contextWindow) || undefined;
+    r.maxTokens = Number(e.maxTokens) || undefined;
+    r.thinkingLevelMap = tlm;
+  }
+  suppressRowsSync = true;
+  formModelsText.value = formModelRows.value.map((x) => x.id).join(", ");
+  void nextTick(() => (suppressRowsSync = false));
+  editingModel.value = null;
+}
 
 watch(formModelsText, (v) => {
+  if (suppressRowsSync) return;
   const ids = v
     .split(/[,\n]/)
     .map((s) => s.trim())
@@ -81,6 +148,10 @@ function removeModelRow(i: number): void {
   formModelRows.value.splice(i, 1);
   const ids = formModelRows.value.map((r) => r.id);
   formModelsText.value = ids.join(", ");
+}
+
+function fmtInt(n: number): string {
+  return n.toLocaleString("en-US");
 }
 
 let flashTimer: ReturnType<typeof setTimeout> | undefined;
@@ -121,6 +192,8 @@ async function load(): Promise<void> {
               id: String(m.id ?? m),
               image: Array.isArray(m.input) && m.input.includes("image"),
               reasoning: Boolean(m.reasoning),
+              contextWindow: typeof m.contextWindow === "number" ? m.contextWindow : undefined,
+              maxTokens: typeof m.maxTokens === "number" ? m.maxTokens : undefined,
             }))
           : [],
         hasEntryKey: !!entry?.apiKey,
@@ -191,7 +264,7 @@ async function saveCustom(): Promise<void> {
   const id = formId.value.trim();
   if (!id || /\s/.test(id)) return flash("供应商名称必填且不能包含空格");
   if (!formBaseUrl.value.trim()) return flash("Base URL 必填");
-  const rows = formModelRows.value.length
+  const rows: ModelRow[] = formModelRows.value.length
     ? formModelRows.value
     : formModelsText.value
         .split(/[,\n]/)
@@ -210,6 +283,9 @@ async function saveCustom(): Promise<void> {
           id: r.id,
           input: r.image ? ["text", "image"] : ["text"],
           ...(r.reasoning ? { reasoning: true } : {}),
+          ...(r.contextWindow ? { contextWindow: Number(r.contextWindow) } : {}),
+          ...(r.maxTokens ? { maxTokens: Number(r.maxTokens) } : {}),
+          ...(r.thinkingLevelMap ? { thinkingLevelMap: r.thinkingLevelMap } : {}),
         })),
       },
     });
@@ -376,15 +452,12 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
           <div class="field">
             <label>模型能力 · {{ formModelRows.length }} 个模型（视觉 = 支持图片输入，推理 = 支持思维链）</label>
             <div class="model-rows">
-              <div v-for="(r, i) in formModelRows" :key="r.id" class="model-row">
-                <span class="mr-id" :title="r.id">{{ r.id }}</span>
-                <label class="mr-cap" title="支持图片输入">
-                  <input v-model="r.image" type="checkbox" />视觉
-                </label>
-                <label class="mr-cap" title="支持思维链推理">
-                  <input v-model="r.reasoning" type="checkbox" />推理
-                </label>
-                <button class="mr-del" title="移除该模型" @click="removeModelRow(i)">
+              <div v-for="(r, i) in formModelRows" :key="r.id" class="model-row" title="点击编辑模型配置" @click="openModelEditor(i)">
+                <span class="mr-id">{{ r.id }}</span>
+                <span v-if="r.image" class="mr-badge">视觉</span>
+                <span v-if="r.reasoning" class="mr-badge">推理</span>
+                <span v-if="r.contextWindow" class="mr-badge">{{ fmtInt(r.contextWindow) }}</span>
+                <button class="mr-del" title="移除该模型" @click.stop="removeModelRow(i)">
                   <Icon name="close-line" :size="12" />
                 </button>
               </div>
@@ -446,15 +519,12 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
           <div class="field">
             <label>模型能力 · {{ formModelRows.length }} 个模型（视觉 = 支持图片输入，推理 = 支持思维链）</label>
             <div class="model-rows">
-              <div v-for="(r, i) in formModelRows" :key="r.id" class="model-row">
-                <span class="mr-id" :title="r.id">{{ r.id }}</span>
-                <label class="mr-cap" title="支持图片输入">
-                  <input v-model="r.image" type="checkbox" />视觉
-                </label>
-                <label class="mr-cap" title="支持思维链推理">
-                  <input v-model="r.reasoning" type="checkbox" />推理
-                </label>
-                <button class="mr-del" title="移除该模型" @click="removeModelRow(i)">
+              <div v-for="(r, i) in formModelRows" :key="r.id" class="model-row" title="点击编辑模型配置" @click="openModelEditor(i)">
+                <span class="mr-id">{{ r.id }}</span>
+                <span v-if="r.image" class="mr-badge">视觉</span>
+                <span v-if="r.reasoning" class="mr-badge">推理</span>
+                <span v-if="r.contextWindow" class="mr-badge">{{ fmtInt(r.contextWindow) }}</span>
+                <button class="mr-del" title="移除该模型" @click.stop="removeModelRow(i)">
                   <Icon name="close-line" :size="12" />
                 </button>
               </div>
@@ -522,6 +592,61 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
       <div v-else class="state">← 从左侧选择一个供应商，或点击「添加供应商」</div>
 
       <div v-if="notice" class="notice">{{ notice }}</div>
+
+      <!-- 模型配置编辑弹窗 -->
+      <n-modal :show="!!editingModel" @update:show="(v: boolean) => { if (!v) editingModel = null; }">
+        <div v-if="editingModel" class="me-card">
+          <header class="me-head">
+            <b>编辑模型配置</b>
+            <button class="me-x" @click="editingModel = null">
+              <Icon name="close-line" :size="14" />
+            </button>
+          </header>
+          <div class="me-body">
+            <div class="field">
+              <label>模型 ID</label>
+              <input v-model="editingModel.id" />
+            </div>
+            <div class="field">
+              <label>上下文窗口</label>
+              <input v-model="editingModel.contextWindow" inputmode="numeric" placeholder="如 128000" />
+            </div>
+            <div class="field">
+              <label>最大输出 Token</label>
+              <input v-model="editingModel.maxTokens" inputmode="numeric" placeholder="如 16384" />
+            </div>
+            <button class="adv-toggle" @click="advOpen = !advOpen">
+              <Icon name="arrow-down-s-line" :size="13" :class="{ fold: !advOpen }" />
+              高级配置
+            </button>
+            <div v-if="advOpen" class="adv-body">
+              <div class="field">
+                <label>输入类型（文本默认开启）</label>
+                <div class="cap-chips">
+                  <span class="cap-chip locked"><Icon name="check-line" :size="12" />文本</span>
+                  <label class="cap-chip" :class="{ on: editingModel.image }">
+                    <input v-model="editingModel.image" type="checkbox" />图片
+                  </label>
+                </div>
+              </div>
+              <div class="field">
+                <label>推理（支持思维链）</label>
+                <label class="cap-chip" :class="{ on: editingModel.reasoning }">
+                  <input v-model="editingModel.reasoning" type="checkbox" />推理
+                </label>
+              </div>
+              <div class="field">
+                <label>推理参数映射（可选 JSON）</label>
+                <textarea v-model="editingModel.tlmText" rows="4" class="mono" placeholder='{"thinking": {"low": "low"}}'></textarea>
+              </div>
+            </div>
+          </div>
+          <footer class="me-foot">
+            <button class="me-cancel" @click="editingModel = null">取消</button>
+            <button class="primary" @click="saveModelEditor">保存</button>
+          </footer>
+        </div>
+      </n-modal>
     </section>
   </div>
 </template>
@@ -894,4 +1019,84 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   border-radius: 8px;
   padding: 8px 12px;
 }
+
+/* ---- 模型能力徽标与编辑弹窗 ---- */
+.mr-badge {
+  flex: none;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: var(--pd-bg-hover);
+  color: var(--pd-text-3);
+}
+.model-row { cursor: pointer; }
+.me-card {
+  width: 470px;
+  max-width: 92vw;
+  max-height: 86vh;
+  overflow-y: auto;
+  background: var(--pd-bg-raised);
+  border: 1px solid var(--pd-border);
+  border-radius: 14px;
+  box-shadow: var(--pd-shadow);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+}
+.me-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.me-head b { font-size: 14.5px; color: var(--pd-text); }
+.me-x {
+  background: none;
+  border: none;
+  color: var(--pd-text-3);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+}
+.me-x:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+.adv-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--pd-text-2);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 2px;
+}
+.adv-toggle svg { transition: transform 0.12s; }
+.adv-toggle svg.fold { transform: rotate(-90deg); }
+.adv-body { display: flex; flex-direction: column; gap: 8px; padding-left: 2px; }
+.cap-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.cap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 99px;
+  border: 1px solid var(--pd-border);
+  background: var(--pd-bg);
+  color: var(--pd-text-3);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.cap-chip.on { border-color: var(--pd-accent); color: var(--pd-accent-text); background: var(--pd-accent-soft); }
+.cap-chip input { accent-color: var(--pd-accent); margin: 0; }
+.cap-chip.locked { color: var(--pd-text-4); cursor: default; }
+.mono { font-family: Consolas, monospace; font-size: 12px; }
+.me-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.me-cancel {
+  background: none;
+  border: none;
+  color: var(--pd-text-2);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 7px 12px;
+  border-radius: 8px;
+}
+.me-cancel:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 </style>
