@@ -51,38 +51,41 @@ function dirName(p: string): string {
   return segs.slice(-2).join("/") + "/";
 }
 
-const reviewTheme = EditorView.theme(
-  {
-    "&": {
-      height: "100%",
-      fontSize: "12.5px",
-      backgroundColor: "var(--pd-bg)",
-      color: "var(--pd-text-2)",
+/** 主题随 themeMode 实时构建（旧实现模块加载时一次性求值，深→浅切换后面板残留深色样式） */
+function makeReviewTheme() {
+  return EditorView.theme(
+    {
+      "&": {
+        height: "100%",
+        fontSize: "12.5px",
+        backgroundColor: "var(--pd-bg)",
+        color: "var(--pd-text-2)",
+      },
+      ".cm-scroller": {
+        fontFamily: "Consolas, 'Courier New', monospace",
+        lineHeight: "1.7",
+      },
+      ".cm-content": { padding: "10px 0 40px" },
+      ".cm-gutters": {
+        backgroundColor: "var(--pd-bg)",
+        color: "var(--pd-text-4)",
+        border: "none",
+        borderRight: "1px solid var(--pd-border-soft)",
+      },
+      ".cm-activeLine": { backgroundColor: "transparent" },
+      ".cm-activeLineGutter": { backgroundColor: "transparent" },
+      "&.cm-focused": { outline: "none" },
+      ".cm-changedLine": { backgroundColor: "var(--pd-diff-add)" },
+      ".cm-changedText": { color: "var(--pd-diff-add-text)" },
+      ".cm-deletedChunk": {
+        backgroundColor: "var(--pd-diff-del)",
+        color: "var(--pd-diff-del-text)",
+      },
+      ".cm-deletedChunk .cm-deletedText": { color: "var(--pd-diff-del-text)" },
     },
-    ".cm-scroller": {
-      fontFamily: "Consolas, 'Courier New', monospace",
-      lineHeight: "1.7",
-    },
-    ".cm-content": { padding: "10px 0 40px" },
-    ".cm-gutters": {
-      backgroundColor: "var(--pd-bg)",
-      color: "var(--pd-text-4)",
-      border: "none",
-      borderRight: "1px solid var(--pd-border-soft)",
-    },
-    ".cm-activeLine": { backgroundColor: "transparent" },
-    ".cm-activeLineGutter": { backgroundColor: "transparent" },
-    "&.cm-focused": { outline: "none" },
-    ".cm-changedLine": { backgroundColor: "var(--pd-diff-add)" },
-    ".cm-changedText": { color: "var(--pd-diff-add-text)" },
-    ".cm-deletedChunk": {
-      backgroundColor: "var(--pd-diff-del)",
-      color: "var(--pd-diff-del-text)",
-    },
-    ".cm-deletedChunk .cm-deletedText": { color: "var(--pd-diff-del-text)" },
-  },
-  { dark: themeMode.value === "dark" },
-);
+    { dark: themeMode.value === "dark" },
+  );
+}
 
 async function loadLanguage(filename: string) {
   const desc = LanguageDescription.matchFilename(languages, filename);
@@ -94,11 +97,11 @@ async function loadLanguage(filename: string) {
   }
 }
 
-/** 按「路径+内容长度」签名重建编辑器；标签切换/内容更新时才重建 */
+/** 按「路径+内容长度+主题」签名重建编辑器；标签切换/内容更新/主题切换时才重建 */
 async function buildEditor(): Promise<void> {
   const t = activeTab.value;
   if (!t || !host.value) return;
-  const sig = `${t.path}#${t.oldText.length}#${t.newText.length}`;
+  const sig = `${t.path}#${t.oldText.length}#${t.newText.length}#${themeMode.value}`;
   if (sig === builtSig) return;
   builtSig = sig;
   view?.destroy();
@@ -115,7 +118,7 @@ async function buildEditor(): Promise<void> {
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         EditorState.readOnly.of(true),
         EditorView.editable.of(false),
-        reviewTheme,
+        makeReviewTheme(),
         unifiedMergeView({
           original: t.oldText,
           highlightChanges: true,
@@ -136,6 +139,7 @@ watch(
   () => [props.active, props.tabs.map((t) => `${t.path}:${t.oldText.length}:${t.newText.length}`).join("|")],
   () => void buildEditor(),
 );
+watch(themeMode, () => void buildEditor());
 onMounted(() => void buildEditor());
 onBeforeUnmount(() => {
   view?.destroy();
