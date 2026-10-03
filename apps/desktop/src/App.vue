@@ -32,11 +32,14 @@ const settingsTab = ref<"models" | "extensions" | "skills" | "mcp">("models");
 const mainView = ref<"chat" | "plugins" | "skills" | "providers" | "mcp">("chat");
 /** 新建任务模式：右侧显示默认对话页，发送首条消息后自动创建会话并退出该模式 */
 const newTaskMode = ref(false);
+/** 新建任务预选的项目目录（侧栏项目分组点击）；seq 自增让重复点击同一目录也能重新应用选中 */
+const newTaskCwd = ref<{ cwd: string; seq: number } | null>(null);
 const bus = createTauriBus();
 
-function startNewTask(): void {
+function startNewTask(cwd?: string): void {
   mainView.value = "chat";
   newTaskMode.value = true;
+  newTaskCwd.value = cwd ? { cwd, seq: (newTaskCwd.value?.seq ?? 0) + 1 } : null;
 }
 
 // ---- 左栏（会话侧栏）拖拽调宽（NSplit），宽度记忆在 localStorage ----
@@ -167,7 +170,8 @@ onMounted(async () => {
         :active-tool="mainView === 'chat' ? undefined : mainView"
         :width="sidebarWidth ?? undefined"
         @select="(id) => { mainView = 'chat'; store?.openSession(id); }"
-        @new-task="startNewTask"
+        @new-task="() => startNewTask()"
+        @open-project="(cwd) => startNewTask(cwd)"
         @open-tools="(t) => (mainView = t)"
         @open-settings="(tab) => { settingsTab = (tab as any) ?? 'models'; showSettings = true; }"
       >
@@ -203,6 +207,7 @@ onMounted(async () => {
           v-if="mainView === 'chat'"
           :store="store"
           :new-task="newTaskMode"
+          :new-task-cwd="newTaskCwd"
           :model="store.sessions.find((s) => s.session_id === store?.activeId)?.model"
           @open-settings="(tab) => { settingsTab = (tab as any) ?? 'models'; showSettings = true; }"
           @open-providers="() => { mainView = 'providers'; }"

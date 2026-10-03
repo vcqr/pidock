@@ -17,6 +17,8 @@ const props = withDefaults(
     model?: string;
     /** 新建任务模式：强制显示默认对话页，发送首条消息时自动创建会话 */
     newTask?: boolean;
+    /** 新建任务预选的项目目录（来自侧栏项目分组点击），透传给首页输入卡 */
+    newTaskCwd?: { cwd: string; seq: number } | null;
   }>(),
   { disabled: false },
 );
@@ -440,6 +442,7 @@ watch(
           :thinking-level="composerThinkingLevel"
           centered
           :projects="projects"
+          :preset-cwd="newTaskCwd"
           placeholder="描述你的任务，Enter 发送"
           :preset="preset"
           @send="sendFromHome"

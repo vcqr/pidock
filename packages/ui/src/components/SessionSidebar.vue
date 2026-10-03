@@ -19,6 +19,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [sessionId: string];
   "new-task": [];
+  /** 点击项目分组目录行：右侧打开默认输入页并预选该目录 */
+  "open-project": [cwd: string];
   "open-settings": [tab?: string];
   "open-tools": [tool: "plugins" | "skills" | "providers" | "mcp"];
 }>();
@@ -169,8 +171,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       <template v-if="grouped">
         <div class="sb-title">项目</div>
         <template v-for="g in groups" :key="g.cwd + g.project">
-          <div class="folder-row" :title="g.cwd" @click="toggleGroup(g.project)">
-            <span class="chev" :class="{ fold: collapsed.has(g.project) }">
+          <div class="folder-row" :title="g.cwd" @click="emit('open-project', g.cwd)">
+            <span
+              class="chev"
+              :class="{ fold: collapsed.has(g.project) }"
+              title="展开 / 折叠"
+              @click.stop="toggleGroup(g.project)"
+            >
               <Icon name="arrow-down-s-line" :size="12" />
             </span>
             <Icon name="folder-line" :size="15" />

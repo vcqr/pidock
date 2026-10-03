@@ -15,6 +15,8 @@ const props = withDefaults(
     preset?: string;
     /** 可选的项目目录（首页发送时用于新建会话） */
     projects?: string[];
+    /** 预选的项目目录（如从侧栏项目分组进入）；cwd 每次携带新 seq 以支持重复点击重新应用 */
+    presetCwd?: { cwd: string; seq: number } | null;
     /** 权限模式（完全访问/自动编辑/变更前确认/计划模式） */
     permissionMode?: string;
     /** 思考级别（off/minimal/low/medium/high） */
@@ -162,6 +164,14 @@ watch(
   (v) => {
     if (v) text.value = v;
   },
+);
+// 外部预选项目目录（immediate：进入首页重新挂载时也要应用）
+watch(
+  () => props.presetCwd,
+  (v) => {
+    if (v?.cwd) selected.value = v.cwd;
+  },
+  { immediate: true },
 );
 
 function pick(p: string): void {
