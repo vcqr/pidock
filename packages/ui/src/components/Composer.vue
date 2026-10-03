@@ -610,13 +610,14 @@ textarea:disabled { opacity: 0.45; }
   background: var(--pd-bg-hover);
   border: 1px solid var(--pd-border-soft);
 }
-/* 选中的非默认权限模式：点亮为主题色 */
+/* 选中的非默认权限模式：图标与文字用主题色，不加底色填充 */
 .dd-btn-boxed.active {
-  background: var(--pd-accent-soft);
-  border-color: var(--pd-accent);
-  color: var(--pd-accent-text);
+  background: none;
+  border-color: transparent;
+  color: var(--pd-accent);
 }
 .dd-btn-boxed.active .mode-ico { color: var(--pd-accent); }
+.dd-btn-boxed.active:hover { background: var(--pd-bg-hover); }
 .dd-btn .c-chev { color: var(--pd-text-4); }
 .dd-btn > span:not(.ring):not(.c-chev) {
   overflow: hidden;
