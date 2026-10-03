@@ -230,6 +230,7 @@ const sessionsEmpty = computed(() => {
         :home-dir="store.homeDir"
         :show-settings-btn="false"
         @select="(id) => store?.openSession(id)"
+        @rename="(id, name) => store?.renameSession(id, name)"
       />
     </div>
 

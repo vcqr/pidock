@@ -426,6 +426,18 @@ export class SessionPool {
     return { ok: true };
   }
 
+  /** 重命名会话（写入注册表 name 字段，供侧栏展示；空名清除自定义名） */
+  renameSession(params: { session_id: string; name: string }): { ok: true; name: string } {
+    const entry = this.readRegistry().find((e) => e.session_id === params.session_id);
+    if (!entry) throw new RpcError("session_not_found", `unknown session "${params.session_id}"`);
+    const name = params.name.trim();
+    const updated: RegistryEntry = { ...entry };
+    if (name) updated.name = name;
+    else delete updated.name;
+    this.writeRegistryEntry(updated);
+    return { ok: true, name };
+  }
+
   resolveApproval(params: { approval_id: string; approved: boolean }): { ok: boolean } {
     const pending = this.pendingApprovals.get(params.approval_id);
     if (!pending) return { ok: false };

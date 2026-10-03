@@ -37,6 +37,33 @@ if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-O
     .map_err(|e| e.to_string())?
 }
 
+/// 在系统文件管理器中打开目录（Windows: explorer，macOS: Finder，Linux: xdg-open）。
+#[tauri::command]
+fn reveal_path(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("failed to open explorer: {e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("failed to open finder: {e}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("failed to open file manager: {e}"))?;
+    }
+    Ok(())
+}
+
 pub fn run() {
     let supervisor = Supervisor::default();
     // host events fan out to the sync-agent through this channel
@@ -52,7 +79,8 @@ pub fn run() {
             sync::sync_configure,
             sync::sync_status,
             sync::sync_disable,
-            pick_folder
+            pick_folder,
+            reveal_path
         ])
         .setup(move |app| {
             sync::spawn(app.handle().clone(), event_rx, sync_rx);

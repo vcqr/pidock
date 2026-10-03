@@ -12,6 +12,7 @@ import {
   ToolsView,
   ATTACHMENT_LOADER,
   FOLDER_PICKER,
+  REVEAL_PATH,
   createAgentStore,
   initTheme,
   themeMode,
@@ -70,6 +71,15 @@ provide(FOLDER_PICKER, async () => {
     return await invoke<string | null>("pick_folder");
   } catch {
     return null;
+  }
+});
+
+// 在系统文件管理器中打开目录（会话右键菜单）
+provide(REVEAL_PATH, async (path: string) => {
+  try {
+    await invoke("reveal_path", { path });
+  } catch {
+    // 打开失败时静默（如路径已不存在）
   }
 });
 
@@ -168,11 +178,13 @@ onMounted(async () => {
         :active-id="store.activeId"
         :home-dir="store.homeDir"
         :show-tool-nav="true"
+        :show-settings-btn="true"
         :active-tool="mainView === 'chat' ? undefined : mainView"
         :width="sidebarWidth ?? undefined"
         @select="(id) => { mainView = 'chat'; store?.openSession(id); }"
         @new-task="() => startNewTask()"
         @open-project="(cwd) => startNewTask(cwd)"
+        @rename="(id, name) => store?.renameSession(id, name)"
         @open-tools="(t) => (mainView = t)"
         @open-settings="(tab) => { settingsTab = (tab as any) ?? 'models'; showSettings = true; }"
       >

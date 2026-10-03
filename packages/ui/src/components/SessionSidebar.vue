@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { SessionSummaryUi } from "../store.js";
 import { basename, relTime } from "../utils/time.js";
+import { REVEAL_PATH } from "../databus.js";
 import Icon from "./Icon.vue";
 
 const props = defineProps<{
@@ -23,6 +24,8 @@ const emit = defineEmits<{
   "new-task": [];
   /** 点击项目分组目录行：右侧打开默认输入页并预选该目录 */
   "open-project": [cwd: string];
+  /** 重命名会话（host 写注册表 name） */
+  rename: [sessionId: string, name: string];
   "open-settings": [tab?: string];
   "open-tools": [tool: "plugins" | "skills" | "providers" | "mcp"];
 }>();
@@ -36,18 +39,109 @@ const collapsed = ref(new Set<string>());
 const expanded = ref(new Set<string>());
 const PREVIEW = 5;
 
+// ---- 会话右键菜单 ----
+const revealPath = inject(REVEAL_PATH, null);
+const ctxMenu = ref<{ x: number; y: number; s: SessionSummaryUi } | null>(null);
+function openCtxMenu(e: MouseEvent, s: SessionSummaryUi): void {
+  // 菜单尺寸约 224×330，贴边时向内收
+  ctxMenu.value = {
+    x: Math.min(e.clientX, window.innerWidth - 232),
+    y: Math.min(e.clientY, window.innerHeight - 338),
+    s,
+  };
+}
+function closeCtxMenu(): void {
+  ctxMenu.value = null;
+}
+
+// ---- 置顶（UI 本地偏好，localStorage 持久化） ----
+const PIN_KEY = "pidock.pinnedSessions";
+const pinned = ref<Set<string>>(readPinned());
+function readPinned(): Set<string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PIN_KEY) ?? "[]");
+    return new Set(Array.isArray(raw) ? raw.filter((x) => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+function isPinned(id: string): boolean {
+  return pinned.value.has(id);
+}
+function togglePin(id: string): void {
+  const next = new Set(pinned.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  pinned.value = next;
+  try {
+    localStorage.setItem(PIN_KEY, JSON.stringify([...next]));
+  } catch {
+    // localStorage 不可用时仅本次会话内生效
+  }
+  closeCtxMenu();
+}
+/** 置顶会话排在其所在列表的最前（保持组内时间序） */
+function pinSort(list: SessionSummaryUi[]): SessionSummaryUi[] {
+  return [
+    ...list.filter((s) => pinned.value.has(s.session_id)),
+    ...list.filter((s) => !pinned.value.has(s.session_id)),
+  ];
+}
+
+// ---- 行内重命名 ----
+const renaming = ref<string | null>(null);
+const renameValue = ref("");
+function startRename(s: SessionSummaryUi): void {
+  renameValue.value = s.name ?? "";
+  renaming.value = s.session_id;
+  closeCtxMenu();
+  requestAnimationFrame(() => {
+    const el = document.querySelector<HTMLInputElement>("input.rename-input");
+    el?.focus();
+    el?.select();
+  });
+}
+function commitRename(s: SessionSummaryUi): void {
+  if (renaming.value !== s.session_id) return;
+  renaming.value = null;
+  const name = renameValue.value.trim();
+  if (name && name !== (s.name ?? "")) emit("rename", s.session_id, name);
+}
+function cancelRename(): void {
+  renaming.value = null;
+}
+
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // WebView 剪贴板不可用时退回 execCommand
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+  closeCtxMenu();
+}
+
 
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase();
   const list = [...props.sessions].sort(
     (a, b) => ((b.updated_at ?? b.created_at) > (a.updated_at ?? a.created_at) ? 1 : -1),
   );
-  if (!q) return list;
-  return list.filter(
-    (s) =>
-      (s.name ?? "").toLowerCase().includes(q) ||
-      s.cwd.toLowerCase().includes(q) ||
-      (s.model ?? "").toLowerCase().includes(q),
+  if (!q) return pinSort(list);
+  return pinSort(
+    list.filter(
+      (s) =>
+        (s.name ?? "").toLowerCase().includes(q) ||
+        s.cwd.toLowerCase().includes(q) ||
+        (s.model ?? "").toLowerCase().includes(q),
+    ),
   );
 });
 
@@ -121,6 +215,13 @@ function openSearch(): void {
 }
 
 function onKey(e: KeyboardEvent): void {
+  if (e.key === "Escape") {
+    if (ctxMenu.value) {
+      e.preventDefault();
+      closeCtxMenu();
+    }
+    return;
+  }
   if (!(e.ctrlKey || e.metaKey)) return;
   const k = e.key.toLowerCase();
   if (k === "n") {
@@ -132,8 +233,18 @@ function onKey(e: KeyboardEvent): void {
   }
 }
 
-onMounted(() => window.addEventListener("keydown", onKey));
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+function onDocClick(): void {
+  closeCtxMenu();
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", onKey);
+  document.addEventListener("click", onDocClick);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKey);
+  document.removeEventListener("click", onDocClick);
+});
 </script>
 
 <template>
@@ -207,18 +318,34 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
                 <span class="g-count">{{ g.sessions.length }}</span>
               </div>
               <template v-if="!collapsed.has(g.project)">
-                <div
-                  v-for="s in visibleIn(g)"
-                  :key="s.session_id"
-                  class="task-row"
-                  :class="{ active: s.session_id === activeId }"
-                  :title="rowTitle(s)"
-                  @click="emit('select', s.session_id)"
-                >
-                  <span class="dot" :class="dotClass(s)"></span>
-                  <span class="txt">{{ s.name || basename(s.cwd) }}</span>
-                  <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
-                </div>
+              <div
+                v-for="s in visibleIn(g)"
+                :key="s.session_id"
+                class="task-row"
+                :class="{ active: s.session_id === activeId }"
+                :title="rowTitle(s)"
+                @click="emit('select', s.session_id)"
+                @contextmenu.prevent="openCtxMenu($event, s)"
+              >
+                <span class="dot" :class="dotClass(s)"></span>
+                <input
+                  v-if="renaming === s.session_id"
+                  v-model="renameValue"
+                  class="rename-input"
+                  @click.stop
+                  @keydown.enter.prevent="commitRename(s)"
+                  @keydown.esc.prevent="cancelRename"
+                  @blur="commitRename(s)"
+                />
+                <span v-else class="txt">{{ s.name || basename(s.cwd) }}</span>
+                <Icon
+                  v-if="isPinned(s.session_id) && renaming !== s.session_id"
+                  class="pin-badge"
+                  name="pushpin-2-fill"
+                  :size="12"
+                />
+                <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
+              </div>
                 <div
                   v-if="g.sessions.length > PREVIEW"
                   class="show-more"
@@ -242,9 +369,25 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
               :class="{ active: s.session_id === activeId }"
               :title="rowTitle(s)"
               @click="emit('select', s.session_id)"
+              @contextmenu.prevent="openCtxMenu($event, s)"
             >
               <span class="dot" :class="dotClass(s)"></span>
-              <span class="txt">{{ s.name || basename(s.cwd) }}</span>
+              <input
+                v-if="renaming === s.session_id"
+                v-model="renameValue"
+                class="rename-input"
+                @click.stop
+                @keydown.enter.prevent="commitRename(s)"
+                @keydown.esc.prevent="cancelRename"
+                @blur="commitRename(s)"
+              />
+              <span v-else class="txt">{{ s.name || basename(s.cwd) }}</span>
+              <Icon
+                v-if="isPinned(s.session_id) && renaming !== s.session_id"
+                class="pin-badge"
+                name="pushpin-2-fill"
+                :size="12"
+              />
               <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
             </div>
           </template>
@@ -264,14 +407,57 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           :class="{ active: s.session_id === activeId }"
           :title="rowTitle(s)"
           @click="emit('select', s.session_id)"
+          @contextmenu.prevent="openCtxMenu($event, s)"
         >
           <span class="dot" :class="dotClass(s)"></span>
-          <span class="txt">{{ s.name || basename(s.cwd) }}</span>
+          <input
+            v-if="renaming === s.session_id"
+            v-model="renameValue"
+            class="rename-input"
+            @click.stop
+            @keydown.enter.prevent="commitRename(s)"
+            @keydown.esc.prevent="cancelRename"
+            @blur="commitRename(s)"
+          />
+          <span v-else class="txt">{{ s.name || basename(s.cwd) }}</span>
+          <Icon
+            v-if="isPinned(s.session_id) && renaming !== s.session_id"
+            class="pin-badge"
+            name="pushpin-2-fill"
+            :size="12"
+          />
           <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
         </div>
         <div v-if="!filtered.length" class="empty">
           {{ search ? "没有匹配的会话" : "暂无会话，点上方「新建任务」" }}
         </div>
+      </template>
+    </div>
+
+    <!-- 会话右键菜单 -->
+    <div
+      v-if="ctxMenu"
+      class="ctx-menu"
+      :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+      @click.stop
+      @contextmenu.prevent
+    >
+      <button class="ctx-item" @click="togglePin(ctxMenu!.s.session_id)">
+        {{ isPinned(ctxMenu!.s.session_id) ? "取消置顶" : "置顶任务" }}
+      </button>
+      <button class="ctx-item" @click="startRename(ctxMenu!.s)">重命名任务</button>
+      <div class="ctx-sep"></div>
+      <button
+        v-if="revealPath && ctxMenu!.s.cwd"
+        class="ctx-item"
+        @click="revealPath(ctxMenu!.s.cwd); closeCtxMenu()"
+      >在资源管理器中打开</button>
+      <button v-if="ctxMenu!.s.cwd" class="ctx-item" @click="copyText(ctxMenu!.s.cwd)">复制项目路径</button>
+      <button v-if="ctxMenu!.s.file" class="ctx-item" @click="copyText(ctxMenu!.s.file)">复制会话文件路径</button>
+      <button class="ctx-item" @click="copyText(ctxMenu!.s.session_id)">复制会话 ID</button>
+      <template v-if="showSettingsBtn !== false">
+        <div class="ctx-sep"></div>
+        <button class="ctx-item" @click="emit('open-settings'); closeCtxMenu()">前往配置</button>
       </template>
     </div>
 
@@ -493,6 +679,46 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   flex: none;
   background: var(--pd-text-4);
 }
+.pin-badge { color: var(--pd-accent); flex: none; }
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-accent);
+  border-radius: 5px;
+  color: var(--pd-text);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 1px 6px;
+  outline: none;
+}
+
+/* ---- 会话右键菜单 ---- */
+.ctx-menu {
+  position: fixed;
+  min-width: 176px;
+  background: var(--pd-bg-raised);
+  border: 1px solid var(--pd-border);
+  border-radius: 10px;
+  padding: 5px;
+  box-shadow: var(--pd-shadow);
+  z-index: 100;
+}
+.ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  padding: 7px 10px;
+  color: var(--pd-text-2);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ctx-item:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+.ctx-sep { height: 1px; background: var(--pd-border-soft); margin: 4px 6px; }
 .dot.busy { background: var(--pd-yellow); animation: pulse 1.6s ease-in-out infinite; }
 .dot.err { background: var(--pd-red); }
 .dot.on { background: var(--pd-green); }

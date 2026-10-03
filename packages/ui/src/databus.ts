@@ -27,6 +27,8 @@ import type { InjectionKey } from "vue";
 export const ATTACHMENT_LOADER: InjectionKey<(id: string) => Promise<string>> = Symbol("pidock.attachmentLoader");
 /** optional provide/inject handle for the native folder picker (desktop only); resolves null on cancel */
 export const FOLDER_PICKER: InjectionKey<() => Promise<string | null>> = Symbol("pidock.folderPicker");
+/** optional provide/inject handle for revealing a path in the OS file manager (desktop only) */
+export const REVEAL_PATH: InjectionKey<(path: string) => Promise<void>> = Symbol("pidock.revealPath");
 
 export interface ReplayEvent {
   seq: number;

@@ -18,7 +18,7 @@ const handlers: Record<string, Handler> = {
   [Method.SESSION_LIST]: () => pool.listSessions(),
   [Method.SESSION_OPEN]: (p) => pool.openSession(p),
   [Method.SESSION_CLOSE]: (p) => pool.closeSession(p),
-  [Method.SESSION_EVENTS]: (p) => pool.replayEvents(p),
+  [Method.SESSION_RENAME]: (p) => pool.renameSession(p),  [Method.SESSION_EVENTS]: (p) => pool.replayEvents(p),
   [Method.SESSION_SET_PERMISSION_MODE]: (p) => pool.setPermissionMode(p),
   [Method.SESSION_RESOLVE_APPROVAL]: (p) => pool.resolveApproval(p),
   [Method.SESSION_SET_THINKING_LEVEL]: (p) => pool.setThinkingLevel(p),

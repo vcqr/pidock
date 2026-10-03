@@ -190,6 +190,10 @@ export function createWebBus(auth: AuthClient): DataBus & {
           });
           return result ?? {};
         }
+        case "session.rename": {
+          await command(params?.session_id ?? "", "session.rename", { name: params?.name ?? "" });
+          return { ok: true };
+        }
         case "agent.prompt":
           await command(params.session_id, "agent.prompt", { text: params.text });
           return { accepted: true };

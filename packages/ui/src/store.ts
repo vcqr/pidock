@@ -438,6 +438,18 @@ export function createAgentStore(bus: DataBus) {
     permissionModes.value = { ...permissionModes.value, [sid]: mode as PermissionMode };
   }
 
+  /** 重命名会话（host 写注册表 name；空名恢复默认标题） */
+  async function renameSession(sessionId: string, name: string): Promise<void> {
+    try {
+      await bus.request("session.rename", { session_id: sessionId, name });
+      const s = sessions.value.find((x) => x.session_id === sessionId);
+      if (s) s.name = name || undefined;
+      lastError.value = null;
+    } catch (err) {
+      lastError.value = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   /** 回复工具审批请求 */
   async function resolveApproval(approved: boolean): Promise<void> {
     const p = pendingApproval.value;
@@ -521,6 +533,7 @@ export function createAgentStore(bus: DataBus) {
     send,
     abort,
     setPermissionMode,
+    renameSession,
     resolveApproval,
     setThinkingLevel,
     setModel,
