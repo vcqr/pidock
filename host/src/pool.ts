@@ -593,9 +593,15 @@ export class SessionPool {
     }
   }
 
+  /** 新回合开始：清空上一回合的文件快照（快照 / 审查 diff / 撤销均按「本轮」语义） */
+  private resetTurnSnapshots(sessionId: string): void {
+    if (!this.fileSnapshots.has(sessionId)) return;
+    this.fileSnapshots.delete(sessionId);
+    this.persistSnapshots(sessionId); // 空表 → 移除落盘文件
+  }
+
   /** 启动时清理 registry 里已不存在会话的快照落盘文件 */
-  private pruneSnapshots(): void {
-    try {
+  private pruneSnapshots(): void {    try {
       const dir = this.snapshotsDir();
       if (!existsSync(dir)) return;
       const known = new Set(this.readRegistry().map((e) => e.session_id));
@@ -732,7 +738,8 @@ export class SessionPool {
         isNew: !snap.existed,
       };
     });
-    return { files };
+    // 净变更为零的文件（回合内改回原样）不进卡片；新建文件保留（撤销时需删除）
+    return { files: files.filter((f) => f.isNew || f.added > 0 || f.removed > 0) };
   }
 
   /** 单个文件的快照与当前内容（供 UI 渲染 diff） */
@@ -913,6 +920,9 @@ export class SessionPool {
 
         // ---- ephemeral state ----
         case "agent_start":
+          // 一次用户输入 = 一回合：清空上一回合的文件快照，
+          // 变更卡片 / 审查 diff / 撤销都按「本轮」语义
+          this.resetTurnSnapshots(sessionId);
           this.setState(tracked, sessionId, "thinking");
           break;
         case "turn_start":
