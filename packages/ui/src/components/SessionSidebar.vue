@@ -57,10 +57,9 @@ function isLooseTask(s: SessionSummaryUi): boolean {
   return !s.cwd || s.cwd === props.homeDir;
 }
 
-/** 任务页签：不在项目中的会话；主目录未知时退回显示全部（与原行为一致） */
-const taskList = computed(() =>
-  props.homeDir ? filtered.value.filter((s) => isLooseTask(s)) : filtered.value,
-);
+/** 项目视图里「任务」分组：不在项目中的会话 */
+const looseTasks = computed(() => filtered.value.filter((s) => isLooseTask(s)));
+const tasksCollapsed = ref(false);
 
 interface Group {
   project: string;
@@ -70,7 +69,7 @@ interface Group {
 const groups = computed<Group[]>(() => {
   const map = new Map<string, Group>();
   for (const s of filtered.value) {
-    if (isLooseTask(s)) continue; // 不在项目中的任务只进任务页签
+    if (isLooseTask(s)) continue; // 不在项目中的会话挂到「任务」分组
     const project = basename(s.cwd) || "未分类";
     if (!map.has(project)) map.set(project, { project, cwd: s.cwd, sessions: [] });
     map.get(project)!.sessions.push(s);
@@ -173,7 +172,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     </div>
 
     <div class="sb-tools">
-      <button class="seg-btn" :class="{ active: !grouped }" @click="grouped = false">任务</button>
+      <button class="seg-btn" :class="{ active: !grouped }" @click="grouped = false"># 分组</button>
       <button class="seg-btn" :class="{ active: grouped }" @click="grouped = true">
         <Icon name="folder-line" :size="13" />项目
       </button>
@@ -181,9 +180,38 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     </div>
 
     <div class="sb-scroll">
-      <!-- 项目分组视图 -->
+      <!-- 项目分组视图：任务组（不在项目中的会话）+ 项目组 -->
       <template v-if="grouped">
         <div class="sb-title">项目</div>
+        <template v-if="looseTasks.length">
+          <div class="folder-row" title="不在项目中的任务">
+            <span
+              class="chev"
+              :class="{ fold: tasksCollapsed }"
+              title="展开 / 折叠"
+              @click="tasksCollapsed = !tasksCollapsed"
+            >
+              <Icon name="arrow-down-s-line" :size="12" />
+            </span>
+            <Icon name="chat-1-line" :size="15" />
+            <span class="fname">任务</span>
+            <span class="g-count">{{ looseTasks.length }}</span>
+          </div>
+          <template v-if="!tasksCollapsed">
+            <div
+              v-for="s in looseTasks"
+              :key="s.session_id"
+              class="task-row"
+              :class="{ active: s.session_id === activeId }"
+              :title="rowTitle(s)"
+              @click="emit('select', s.session_id)"
+            >
+              <span class="dot" :class="dotClass(s)"></span>
+              <span class="txt">{{ s.name || basename(s.cwd) }}</span>
+              <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
+            </div>
+          </template>
+        </template>
         <template v-for="g in groups" :key="g.cwd + g.project">
           <div class="folder-row" :title="g.cwd" @click="emit('open-project', g.cwd)">
             <span
@@ -218,16 +246,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             >{{ expanded.has(g.project) ? "收起" : "显示更多" }}</div>
           </template>
         </template>
-        <div v-if="!groups.length" class="empty">
+        <div v-if="!groups.length && !looseTasks.length" class="empty">
           {{ search ? "没有匹配的会话" : "暂无会话，点上方「新建任务」" }}
         </div>
       </template>
 
-      <!-- 任务视图：不在项目中的会话（按时间平铺） -->
+      <!-- 任务视图：全部会话按时间平铺 -->
       <template v-else>
         <div class="sb-title">任务</div>
         <div
-          v-for="s in taskList"
+          v-for="s in filtered"
           :key="s.session_id"
           class="task-row flat"
           :class="{ active: s.session_id === activeId }"
@@ -238,8 +266,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           <span class="txt">{{ s.name || basename(s.cwd) }}</span>
           <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
         </div>
-        <div v-if="!taskList.length" class="empty">
-          {{ search ? "没有匹配的会话" : "暂无任务，未选项目创建的会话会出现在这里" }}
+        <div v-if="!filtered.length" class="empty">
+          {{ search ? "没有匹配的会话" : "暂无会话，点上方「新建任务」" }}
         </div>
       </template>
     </div>
