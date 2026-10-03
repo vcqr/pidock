@@ -339,8 +339,12 @@ function onKeydown(e: KeyboardEvent): void {
 
       <!-- 权限模式 -->
       <div class="dd">
-        <button class="dd-btn dd-btn-boxed" @click="permOpen = !permOpen; thinkOpen = false; modelOpen = false">
-          <Icon :name="permIcon" :size="13" />
+        <button
+          class="dd-btn dd-btn-boxed"
+          :class="{ active: permissionMode != null && permissionMode !== 'full' }"
+          @click="permOpen = !permOpen; thinkOpen = false; modelOpen = false"
+        >
+          <Icon class="mode-ico" :name="permIcon" :size="13" />
           <span>{{ permLabel }}</span>
           <span class="c-chev" :class="{ open: permOpen }"><Icon :name="I.chevD" :size="11" /></span>
         </button>
@@ -615,6 +619,13 @@ textarea:disabled { opacity: 0.45; }
   background: var(--pd-bg-hover);
   border: 1px solid var(--pd-border-soft);
 }
+/* 选中的非默认权限模式：点亮为主题色 */
+.dd-btn-boxed.active {
+  background: var(--pd-accent-soft);
+  border-color: var(--pd-accent);
+  color: var(--pd-accent-text);
+}
+.dd-btn-boxed.active .mode-ico { color: var(--pd-accent); }
 .dd-btn .c-chev { color: var(--pd-text-4); }
 .dd-btn > span:not(.ring):not(.c-chev) {
   overflow: hidden;
@@ -658,7 +669,7 @@ textarea:disabled { opacity: 0.45; }
   cursor: pointer;
 }
 .perm-item:hover { background: var(--pd-bg-hover); }
-.perm-item.on { color: var(--pd-text); }
+.perm-item.on { color: var(--pd-text); background: var(--pd-bg-hover); }
 .perm-icon { color: var(--pd-text-3); margin-top: 1px; flex: none; }
 .perm-item.on .perm-icon { color: var(--pd-accent); }
 .perm-text { flex: 1; min-width: 0; }

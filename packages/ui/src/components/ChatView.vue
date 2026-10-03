@@ -36,6 +36,9 @@ const thinkingLevel = computed(
 );
 /** 首页选中的模型（暂存，新建会话时生效） */
 const homeModel = ref<string | null>(null);
+/** 首页暂存的权限模式 / 思考级别（新建会话后下发给 host） */
+const homePermissionMode = ref<string | null>(null);
+const homeThinkingLevel = ref<string | null>(null);
 /** 模型下拉可选项：全部已配置供应商的模型（provider/id），兜底合并历史会话里出现过的模型 */
 const modelOptions = computed(() => {
   const set = new Set<string>();
@@ -48,9 +51,20 @@ const modelOptions = computed(() => {
 });
 /** 首页输入卡显示：暂存模型优先，其次沿用当前会话模型 */
 const homeComposerModel = computed(() => homeModel.value ?? props.model);
+/** 输入卡显示值：首页用暂存值，会话内用 store 值 */
+const composerPermissionMode = computed(() => homePermissionMode.value ?? permissionMode.value);
+const composerThinkingLevel = computed(() => homeThinkingLevel.value ?? thinkingLevel.value);
 function setModel(m: string): void {
   if (home.value) homeModel.value = m;
   else void props.store.setModel(m);
+}
+function setPermissionMode(m: string): void {
+  if (home.value) homePermissionMode.value = m;
+  else void props.store.setPermissionMode(m);
+}
+function setThinkingLevel(l: string): void {
+  if (home.value) homeThinkingLevel.value = l;
+  else void props.store.setThinkingLevel(l);
 }
 
 // distinct project dirs for the composer folder selector
@@ -359,6 +373,17 @@ async function sendFromHome(text: string, cwd?: string | null): Promise<void> {
   const last = props.store.sessions[0];
   const dir = cwd === null ? undefined : cwd || last?.cwd || ".";
   await props.store.newSession(dir, homeModel.value ?? undefined);
+  // 首页暂存的权限模式 / 思考级别随新会话下发；失败时不发送，避免以错误权限执行任务
+  try {
+    if (homePermissionMode.value) await props.store.setPermissionMode(homePermissionMode.value);
+    if (homeThinkingLevel.value) await props.store.setThinkingLevel(homeThinkingLevel.value);
+  } catch (err) {
+    props.store.lastError = err instanceof Error ? err.message : String(err);
+    return;
+  } finally {
+    homePermissionMode.value = null;
+    homeThinkingLevel.value = null;
+  }
   await props.store.send(text);
 }
 
@@ -412,12 +437,16 @@ watch(
           :disabled-hint="disabledHint"
           :model="homeComposerModel"
           :models="modelOptions"
+          :permission-mode="composerPermissionMode"
+          :thinking-level="composerThinkingLevel"
           centered
           :projects="projects"
           :default-cwd="defaultCwd"
           placeholder="描述你的任务，Enter 发送"
           :preset="preset"
           @send="sendFromHome"
+          @set-permission-mode="setPermissionMode"
+          @set-thinking-level="setThinkingLevel"
           @set-model="setModel"
           @open-providers="emit('open-providers')"
         />
@@ -531,13 +560,13 @@ watch(
         <Composer
           :busy="store.agentState !== 'idle'"
           :model="model"
-          :permission-mode="permissionMode"
-          :thinking-level="thinkingLevel"
+          :permission-mode="composerPermissionMode"
+          :thinking-level="composerThinkingLevel"
           :models="modelOptions"
           @send="(t: string) => store.send(t)"
           @abort="store.abort()"
-          @set-permission-mode="(m: string) => store.setPermissionMode(m)"
-          @set-thinking-level="(l: string) => store.setThinkingLevel(l)"
+          @set-permission-mode="setPermissionMode"
+          @set-thinking-level="setThinkingLevel"
           @set-model="setModel"
           @open-providers="emit('open-providers')"
         />
