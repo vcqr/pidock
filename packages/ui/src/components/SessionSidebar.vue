@@ -60,6 +60,7 @@ function isLooseTask(s: SessionSummaryUi): boolean {
 /** 项目视图里「任务」分组：不在项目中的会话 */
 const looseTasks = computed(() => filtered.value.filter((s) => isLooseTask(s)));
 const tasksCollapsed = ref(false);
+const projectsCollapsed = ref(false);
 
 interface Group {
   project: string;
@@ -79,6 +80,8 @@ const groups = computed<Group[]>(() => {
     return ((lb?.updated_at ?? lb?.created_at ?? "") > (la?.updated_at ?? la?.created_at ?? "") ? 1 : -1);
   });
 });
+/** 项目区块会话总数（标题右侧计数） */
+const projectCount = computed(() => groups.value.reduce((n, g) => n + g.sessions.length, 0));
 
 function visibleIn(g: Group): SessionSummaryUi[] {
   return expanded.value.has(g.project) ? g.sessions : g.sessions.slice(0, PREVIEW);
@@ -183,39 +186,45 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       <!-- 项目分组视图：「项目」与「任务」两个并列区块 -->
       <template v-if="grouped">
         <template v-if="groups.length">
-          <div class="sb-title">项目</div>
-          <template v-for="g in groups" :key="g.cwd + g.project">
-            <div class="folder-row" :title="g.cwd" @click="emit('open-project', g.cwd)">
-              <span
-                class="chev"
-                :class="{ fold: collapsed.has(g.project) }"
-                title="展开 / 折叠"
-                @click.stop="toggleGroup(g.project)"
-              >
-                <Icon name="arrow-down-s-line" :size="12" />
-              </span>
-              <Icon name="folder-line" :size="15" />
-              <span class="fname">{{ g.project }}</span>
-              <span class="g-count">{{ g.sessions.length }}</span>
-            </div>
-            <template v-if="!collapsed.has(g.project)">
-              <div
-                v-for="s in visibleIn(g)"
-                :key="s.session_id"
-                class="task-row"
-                :class="{ active: s.session_id === activeId }"
-                :title="rowTitle(s)"
-                @click="emit('select', s.session_id)"
-              >
-                <span class="dot" :class="dotClass(s)"></span>
-                <span class="txt">{{ s.name || basename(s.cwd) }}</span>
-                <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
+          <button class="section-head" @click="projectsCollapsed = !projectsCollapsed">
+            <span>项目</span>
+            <span class="g-count">{{ projectCount }}</span>
+            <Icon name="arrow-down-s-line" :size="13" :class="{ fold: projectsCollapsed }" />
+          </button>
+          <template v-if="!projectsCollapsed">
+            <template v-for="g in groups" :key="g.cwd + g.project">
+              <div class="folder-row" :title="g.cwd" @click="emit('open-project', g.cwd)">
+                <span
+                  class="chev"
+                  :class="{ fold: collapsed.has(g.project) }"
+                  title="展开 / 折叠"
+                  @click.stop="toggleGroup(g.project)"
+                >
+                  <Icon name="arrow-down-s-line" :size="12" />
+                </span>
+                <Icon name="folder-line" :size="15" />
+                <span class="fname">{{ g.project }}</span>
+                <span class="g-count">{{ g.sessions.length }}</span>
               </div>
-              <div
-                v-if="g.sessions.length > PREVIEW"
-                class="show-more"
-                @click="toggleMore(g.project)"
-              >{{ expanded.has(g.project) ? "收起" : "显示更多" }}</div>
+              <template v-if="!collapsed.has(g.project)">
+                <div
+                  v-for="s in visibleIn(g)"
+                  :key="s.session_id"
+                  class="task-row"
+                  :class="{ active: s.session_id === activeId }"
+                  :title="rowTitle(s)"
+                  @click="emit('select', s.session_id)"
+                >
+                  <span class="dot" :class="dotClass(s)"></span>
+                  <span class="txt">{{ s.name || basename(s.cwd) }}</span>
+                  <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
+                </div>
+                <div
+                  v-if="g.sessions.length > PREVIEW"
+                  class="show-more"
+                  @click="toggleMore(g.project)"
+                >{{ expanded.has(g.project) ? "收起" : "显示更多" }}</div>
+              </template>
             </template>
           </template>
         </template>
