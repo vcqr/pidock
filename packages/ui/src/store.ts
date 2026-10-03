@@ -86,6 +86,8 @@ export interface ModelInfo {
   id: string;
   name: string;
   reasoning: boolean;
+  /** 模型输入能力（["text"] 或 ["text","image"]） */
+  input?: string[];
 }
 
 /** 工具调用权限模式（与 host pool.ts 保持一致） */

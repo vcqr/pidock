@@ -30,6 +30,8 @@ const props = withDefaults(
     mentionLoader?: (cwd: string) => Promise<Array<{ path: string; name: string; dir: boolean }>>;
     /** 技能列表加载器（+ 菜单 $ 选择技能用，来自 store） */
     skillsLoader?: () => Promise<Array<{ name: string; description: string }>>;
+    /** 当前模型是否支持图片输入（false = 显示预警；undefined = 未知不预警） */
+    modelImagesOk?: boolean | null;
   }>(),
   { placeholder: "输入消息，Enter 发送，Shift+Enter 换行" },
 );
@@ -551,6 +553,10 @@ function onKeydown(e: KeyboardEvent): void {
           <Icon :name="I.x" :size="10" />
         </button>
       </div>
+      <div v-if="modelImagesOk === false" class="img-warn">
+        <Icon name="error-warning-line" :size="13" />
+        <span>当前模型可能不支持图片输入，图片可能不会被读取</span>
+      </div>
     </div>
     <div class="bar">
       <!-- + 菜单：图片 / 文件提及 / 技能 -->
@@ -949,6 +955,17 @@ textarea:disabled { opacity: 0.45; }
   border: 1px solid var(--pd-border);
 }
 .img-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.img-warn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: var(--pd-yellow-soft);
+  color: var(--pd-yellow-text);
+  font-size: 12px;
+}
 .img-x {
   position: absolute;
   top: 1px;

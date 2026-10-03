@@ -78,6 +78,14 @@ function mentionLoader(cwd: string): Promise<Array<{ path: string; name: string;
 function skillsLoader(): Promise<Array<{ name: string; description: string }>> {
   return props.store.listSkills(activeSession.value?.cwd);
 }
+/** 当前模型是否支持图片输入（未知 = undefined，不预警） */
+const modelSupportsImages = computed<boolean | undefined>(() => {
+  const cur = home.value ? (homeModel.value ?? props.model ?? "") : (props.model ?? "");
+  if (!cur) return undefined;
+  const hit = props.store.allModels.find((m) => `${m.provider}/${m.id}` === cur);
+  if (!hit || !hit.input) return undefined;
+  return hit.input.includes("image");
+});
 
 // distinct project dirs for the composer folder selector
 const projects = computed(() => {
@@ -504,6 +512,7 @@ watch(
           :mention-cwd="store.homeDir ?? undefined"
           :mention-loader="mentionLoader"
           :skills-loader="skillsLoader"
+          :model-images-ok="modelSupportsImages"
           centered
           :projects="projects"
           :preset-cwd="newTaskCwd"
@@ -629,6 +638,7 @@ watch(
           :mention-cwd="activeSession?.cwd"
           :mention-loader="mentionLoader"
           :skills-loader="skillsLoader"
+          :model-images-ok="modelSupportsImages"
           :models="modelOptions"
           @send="(t: string, _cwd: unknown, imgs?: Array<{ data: string; mime_type: string }>) => store.send(t, imgs)"
           @abort="store.abort()"

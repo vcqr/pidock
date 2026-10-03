@@ -190,7 +190,7 @@ export class ConfigService {
   }
 
   async modelsList(): Promise<{
-    models: Array<{ provider: string; id: string; name: string; reasoning: boolean }>;
+    models: Array<{ provider: string; id: string; name: string; reasoning: boolean; input: string[] }>;
   }> {
     const mr = await this.pool.modelRuntime();
     const models = mr.getModels().map((m: any) => ({
@@ -198,6 +198,7 @@ export class ConfigService {
       id: m.id,
       name: m.name ?? m.id,
       reasoning: Boolean(m.reasoning),
+      input: Array.isArray(m.input) ? m.input.map(String) : ["text"],
     }));
     return { models };
   }
