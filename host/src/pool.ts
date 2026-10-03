@@ -438,6 +438,48 @@ export class SessionPool {
     return { ok: true, name };
   }
 
+  /**
+   * 列出工作区文件（输入框 @ 提及选择器）。
+   * 受限遍历：最大深度/数量上限，跳过依赖与构建目录，隐藏点开头文件。
+   */
+  listWorkspaceFiles(params: { cwd: string }): {
+    files: Array<{ path: string; name: string; dir: boolean }>;
+  } {
+    const root = params.cwd?.trim();
+    if (!root || !existsSync(root)) return { files: [] };
+    const IGNORE_DIRS = new Set([
+      "node_modules", ".git", ".pi", "target", "dist", "build", "out",
+      "__pycache__", ".venv", "venv", "vendor", ".next", ".nuxt", ".cache",
+    ]);
+    const MAX_FILES = 800;
+    const MAX_DEPTH = 6;
+    const files: Array<{ path: string; name: string; dir: boolean }> = [];
+    const walk = (dir: string, rel: string, depth: number): void => {
+      if (depth > MAX_DEPTH || files.length >= MAX_FILES) return;
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return; // 无权限等读取失败时跳过该目录
+      }
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      for (const e of entries) {
+        if (files.length >= MAX_FILES) return;
+        if (e.name.startsWith(".")) continue;
+        const relPath = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) {
+          if (IGNORE_DIRS.has(e.name)) continue;
+          files.push({ path: relPath, name: e.name, dir: true });
+          walk(join(dir, e.name), relPath, depth + 1);
+        } else if (e.isFile()) {
+          files.push({ path: relPath, name: e.name, dir: false });
+        }
+      }
+    };
+    walk(resolve(root), "", 0);
+    return { files };
+  }
+
   resolveApproval(params: { approval_id: string; approved: boolean }): { ok: boolean } {
     const pending = this.pendingApprovals.get(params.approval_id);
     if (!pending) return { ok: false };

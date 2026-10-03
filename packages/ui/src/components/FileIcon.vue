@@ -6,10 +6,10 @@ import { FILE_ICON_SVGS, fileIconName } from "../fileIcons.js";
  * 文件类型图标（material-icon-theme，多彩 SVG，不随主题变色）。
  * 按路径自动映射类型；size 控制渲染边长。
  */
-const props = withDefaults(defineProps<{ path: string; size?: number }>(), { size: 14 });
+const props = withDefaults(defineProps<{ path: string; size?: number; dir?: boolean }>(), { size: 14 });
 
 const html = computed(() => {
-  const svg = FILE_ICON_SVGS[fileIconName(props.path)] ?? FILE_ICON_SVGS.file!;
+  const svg = FILE_ICON_SVGS[fileIconName(props.path, props.dir)] ?? FILE_ICON_SVGS.file!;
   return svg.replace("<svg ", `<svg width="${props.size}" height="${props.size}" `);
 });
 </script>

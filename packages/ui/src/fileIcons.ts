@@ -68,6 +68,7 @@ import svgMaven from "material-icon-theme/icons/maven.svg?raw";
 import svgGit from "material-icon-theme/icons/git.svg?raw";
 import svgLicense from "material-icon-theme/icons/license.svg?raw";
 import svgFile from "material-icon-theme/icons/file.svg?raw";
+import svgFolder from "material-icon-theme/icons/folder.svg?raw";
 
 export const FILE_ICON_SVGS: Record<string, string> = {
   typescript: svgTypescript,
@@ -133,6 +134,7 @@ export const FILE_ICON_SVGS: Record<string, string> = {
   git: svgGit,
   license: svgLicense,
   file: svgFile,
+  folder: svgFolder,
 };
 
 /** 精确文件名（basename 小写）→ 图标名 */
@@ -277,8 +279,9 @@ const EXT_NAMES: Record<string, string> = {
   pptx: "powerpoint",
 };
 
-/** 按路径解析文件图标名：精确文件名 → 前缀（含 *.d.ts）→ 扩展名 → 通用文件 */
-export function fileIconName(path: string): string {
+/** 按路径解析文件图标名：目录 → 精确文件名 → 前缀（含 *.d.ts）→ 扩展名 → 通用文件 */
+export function fileIconName(path: string, isDir = false): string {
+  if (isDir) return "folder";
   const base = path.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
   if (FILE_NAMES[base]) return FILE_NAMES[base]!;
   for (const [prefix, name] of FILE_PREFIXES) {

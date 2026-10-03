@@ -194,6 +194,10 @@ export function createWebBus(auth: AuthClient): DataBus & {
           await command(params?.session_id ?? "", "session.rename", { name: params?.name ?? "" });
           return { ok: true };
         }
+        case "workspace.files": {
+          const result = await command(params?.session_id ?? "", "workspace.files", { cwd: params?.cwd });
+          return result ?? {};
+        }
         case "agent.prompt":
           await command(params.session_id, "agent.prompt", { text: params.text });
           return { accepted: true };

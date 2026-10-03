@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { basename } from "../utils/time.js";
 import { FOLDER_PICKER } from "../databus.js";
+import FileIcon from "./FileIcon.vue";
 import Icon from "./Icon.vue";
 
 const props = withDefaults(
@@ -23,6 +24,10 @@ const props = withDefaults(
     thinkingLevel?: string;
     /** 可切换的模型名（来自本工作区的会话） */
     models?: string[];
+    /** @ 提及的基准目录（会话 cwd 或主目录）；首页未选项目时兜底 */
+    mentionCwd?: string;
+    /** @ 提及的文件列表加载器（来自 store，走 host/中继） */
+    mentionLoader?: (cwd: string) => Promise<Array<{ path: string; name: string; dir: boolean }>>;
   }>(),
   { placeholder: "输入消息，Enter 发送，Shift+Enter 换行" },
 );
@@ -134,6 +139,90 @@ function selectFirstModel(): void {
   if (first) selectModel(first.full);
 }
 
+// ---- @ 文件提及 ----
+interface MentionFile {
+  path: string;
+  name: string;
+  dir: boolean;
+}
+const ta = ref<HTMLTextAreaElement | null>(null);
+/** 弹层状态：start = 触发的 @ 在文本中的下标 */
+const mention = ref<{ start: number; query: string; active: number } | null>(null);
+const mentionFiles = ref<MentionFile[]>([]);
+const mentionLoadedFor = ref<string | null>(null);
+const mentionLoading = ref(false);
+/** 基准目录：首页优先用所选项目，否则用会话 cwd / 主目录兜底 */
+const mentionBase = computed(() => (props.centered ? selected.value : null) ?? props.mentionCwd ?? null);
+
+const mentionMatches = computed(() => {
+  if (!mention.value) return [];
+  const q = mention.value.query.toLowerCase();
+  return mentionFiles.value
+    .filter((f) => f.path.toLowerCase().includes(q))
+    .sort((a, b) => (a.dir === b.dir ? a.path.localeCompare(b.path) : a.dir ? -1 : 1))
+    .slice(0, 20);
+});
+
+watch(mentionBase, () => {
+  // 目录切换后强制重取列表
+  mentionLoadedFor.value = null;
+  mentionFiles.value = [];
+});
+
+async function ensureMentionFiles(): Promise<void> {
+  const base = mentionBase.value;
+  if (!base || !props.mentionLoader || mentionLoadedFor.value === base || mentionLoading.value) return;
+  mentionLoading.value = true;
+  try {
+    mentionFiles.value = await props.mentionLoader(base);
+    mentionLoadedFor.value = base;
+  } catch {
+    mentionFiles.value = [];
+  } finally {
+    mentionLoading.value = false;
+  }
+}
+
+/** 检测光标前的 @ 触发式样：行首或空白后的 @query */
+function onTextInput(e: Event): void {
+  const el = e.target as HTMLTextAreaElement;
+  const caret = el.selectionStart ?? 0;
+  const m = text.value.slice(0, caret).match(/(^|\s)@([^\s@]*)$/);
+  if (m && mentionBase.value) {
+    mention.value = { start: caret - m[2]!.length - 1, query: m[2]!, active: 0 };
+    void ensureMentionFiles();
+  } else if (mention.value) {
+    mention.value = null;
+  }
+}
+
+/** 把选中路径替换进文本（替换 @query 段），光标落在 token 之后 */
+function applyMention(f: MentionFile): void {
+  if (!mention.value) return;
+  const start = mention.value.start;
+  const end = start + 1 + mention.value.query.length;
+  const token = `@${f.path} `;
+  text.value = text.value.slice(0, start) + token + text.value.slice(end);
+  mention.value = null;
+  void nextTick(() => {
+    const el = ta.value;
+    if (el) {
+      el.focus();
+      const pos = start + token.length;
+      el.setSelectionRange(pos, pos);
+    }
+  });
+}
+
+/** 键盘导航时保持活动项可见 */
+watch(
+  () => mention.value?.active,
+  async () => {
+    await nextTick();
+    document.querySelector(".mention-item.active")?.scrollIntoView({ block: "nearest" });
+  },
+);
+
 const CUSTOM_KEY = "pidock.customProjects";
 const customProjects = ref<string[]>(readCustom());
 function readCustom(): string[] {
@@ -244,6 +333,30 @@ function submit(): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
+  // @ 提及弹层打开时：方向键选择、Enter 确认、Esc 关闭（优先于发送）
+  if (mention.value && mentionMatches.value.length) {
+    const n = mentionMatches.value.length;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      mention.value.active = (mention.value.active + 1) % n;
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      mention.value.active = (mention.value.active - 1 + n) % n;
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      applyMention(mentionMatches.value[mention.value.active] ?? mentionMatches.value[0]!);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      mention.value = null;
+      return;
+    }
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     submit();
@@ -307,12 +420,32 @@ function onKeydown(e: KeyboardEvent): void {
     </div>
 
     <textarea
+      ref="ta"
       v-model="text"
       rows="2"
       :disabled="disabled"
       :placeholder="disabled ? disabledHint : placeholder"
       @keydown="onKeydown"
+      @input="onTextInput"
     />
+    <!-- @ 文件提及弹层 -->
+    <div v-if="mention && mentionMatches.length" class="mention-menu">
+      <button
+        v-for="(f, i) in mentionMatches"
+        :key="f.path"
+        class="mention-item"
+        :class="{ active: i === mention.active }"
+        :title="f.path"
+        @mousedown.prevent
+        @mouseenter="mention.active = i"
+        @click="applyMention(f)"
+      >
+        <span class="m-icon"><FileIcon :path="f.path" :dir="f.dir" :size="16" /></span>
+        <span class="m-name">{{ f.name }}</span>
+        <span class="m-dir">{{ f.path }}</span>
+      </button>
+    </div>
+
     <div class="bar">
       <button class="plus-btn" disabled title="附件 / 图片 · 开发中">
         <Icon :name="I.plus" :size="16" />
@@ -430,6 +563,49 @@ function onKeydown(e: KeyboardEvent): void {
 .composer:focus-within { border-color: #4a4a4a; }
 .composer.centered { box-shadow: var(--pd-shadow); }
 .flex-sp { flex: 1; }
+
+/* ---- @ 文件提及弹层 ---- */
+.mention-menu {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 56px;
+  max-height: 272px;
+  overflow-y: auto;
+  background: var(--pd-bg-raised);
+  border: 1px solid var(--pd-border);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: var(--pd-shadow);
+  z-index: 70;
+}
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: none;
+  border: none;
+  color: var(--pd-text-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.mention-item.active,
+.mention-item:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+.m-icon { flex: none; display: inline-grid; place-items: center; }
+.m-name { flex: none; font-weight: 500; color: var(--pd-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--pd-text-4);
+}
 
 .c-folder {
   display: flex;

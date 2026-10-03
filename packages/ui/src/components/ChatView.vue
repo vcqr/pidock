@@ -69,6 +69,12 @@ function setThinkingLevel(l: string): void {
   else void props.store.setThinkingLevel(l);
 }
 
+/** @ 文件提及：基准目录（首页用主目录兜底，会话内用会话 cwd）与加载器 */
+const activeSession = computed(() => props.store.sessions.find((s) => s.session_id === props.store.activeId));
+function mentionLoader(cwd: string): Promise<Array<{ path: string; name: string; dir: boolean }>> {
+  return props.store.listWorkspaceFiles(cwd);
+}
+
 // distinct project dirs for the composer folder selector
 const projects = computed(() => {
   const set = new Set<string>();
@@ -440,6 +446,8 @@ watch(
           :models="modelOptions"
           :permission-mode="composerPermissionMode"
           :thinking-level="composerThinkingLevel"
+          :mention-cwd="store.homeDir ?? undefined"
+          :mention-loader="mentionLoader"
           centered
           :projects="projects"
           :preset-cwd="newTaskCwd"
@@ -563,6 +571,8 @@ watch(
           :model="model"
           :permission-mode="composerPermissionMode"
           :thinking-level="composerThinkingLevel"
+          :mention-cwd="activeSession?.cwd"
+          :mention-loader="mentionLoader"
           :models="modelOptions"
           @send="(t: string) => store.send(t)"
           @abort="store.abort()"

@@ -484,6 +484,18 @@ export function createAgentStore(bus: DataBus) {
     }
   }
 
+  /** 列出工作区文件（输入框 @ 提及选择器）；失败返回空列表 */
+  async function listWorkspaceFiles(
+    cwd: string,
+  ): Promise<Array<{ path: string; name: string; dir: boolean }>> {
+    try {
+      const r = await bus.request("workspace.files", { cwd });
+      return r?.files ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   /** 回合结束后拉取文件变更列表 */
   async function fetchFileChanges(): Promise<void> {
     if (!activeId.value) return;
@@ -534,6 +546,7 @@ export function createAgentStore(bus: DataBus) {
     abort,
     setPermissionMode,
     renameSession,
+    listWorkspaceFiles,
     resolveApproval,
     setThinkingLevel,
     setModel,
