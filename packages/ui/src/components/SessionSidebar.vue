@@ -180,28 +180,56 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     </div>
 
     <div class="sb-scroll">
-      <!-- 项目分组视图：任务组（不在项目中的会话）+ 项目组 -->
+      <!-- 项目分组视图：「项目」与「任务」两个并列区块 -->
       <template v-if="grouped">
-        <div class="sb-title">项目</div>
+        <template v-if="groups.length">
+          <div class="sb-title">项目</div>
+          <template v-for="g in groups" :key="g.cwd + g.project">
+            <div class="folder-row" :title="g.cwd" @click="emit('open-project', g.cwd)">
+              <span
+                class="chev"
+                :class="{ fold: collapsed.has(g.project) }"
+                title="展开 / 折叠"
+                @click.stop="toggleGroup(g.project)"
+              >
+                <Icon name="arrow-down-s-line" :size="12" />
+              </span>
+              <Icon name="folder-line" :size="15" />
+              <span class="fname">{{ g.project }}</span>
+              <span class="g-count">{{ g.sessions.length }}</span>
+            </div>
+            <template v-if="!collapsed.has(g.project)">
+              <div
+                v-for="s in visibleIn(g)"
+                :key="s.session_id"
+                class="task-row"
+                :class="{ active: s.session_id === activeId }"
+                :title="rowTitle(s)"
+                @click="emit('select', s.session_id)"
+              >
+                <span class="dot" :class="dotClass(s)"></span>
+                <span class="txt">{{ s.name || basename(s.cwd) }}</span>
+                <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
+              </div>
+              <div
+                v-if="g.sessions.length > PREVIEW"
+                class="show-more"
+                @click="toggleMore(g.project)"
+              >{{ expanded.has(g.project) ? "收起" : "显示更多" }}</div>
+            </template>
+          </template>
+        </template>
         <template v-if="looseTasks.length">
-          <div class="folder-row" title="不在项目中的任务">
-            <span
-              class="chev"
-              :class="{ fold: tasksCollapsed }"
-              title="展开 / 折叠"
-              @click="tasksCollapsed = !tasksCollapsed"
-            >
-              <Icon name="arrow-down-s-line" :size="12" />
-            </span>
-            <Icon name="chat-1-line" :size="15" />
-            <span class="fname">任务</span>
+          <button class="section-head" @click="tasksCollapsed = !tasksCollapsed">
+            <span>任务</span>
             <span class="g-count">{{ looseTasks.length }}</span>
-          </div>
+            <Icon name="arrow-down-s-line" :size="13" :class="{ fold: tasksCollapsed }" />
+          </button>
           <template v-if="!tasksCollapsed">
             <div
               v-for="s in looseTasks"
               :key="s.session_id"
-              class="task-row"
+              class="task-row flat"
               :class="{ active: s.session_id === activeId }"
               :title="rowTitle(s)"
               @click="emit('select', s.session_id)"
@@ -210,40 +238,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
               <span class="txt">{{ s.name || basename(s.cwd) }}</span>
               <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
             </div>
-          </template>
-        </template>
-        <template v-for="g in groups" :key="g.cwd + g.project">
-          <div class="folder-row" :title="g.cwd" @click="emit('open-project', g.cwd)">
-            <span
-              class="chev"
-              :class="{ fold: collapsed.has(g.project) }"
-              title="展开 / 折叠"
-              @click.stop="toggleGroup(g.project)"
-            >
-              <Icon name="arrow-down-s-line" :size="12" />
-            </span>
-            <Icon name="folder-line" :size="15" />
-            <span class="fname">{{ g.project }}</span>
-            <span class="g-count">{{ g.sessions.length }}</span>
-          </div>
-          <template v-if="!collapsed.has(g.project)">
-            <div
-              v-for="s in visibleIn(g)"
-              :key="s.session_id"
-              class="task-row"
-              :class="{ active: s.session_id === activeId }"
-              :title="rowTitle(s)"
-              @click="emit('select', s.session_id)"
-            >
-              <span class="dot" :class="dotClass(s)"></span>
-              <span class="txt">{{ s.name || basename(s.cwd) }}</span>
-              <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
-            </div>
-            <div
-              v-if="g.sessions.length > PREVIEW"
-              class="show-more"
-              @click="toggleMore(g.project)"
-            >{{ expanded.has(g.project) ? "收起" : "显示更多" }}</div>
           </template>
         </template>
         <div v-if="!groups.length && !looseTasks.length" class="empty">
@@ -408,6 +402,26 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   color: var(--pd-text-3);
   padding: 12px 10px 6px;
 }
+/* 区块标题（与「项目」并列的「任务」区）：可点击折叠 */
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 12px 10px 6px;
+  color: var(--pd-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  user-select: none;
+}
+.section-head:hover { color: var(--pd-text-2); }
+.section-head .g-count { margin-left: auto; }
+.section-head svg { color: var(--pd-text-4); transition: transform 0.12s; }
+.section-head svg.fold { transform: rotate(-90deg); }
 .folder-row {
   display: flex;
   align-items: center;
