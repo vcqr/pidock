@@ -48,6 +48,12 @@ export type Block =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string }
   | {
+      type: "image";
+      /** base64，不带 data: 前缀 */
+      data: string;
+      mime: string;
+    }
+  | {
       type: "toolCall";
       callId: string;
       toolName: string;

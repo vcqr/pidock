@@ -93,6 +93,19 @@ const visibleEntries = computed(() =>
   props.textOnly ? entries.value.filter((e) => e.kind === "text") : entries.value,
 );
 
+/** 用户消息的图片（发送时随附 / 历史回放的 image 块） */
+const userImages = computed<string[]>(() => {
+  if (props.item.role !== "user") return [];
+  const urls = (props.item.imageUrls ?? []).slice();
+  for (const b of props.item.blocks ?? []) {
+    if (b.type === "image" && b.data) {
+      const url = `data:${b.mime || "image/png"};base64,${b.data}`;
+      if (!urls.includes(url)) urls.push(url);
+    }
+  }
+  return urls;
+});
+
 const toolEntries = computed(
   () => entries.value.filter((e) => e.kind === "tool") as Extract<Entry, { kind: "tool" }>[],
 );
@@ -104,6 +117,9 @@ const toolEntries = computed(
     <div class="bubble user-bubble" :class="{ pending: item.pending }">
       <span class="content">{{ item.text }}</span>
       <span v-if="item.pending" class="pending-mark">· 发送中</span>
+      <div v-if="userImages.length" class="bubble-imgs">
+        <img v-for="(u, i) in userImages" :key="i" :src="u" alt="" />
+      </div>
     </div>
   </div>
 
@@ -128,6 +144,10 @@ const toolEntries = computed(
       </div>
     </template>
     <span v-if="item.streaming && !item.text" class="cursor">▍</span>
+    <div v-if="item.errorMessage" class="msg-error">
+      <Icon name="error-warning-line" :size="13" />
+      <span>{{ item.errorMessage }}</span>
+    </div>
     <button v-if="!item.streaming && item.text" class="copy" :title="copied ? '已复制' : '复制'" @click="copyMessage">
       <Icon :name="copied ? 'check-line' : 'file-copy-line'" :size="13" />
     </button>
@@ -200,4 +220,24 @@ const toolEntries = computed(
 .stream:hover .copy { opacity: 1; }
 .copy:hover { color: var(--pd-accent); }
 .dimmed { opacity: 0.55; }
+.bubble-imgs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+.bubble-imgs img {
+  max-width: 180px;
+  max-height: 140px;
+  border-radius: 8px;
+  display: block;
+  border: 1px solid var(--pd-border-soft);
+}
+.msg-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--pd-red-soft);
+  color: var(--pd-red-text);
+  font-size: 12.5px;
+}
+.msg-error svg { flex: none; color: var(--pd-red); }
 </style>

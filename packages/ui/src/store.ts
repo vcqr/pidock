@@ -23,6 +23,9 @@ export interface UiBlock {
   args?: string;
   output?: string;
   isError?: boolean;
+  /** 图片块（用户消息随附，base64 不带前缀） */
+  data?: string;
+  mime?: string;
   attachment?: { attachment_id: string; size: number; preview: string; truncated: boolean };
 }
 
@@ -42,6 +45,10 @@ export interface UiMessageItem {
   ts?: string;
   /** 回合 id（本条用户消息的 session 条目官方 id，回合分组/变更卡片聚合键） */
   turnId?: string;
+  /** 用户消息随附图片（data URL，发送时展示用） */
+  imageUrls?: string[];
+  /** 助手消息错误（模型/供应商返回的 errorMessage，空回复时也要可见） */
+  errorMessage?: string;
 }
 
 export interface UiToolItem {
@@ -145,12 +152,14 @@ export function createAgentStore(bus: DataBus) {
         streaming.blocks = asBlocks(p);
         streaming.ts = itemTs;
         streaming.streaming = false;
+        streaming.errorMessage = p.errorMessage || undefined;
         streaming = null;
         return;
       }
       // history replay or missed stream: canonical item
       const blocks = asBlocks(p);
-      if (!blocks.length && !firstText(p)) return; // 空回复（回合尾部空消息）不生成条目
+      const hasText = !!firstText(p);
+      if (!blocks.length && !hasText && !p.errorMessage) return; // 空回复（回合尾部空消息）不生成条目
       items.value.push({
         kind: "message",
         key: nextKey(),
@@ -160,6 +169,7 @@ export function createAgentStore(bus: DataBus) {
         blocks,
         streaming: false,
         ts: itemTs,
+        ...(p.errorMessage ? { errorMessage: p.errorMessage } : {}),
       });
       return;
     }
@@ -169,9 +179,13 @@ export function createAgentStore(bus: DataBus) {
         (it): it is UiMessageItem =>
           it.kind === "message" && it.role === "user" && it.pending === true && it.text === firstText(p),
       );
+      const imageUrls = asBlocks(p)
+        .filter((b) => b.type === "image")
+        .map((b) => `data:${(b as any).mime || "image/png"};base64,${(b as any).data}`);
       if (pendingUser) {
         pendingUser.pending = false;
         pendingUser.turnId = p.entry_id || pendingUser.turnId;
+        if (imageUrls.length) pendingUser.imageUrls = imageUrls;
         if (!pendingUser.ts) pendingUser.ts = itemTs;
         return;
       }
@@ -185,6 +199,7 @@ export function createAgentStore(bus: DataBus) {
         streaming: false,
         ts: itemTs,
         turnId: p.entry_id || undefined,
+        ...(imageUrls.length ? { imageUrls } : {}),
       });
       return;
     }
@@ -420,6 +435,7 @@ export function createAgentStore(bus: DataBus) {
       streaming: false,
       pending: true,
       ts: new Date().toISOString(),
+      ...(images?.length ? { imageUrls: images.map((i) => `data:${i.mime_type};base64,${i.data}`) } : {}),
     });
     try {
       await bus.request("agent.prompt", {

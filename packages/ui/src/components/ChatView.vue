@@ -129,13 +129,15 @@ function isMergedResult(item: UiItem): boolean {
   return blocks.length > 0 && blocks.every((b) => b.callId !== undefined && assistantCallIds.value.has(b.callId));
 }
 
-/** 无任何可见内容的助手消息（回合尾部空回复）：不渲染，避免出现空白段 */
+/** 无任何可见内容的助手消息（回合尾部空回复）：不渲染，避免出现空白段；带错误信息的保留展示 */
 function isBlankMessage(item: UiItem): boolean {
   if (item.kind !== "message" || item.role !== "assistant") return false;
   if (item.streaming) return false; // 流式占位保留光标
+  if (item.errorMessage) return false;
   const blockHasContent = (item.blocks ?? []).some(
     (b) =>
       b.type === "toolCall" ||
+      b.type === "image" ||
       (b.type === "text" && (b.text ?? "").trim() !== "") ||
       (b.type === "thinking" && (b.thinking ?? "").trim() !== ""),
   );
@@ -210,6 +212,11 @@ function finalTextIndexOf(g: TurnGroup): number {
   for (let i = g.endIndex; i > g.userIndex; i--) {
     const it = items[i];
     if (it && it.kind === "message" && it.role === "assistant" && (it.text || (it.blocks ?? []).some((b) => b.type === "text"))) return i;
+  }
+  // 无文本回复时回退到带错误信息的助手消息（折叠态也要可见，避免整回合空白）
+  for (let i = g.endIndex; i > g.userIndex; i--) {
+    const it = items[i];
+    if (it && it.kind === "message" && it.role === "assistant" && it.errorMessage) return i;
   }
   return -1;
 }

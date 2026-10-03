@@ -63,7 +63,10 @@ export function messageToPayload(msg: Unknown, messageId?: string): MessageCompl
     } else if (Array.isArray(content)) {
       for (const part of content) {
         if (part?.type === "text") blocks.push({ type: "text", text: part.text });
-        // images skipped in v1 sync
+        else if (part?.type === "image") {
+          // 图片随条目持久化（base64 内联），供 UI 历史回放显示
+          blocks.push({ type: "image", data: String(part.data ?? ""), mime: String(part.mimeType ?? "image/png") });
+        }
       }
     }
   } else if (role === "assistant") {
