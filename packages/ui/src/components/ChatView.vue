@@ -29,9 +29,9 @@ const scroller = ref<HTMLElement | null>(null);
 const preset = ref("");
 const home = computed(() => props.newTask === true || !props.store.activeId);
 
-/** 当前会话的权限模式 / 思考级别（缺省与 host 一致） */
+/** 当前会话的权限模式 / 思考级别（缺省与 host 一致：新会话默认计划模式） */
 const permissionMode = computed(
-  () => (props.store.activeId ? props.store.permissionModes[props.store.activeId] : undefined) ?? "full",
+  () => (props.store.activeId ? props.store.permissionModes[props.store.activeId] : undefined) ?? "plan",
 );
 const thinkingLevel = computed(
   () => (props.store.activeId ? props.store.thinkingLevels[props.store.activeId] : undefined) ?? "medium",

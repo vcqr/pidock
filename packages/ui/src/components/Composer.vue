@@ -85,10 +85,10 @@ const THINKING_ITEMS = [
   { value: "high", label: "最高" },
 ];
 const permLabel = computed(
-  () => PERMISSION_ITEMS.find((i) => i.value === props.permissionMode)?.label ?? "完全访问",
+  () => PERMISSION_ITEMS.find((i) => i.value === props.permissionMode)?.label ?? "计划模式",
 );
 const permIcon = computed(
-  () => PERMISSION_ITEMS.find((i) => i.value === props.permissionMode)?.icon ?? I.shield,
+  () => PERMISSION_ITEMS.find((i) => i.value === props.permissionMode)?.icon ?? I.bulb,
 );
 const thinkLabel = computed(
   () => THINKING_ITEMS.find((i) => i.value === props.thinkingLevel)?.label ?? "中",

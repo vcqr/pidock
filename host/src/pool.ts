@@ -179,7 +179,8 @@ export class SessionPool {
     const cwd = params.cwd ?? homedir();
     const model = await this.resolveModel(params.model);
     const sessionManager = SessionManager.create(cwd);
-    const permission = { mode: "full" as PermissionMode };
+    // 新会话默认计划模式：修改类工具（bash/write/edit）先被拦下，用户可在输入卡切换
+    const permission = { mode: "plan" as PermissionMode };
     const sessionIdRef = { id: "" };
     const loader = new DefaultResourceLoader({
       cwd,
@@ -244,7 +245,8 @@ export class SessionPool {
   async openSession(params: { file: string }): Promise<{ session_id: string; file: string; cwd: string }> {
     const sessionManager = SessionManager.open(params.file);
     const cwd = sessionManager.getCwd() || process.cwd();
-    const permission = { mode: "full" as PermissionMode };
+    // 与 createSession 一致：权限模式不持久化，重开回到默认计划模式
+    const permission = { mode: "plan" as PermissionMode };
     const sessionIdRef = { id: "" };
     const loader = new DefaultResourceLoader({
       cwd,

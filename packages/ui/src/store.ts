@@ -98,7 +98,7 @@ export function createAgentStore(bus: DataBus) {
   const agentState = ref<string>("idle");
   const lastError = ref<string | null>(null);
   const loadingHistory = ref(false);
-  /** 每会话权限模式（缺省 full = 完全访问） */
+  /** 每会话权限模式（缺省 plan = 计划模式，与 host 新会话默认一致） */
   const permissionModes = ref<Record<string, PermissionMode>>({});
   /** 每会话思考级别（缺省 medium） */
   const thinkingLevels = ref<Record<string, string>>({});
