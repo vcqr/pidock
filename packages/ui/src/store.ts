@@ -151,13 +151,15 @@ export function createAgentStore(bus: DataBus) {
         return;
       }
       // history replay or missed stream: canonical item
+      const blocks = asBlocks(p);
+      if (!blocks.length && !firstText(p)) return; // 空回复（回合尾部空消息）不生成条目
       items.value.push({
         kind: "message",
         key: nextKey(),
         role: "assistant",
         text: "",
         thinking: "",
-        blocks: asBlocks(p),
+        blocks,
         streaming: false,
         ts: itemTs,
       });

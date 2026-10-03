@@ -124,6 +124,19 @@ function isMergedResult(item: UiItem): boolean {
   const blocks = item.blocks ?? [];
   return blocks.length > 0 && blocks.every((b) => b.callId !== undefined && assistantCallIds.value.has(b.callId));
 }
+
+/** 无任何可见内容的助手消息（回合尾部空回复）：不渲染，避免出现空白段 */
+function isBlankMessage(item: UiItem): boolean {
+  if (item.kind !== "message" || item.role !== "assistant") return false;
+  if (item.streaming) return false; // 流式占位保留光标
+  const blockHasContent = (item.blocks ?? []).some(
+    (b) =>
+      b.type === "toolCall" ||
+      (b.type === "text" && (b.text ?? "").trim() !== "") ||
+      (b.type === "thinking" && (b.thinking ?? "").trim() !== ""),
+  );
+  return !blockHasContent && !(item.text ?? "").trim() && !(item.thinking ?? "").trim();
+}
 /** 工作中分隔线：插在最后一条用户消息之后，时长每秒跳动 */
 const lastUserIndex = computed(() => {
   const items = props.store.items;
@@ -503,7 +516,7 @@ watch(
               :dimmed="busy"
             />
             <MessageItem
-              v-else-if="!isMergedResult(item)"
+              v-else-if="!isMergedResult(item) && !isBlankMessage(item)"
               :item="item"
               :dimmed="busy"
               :results="resultsMap"
