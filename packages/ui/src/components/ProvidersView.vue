@@ -374,7 +374,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
             <textarea v-model="formModelsText" rows="3" placeholder="model-a, model-b"></textarea>
           </div>
           <div class="field">
-            <label>模型能力（按模型勾选；视觉 = 支持图片输入，推理 = 支持思维链）</label>
+            <label>模型能力 · {{ formModelRows.length }} 个模型（视觉 = 支持图片输入，推理 = 支持思维链）</label>
             <div class="model-rows">
               <div v-for="(r, i) in formModelRows" :key="r.id" class="model-row">
                 <span class="mr-id" :title="r.id">{{ r.id }}</span>
@@ -444,7 +444,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
             <textarea v-model="formModelsText" rows="3"></textarea>
           </div>
           <div class="field">
-            <label>模型能力（按模型勾选；视觉 = 支持图片输入，推理 = 支持思维链）</label>
+            <label>模型能力 · {{ formModelRows.length }} 个模型（视觉 = 支持图片输入，推理 = 支持思维链）</label>
             <div class="model-rows">
               <div v-for="(r, i) in formModelRows" :key="r.id" class="model-row">
                 <span class="mr-id" :title="r.id">{{ r.id }}</span>
@@ -759,6 +759,12 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   border-radius: 7px;
   font-size: 12.5px;
 }
+/* 覆盖 .field label 的块级样式，能力标签保持行内紧凑 */
+.model-row label.mr-cap,
+.model-row .mr-cap {
+  display: inline-flex;
+  margin-bottom: 0;
+}
 .mr-id {
   flex: 1;
   min-width: 0;
@@ -777,7 +783,12 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   flex: none;
   user-select: none;
 }
-.mr-cap input { accent-color: var(--pd-accent); }
+.model-row input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--pd-accent);
+}
 .mr-del {
   background: none;
   border: none;
