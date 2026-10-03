@@ -306,7 +306,7 @@ export class SessionPool {
 
   // ------------------------------------------------------------- querying
 
-  listSessions(): { sessions: SessionSummary[] } {
+  listSessions(): { sessions: SessionSummary[]; home: string } {
     const openIds = new Set(this.sessions.keys());
     const summaries: SessionSummary[] = this.readRegistry().map((entry) => ({
       session_id: entry.session_id,
@@ -319,7 +319,8 @@ export class SessionPool {
       open: openIds.has(entry.session_id),
       state: this.stateOf(entry.session_id),
     }));
-    return { sessions: summaries };
+    // home 用于 UI 区分「不在项目中」的会话（cwd = 主目录）与项目会话
+    return { sessions: summaries, home: homedir() };
   }
 
   private stateOf(sessionId: string): AgentState {

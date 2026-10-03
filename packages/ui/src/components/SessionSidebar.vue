@@ -7,6 +7,8 @@ import Icon from "./Icon.vue";
 const props = defineProps<{
   sessions: SessionSummaryUi[];
   activeId: string | null;
+  /** host 主目录（session.list 下发）；cwd 等于它的会话视为「不在项目中」的任务 */
+  homeDir?: string | null;
   /** show the 插件/技能/MCP tool nav (desktop only) */
   showToolNav?: boolean;
   /** web has no settings center — hide the entry */
@@ -49,6 +51,17 @@ const filtered = computed(() => {
   );
 });
 
+/** 会话是否「不在项目中」（cwd 为主目录或为空）；主目录未知（web 快照）时不做拆分 */
+function isLooseTask(s: SessionSummaryUi): boolean {
+  if (!props.homeDir) return false;
+  return !s.cwd || s.cwd === props.homeDir;
+}
+
+/** 任务页签：不在项目中的会话；主目录未知时退回显示全部（与原行为一致） */
+const taskList = computed(() =>
+  props.homeDir ? filtered.value.filter((s) => isLooseTask(s)) : filtered.value,
+);
+
 interface Group {
   project: string;
   cwd: string;
@@ -57,6 +70,7 @@ interface Group {
 const groups = computed<Group[]>(() => {
   const map = new Map<string, Group>();
   for (const s of filtered.value) {
+    if (isLooseTask(s)) continue; // 不在项目中的任务只进任务页签
     const project = basename(s.cwd) || "未分类";
     if (!map.has(project)) map.set(project, { project, cwd: s.cwd, sessions: [] });
     map.get(project)!.sessions.push(s);
@@ -159,7 +173,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     </div>
 
     <div class="sb-tools">
-      <button class="seg-btn" :class="{ active: !grouped }" @click="grouped = false"># 分组</button>
+      <button class="seg-btn" :class="{ active: !grouped }" @click="grouped = false">任务</button>
       <button class="seg-btn" :class="{ active: grouped }" @click="grouped = true">
         <Icon name="folder-line" :size="13" />项目
       </button>
@@ -209,11 +223,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         </div>
       </template>
 
-      <!-- 按时间平铺视图 -->
+      <!-- 任务视图：不在项目中的会话（按时间平铺） -->
       <template v-else>
         <div class="sb-title">任务</div>
         <div
-          v-for="s in filtered"
+          v-for="s in taskList"
           :key="s.session_id"
           class="task-row flat"
           :class="{ active: s.session_id === activeId }"
@@ -224,7 +238,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
           <span class="txt">{{ s.name || basename(s.cwd) }}</span>
           <span class="time">{{ relTime(s.updated_at ?? s.created_at) }}</span>
         </div>
-        <div v-if="!filtered.length" class="empty">暂无任务</div>
+        <div v-if="!taskList.length" class="empty">
+          {{ search ? "没有匹配的会话" : "暂无任务，未选项目创建的会话会出现在这里" }}
+        </div>
       </template>
     </div>
 

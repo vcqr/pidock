@@ -98,6 +98,8 @@ export function createAgentStore(bus: DataBus) {
   const agentState = ref<string>("idle");
   const lastError = ref<string | null>(null);
   const loadingHistory = ref(false);
+  /** host 主目录（session.list 下发）；null = 未知（web 快照），侧栏不做项目/任务拆分 */
+  const homeDir = ref<string | null>(null);
   /** 每会话权限模式（缺省 plan = 计划模式，与 host 新会话默认一致） */
   const permissionModes = ref<Record<string, PermissionMode>>({});
   /** 每会话思考级别（缺省 medium） */
@@ -321,6 +323,8 @@ export function createAgentStore(bus: DataBus) {
   async function refreshSessions(): Promise<void> {
     const r = await bus.request("session.list");
     sessions.value = r.sessions ?? [];
+    // host 主目录：用于区分「不在项目中」的会话（web 端服务器快照无此信息，保持 null）
+    homeDir.value = typeof r.home === "string" && r.home ? r.home : null;
   }
 
   /** 拉取全量可用模型（失败静默，下拉退回会话历史模型） */
@@ -499,6 +503,7 @@ export function createAgentStore(bus: DataBus) {
     agentState,
     lastError,
     loadingHistory,
+    homeDir,
     permissionModes,
     thinkingLevels,
     pendingApproval,

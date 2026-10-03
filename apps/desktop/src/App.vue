@@ -166,6 +166,7 @@ onMounted(async () => {
       <SessionSidebar
         :sessions="store.sessions"
         :active-id="store.activeId"
+        :home-dir="store.homeDir"
         :show-tool-nav="true"
         :active-tool="mainView === 'chat' ? undefined : mainView"
         :width="sidebarWidth ?? undefined"

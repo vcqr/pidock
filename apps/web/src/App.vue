@@ -227,6 +227,7 @@ const sessionsEmpty = computed(() => {
       <SessionSidebar
         :sessions="store.sessions"
         :active-id="store.activeId"
+        :home-dir="store.homeDir"
         :show-settings-btn="false"
         @select="(id) => store?.openSession(id)"
       />
