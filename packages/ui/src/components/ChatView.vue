@@ -73,7 +73,6 @@ const projects = computed(() => {
   for (const s of props.store.sessions) if (s.cwd) set.add(s.cwd);
   return [...set];
 });
-const defaultCwd = computed(() => props.store.sessions[0]?.cwd ?? projects.value[0] ?? "");
 
 // ---- 活动流辅助 ----
 const busy = computed(() => props.store.agentState !== "idle");
@@ -441,7 +440,6 @@ watch(
           :thinking-level="composerThinkingLevel"
           centered
           :projects="projects"
-          :default-cwd="defaultCwd"
           placeholder="描述你的任务，Enter 发送"
           :preset="preset"
           @send="sendFromHome"

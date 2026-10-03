@@ -15,7 +15,6 @@ const props = withDefaults(
     preset?: string;
     /** 可选的项目目录（首页发送时用于新建会话） */
     projects?: string[];
-    defaultCwd?: string;
     /** 权限模式（完全访问/自动编辑/变更前确认/计划模式） */
     permissionMode?: string;
     /** 思考级别（off/minimal/low/medium/high） */
@@ -57,9 +56,8 @@ const I = {
 const text = ref("");
 const menuOpen = ref(false);
 const menuQuery = ref("");
-/** 当前选中的项目目录；null = 不在项目中工作 */
+/** 当前选中的项目目录；null = 不在项目中工作（新建时默认不选项目） */
 const selected = ref<string | null>(null);
-const touched = ref(false);
 const adding = ref(false);
 const newPath = ref("");
 const rootEl = ref<HTMLElement | null>(null);
@@ -165,36 +163,19 @@ watch(
     if (v) text.value = v;
   },
 );
-watch(
-  () => props.defaultCwd,
-  (v) => {
-    if (v && !touched.value) selected.value = v;
-  },
-  { immediate: true },
-);
-watch(
-  () => props.projects,
-  (list) => {
-    if (selected.value === null && !touched.value && list?.length) selected.value = list[0] ?? null;
-  },
-  { immediate: true },
-);
 
 function pick(p: string): void {
   selected.value = p;
-  touched.value = true;
   menuOpen.value = false;
   menuQuery.value = "";
 }
 function selectNone(): void {
   selected.value = null;
-  touched.value = true;
   menuOpen.value = false;
   menuQuery.value = "";
 }
 function clearSelected(): void {
   selected.value = null;
-  touched.value = true;
 }
 
 function addCustom(p: string): void {
