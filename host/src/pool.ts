@@ -94,10 +94,10 @@ export class SessionPool {
   /** 每会话权限模式（内置权限扩展实时读取） */
   private permissionStates = new Map<string, { mode: PermissionMode }>();
   /** 每会话回合内被修改文件的快照（撤销/文件变更卡片的数据源） */
-  /** 回合快照容器：turnId = 该轮用户消息的 session 条目官方 id */
+  /** 回合快照：turnId（该轮用户消息 session 条目官方 id）→ { path → 快照 }；按回合累积，供按轮审查/撤销 */
   private fileSnapshots = new Map<
     string,
-    { turnId: string; files: Map<string, { existed: boolean; content: Buffer }> }
+    Map<string, Map<string, { existed: boolean; content: Buffer }>>
   >();
   /** bash 工具执行前的目录元数据扫描（执行后 diff 出新建文件补快照） */
   private bashPreScans = new Map<string, Map<string, { mtime: number; size: number }>>();
@@ -553,55 +553,69 @@ export class SessionPool {
     return join(this.snapshotsDir(), `${sessionId}.json`);
   }
 
-  /** 取会话的回合快照；内存没有时从磁盘懒加载（重启恢复，兼容旧版纯数组格式） */
+  /** 取会话的回合快照组；内存没有时从磁盘懒加载（重启恢复，兼容旧版单轮/纯数组格式） */
   private loadSnapshots(
     sessionId: string,
-  ): { turnId: string; files: Map<string, { existed: boolean; content: Buffer }> } {
+  ): Map<string, Map<string, { existed: boolean; content: Buffer }>> {
     const cached = this.fileSnapshots.get(sessionId);
     if (cached) return cached;
-    const files = new Map<string, { existed: boolean; content: Buffer }>();
-    let turnId = "";
+    const turns = new Map<string, Map<string, { existed: boolean; content: Buffer }>>();
     try {
       const raw: unknown = JSON.parse(readFileSync(this.snapshotPath(sessionId), "utf8"));
-      const entries = Array.isArray(raw)
-        ? (raw as Array<Record<string, unknown>>) // 旧格式：纯条目数组，无轮归属
-        : Array.isArray((raw as Record<string, unknown>)?.files)
-          ? ((raw as Record<string, unknown>).files as Array<Record<string, unknown>>)
-          : [];
-      if (!Array.isArray(raw) && typeof (raw as Record<string, unknown>)?.turn_id === "string") {
-        turnId = (raw as Record<string, unknown>).turn_id as string;
-      }
-      for (const e of entries) {
-        if (typeof e?.path === "string" && typeof e?.content === "string") {
-          files.set(e.path, {
-            existed: Boolean(e.existed),
-            content: Buffer.from(e.content, "base64"),
-          });
+      // 新格式 { turns: [{ turn_id, files }] }；旧格式 { turn_id, files } / 纯数组归入 "" 轮
+      let list: Array<Record<string, unknown>> = [];
+      let legacyTurnId: string | undefined;
+      if (Array.isArray(raw)) {
+        legacyTurnId = "";
+        list = (raw as Array<Record<string, unknown>>).map((f) => ({ turn_id: "", files: [f] }));
+      } else {
+        const obj = raw as Record<string, unknown>;
+        if (Array.isArray(obj?.turns)) {
+          list = obj.turns as Array<Record<string, unknown>>;
+        } else if (Array.isArray(obj?.files)) {
+          legacyTurnId = typeof obj.turn_id === "string" ? obj.turn_id : "";
+          list = [{ turn_id: legacyTurnId, files: obj.files }];
         }
+      }
+      for (const t of list) {
+        const files = new Map<string, { existed: boolean; content: Buffer }>();
+        for (const e of (t?.files ?? []) as Array<Record<string, unknown>>) {
+          if (typeof e?.path === "string" && typeof e?.content === "string") {
+            files.set(e.path, {
+              existed: Boolean(e.existed),
+              content: Buffer.from(e.content, "base64"),
+            });
+          }
+        }
+        const turnId = typeof t?.turn_id === "string" ? t.turn_id : "";
+        const existing = turns.get(turnId);
+        if (existing) for (const [k, v] of files) existing.set(k, v);
+        else turns.set(turnId, files);
       }
     } catch {
       // 无落盘文件或损坏 → 空表
     }
-    const container = { turnId, files };
-    this.fileSnapshots.set(sessionId, container);
-    return container;
+    this.fileSnapshots.set(sessionId, turns);
+    return turns;
   }
 
   /** 把会话的内存快照写盘；空表时移除落盘文件 */
   private persistSnapshots(sessionId: string): void {
-    const container = this.fileSnapshots.get(sessionId);
+    const turns = this.fileSnapshots.get(sessionId);
     try {
-      if (!container || container.files.size === 0) {
+      if (!turns || turns.size === 0) {
         rmSync(this.snapshotPath(sessionId), { force: true });
         return;
       }
       mkdirSync(this.snapshotsDir(), { recursive: true });
       const data = {
-        turn_id: container.turnId,
-        files: [...container.files.entries()].map(([path, snap]) => ({
-          path,
-          existed: snap.existed,
-          content: snap.content.toString("base64"),
+        turns: [...turns.entries()].map(([turn_id, files]) => ({
+          turn_id,
+          files: [...files.entries()].map(([path, snap]) => ({
+            path,
+            existed: snap.existed,
+            content: snap.content.toString("base64"),
+          })),
         })),
       };
       writeFileSync(this.snapshotPath(sessionId), JSON.stringify(data));
@@ -610,11 +624,21 @@ export class SessionPool {
     }
   }
 
-  /** 新回合开始：清空上一回合的文件快照（快照 / 审查 diff / 撤销均按「本轮」语义） */
-  private resetTurnSnapshots(sessionId: string): void {
-    if (!this.fileSnapshots.has(sessionId)) return;
-    this.fileSnapshots.delete(sessionId);
-    this.persistSnapshots(sessionId); // 空表 → 移除落盘文件
+  /** 取「当前回合」的快照桶（按需创建）；超上限时淘汰最旧的回合 */
+  private turnBucket(sessionId: string): Map<string, { existed: boolean; content: Buffer }> {
+    const turns = this.loadSnapshots(sessionId);
+    const tracked = this.sessions.get(sessionId);
+    const turnId = tracked ? this.currentTurnId(tracked) : "";
+    let files = turns.get(turnId);
+    if (!files) {
+      files = new Map();
+      turns.set(turnId, files);
+      if (turns.size > 30) {
+        const oldest = turns.keys().next().value;
+        if (oldest !== undefined) turns.delete(oldest);
+      }
+    }
+    return files;
   }
 
   /** 启动时清理 registry 里已不存在会话的快照落盘文件 */
@@ -686,18 +710,17 @@ export class SessionPool {
     this.bashPreScans.delete(sessionId);
     if (!pre) return;
     const post = this.scanTreeMeta(cwd);
-    const snap = this.loadSnapshots(sessionId);
-    if (!snap.turnId) snap.turnId = this.currentTurnId(this.require(sessionId));
+    const files = this.turnBucket(sessionId);
     let added = 0;
     for (const [abs, meta] of post) {
       const before = pre.get(abs);
       if (before) continue; // 已存在（无论内容是否变化）→ 无法回取原文，跳过
-      if (snap.files.has(abs)) continue; // edit/write 已有更早快照，保留最早版本
+      if (files.has(abs)) continue; // edit/write 已有更早快照，保留最早版本
       if (added >= 200) break; // 单次 bash 命令的追踪上限
       try {
         const st = statSync(abs);
         if (!st.isFile() || st.size > 4 * 1024 * 1024) continue;
-        snap.files.set(abs, { existed: false, content: Buffer.alloc(0) });
+        files.set(abs, { existed: false, content: Buffer.alloc(0) });
         added++;
       } catch {
         // 竞态中被删除/不可读 → 跳过
@@ -720,67 +743,79 @@ export class SessionPool {
     return "";
   }
 
-  /** 修改类工具执行前快照目标文件（每回合每路径只保留最早的版本） */  private snapshotBeforeMutation(sessionId: string, cwd: string, toolName: string, input: unknown): void {
+  /** 修改类工具执行前快照目标文件（每回合每路径只保留最早的版本，快照归入所属回合） */  private snapshotBeforeMutation(sessionId: string, cwd: string, toolName: string, input: unknown): void {
     if (toolName !== "edit" && toolName !== "write") return;
     const a = (input ?? {}) as Record<string, unknown>;
     const rel = String(a.path ?? "");
     if (!rel) return;
-    const snap = this.loadSnapshots(sessionId);
-    if (!snap.turnId) snap.turnId = this.currentTurnId(this.require(sessionId));
+    const files = this.turnBucket(sessionId);
     const abs = resolve(cwd, rel);
-    if (snap.files.has(abs)) return;
+    if (files.has(abs)) return;
     try {
       const st = statSync(abs);
       if (!st.isFile() || st.size > 4 * 1024 * 1024) return; // 过大不快照，不参与撤销
-      snap.files.set(abs, { existed: true, content: readFileSync(abs) });
+      files.set(abs, { existed: true, content: readFileSync(abs) });
     } catch {
-      snap.files.set(abs, { existed: false, content: Buffer.alloc(0) }); // 新建文件
+      files.set(abs, { existed: false, content: Buffer.alloc(0) }); // 新建文件
     }
     this.persistSnapshots(sessionId);
   }
 
-  /** 回合内被修改的文件列表（快照 vs 磁盘当前内容的行级统计），附带快照归属的回合 id */
+  /** 回合内被修改的文件列表：按回合分组返回（快照 vs 磁盘当前内容的行级统计） */
   fileChanges(params: { session_id: string }): {
-    turn_id: string;
-    files: Array<{ path: string; added: number; removed: number; isNew: boolean }>;
+    turns: Array<{
+      turn_id: string;
+      files: Array<{ path: string; added: number; removed: number; isNew: boolean }>;
+    }>;
   } {
-    const snap = this.loadSnapshots(params.session_id);
-    if (snap.files.size === 0) return { turn_id: snap.turnId, files: [] };
-    const files = [...snap.files.entries()].map(([abs, snapFile]) => {
-      let current: string | null = null;
-      try {
-        if (existsSync(abs) && statSync(abs).isFile()) current = readFileSync(abs, "utf8");
-      } catch {
-        current = null;
-      }
-      const oldText = snapFile.existed ? snapFile.content.toString("utf8") : "";
-      // 末尾换行不产生空行（split("\n") 会多出一个尾元素）
-      const splitLines = (t: string): string[] => {
-        if (!t) return [];
-        const ls = t.split("\n");
-        if (ls[ls.length - 1] === "") ls.pop();
-        return ls;
-      };
-      const oldLines = splitLines(oldText);
-      const newLines = splitLines(current ?? "");
-      const oldSet = new Set(oldLines);
-      const newSet = new Set(newLines);
-      return {
-        path: abs,
-        added: newLines.filter((l) => !oldSet.has(l)).length,
-        removed: oldLines.filter((l) => !newSet.has(l)).length,
-        isNew: !snapFile.existed,
-      };
-    });
-    // 净变更为零的文件（回合内改回原样）不进卡片；新建文件保留（撤销时需删除）
-    return { turn_id: snap.turnId, files: files.filter((f) => f.isNew || f.added > 0 || f.removed > 0) };
+    const turns = this.loadSnapshots(params.session_id);
+    const out: Array<{
+      turn_id: string;
+      files: Array<{ path: string; added: number; removed: number; isNew: boolean }>;
+    }> = [];
+    for (const [turnId, files] of turns) {
+      const list = [...files.entries()].map(([abs, snapFile]) => {
+        let current: string | null = null;
+        try {
+          if (existsSync(abs) && statSync(abs).isFile()) current = readFileSync(abs, "utf8");
+        } catch {
+          current = null;
+        }
+        const oldText = snapFile.existed ? snapFile.content.toString("utf8") : "";
+        // 末尾换行不产生空行（split("\n") 会多出一个尾元素）
+        const splitLines = (t: string): string[] => {
+          if (!t) return [];
+          const ls = t.split("\n");
+          if (ls[ls.length - 1] === "") ls.pop();
+          return ls;
+        };
+        const oldLines = splitLines(oldText);
+        const newLines = splitLines(current ?? "");
+        const oldSet = new Set(oldLines);
+        const newSet = new Set(newLines);
+        return {
+          path: abs,
+          added: newLines.filter((l) => !oldSet.has(l)).length,
+          removed: oldLines.filter((l) => !newSet.has(l)).length,
+          isNew: !snapFile.existed,
+        };
+      });
+      // 净变更为零的文件（回合内改回原样）不进卡片；新建文件保留（撤销时需删除）
+      const filtered = list.filter((f) => f.isNew || f.added > 0 || f.removed > 0);
+      if (filtered.length) out.push({ turn_id: turnId, files: filtered });
+    }
+    return { turns: out };
   }
 
-  /** 单个文件的快照与当前内容（供 UI 渲染 diff） */
-  fileDiff(params: { session_id: string; path: string }): { oldText: string; newText: string } {
-    const snap = this.loadSnapshots(params.session_id);
+  /** 单个文件的快照与当前内容（供 UI 渲染 diff）；turn_id 缺省取最近回合 */
+  fileDiff(params: { session_id: string; path: string; turn_id?: string }): {
+    oldText: string;
+    newText: string;
+  } {
+    const turns = this.loadSnapshots(params.session_id);
+    const files = params.turn_id ? turns.get(params.turn_id) : [...turns.values()].at(-1);
     const abs = resolve(params.path ?? "");
-    const snapFile = snap.files.get(abs);
+    const snapFile = files?.get(abs);
     if (!snapFile) throw new RpcError("not_found", "no snapshot for this path");
     let newText = "";
     try {
@@ -791,12 +826,14 @@ export class SessionPool {
     return { oldText: snapFile.existed ? snapFile.content.toString("utf8") : "", newText };
   }
 
-  /** 撤销：恢复本轮所有快照文件（新建的删除），返回恢复数量 */
-  revertFiles(params: { session_id: string }): { reverted: number } {
-    const snap = this.loadSnapshots(params.session_id);
-    if (snap.files.size === 0) return { reverted: 0 };
+  /** 撤销指定回合（缺省最近回合）的快照文件（新建的删除），返回恢复数量 */
+  revertFiles(params: { session_id: string; turn_id?: string }): { reverted: number } {
+    const turns = this.loadSnapshots(params.session_id);
+    const turnId = params.turn_id ?? [...turns.keys()].at(-1);
+    const files = turnId !== undefined ? turns.get(turnId) : undefined;
+    if (!files || files.size === 0) return { reverted: 0 };
     let reverted = 0;
-    for (const [abs, snapFile] of snap.files) {
+    for (const [abs, snapFile] of files) {
       try {
         if (snapFile.existed) writeFileSync(abs, snapFile.content);
         else if (existsSync(abs)) rmSync(abs);
@@ -805,7 +842,7 @@ export class SessionPool {
         // 无法恢复的文件跳过
       }
     }
-    this.fileSnapshots.delete(params.session_id);
+    turns.delete(turnId!);
     this.persistSnapshots(params.session_id);
     return { reverted };
   }
@@ -954,9 +991,6 @@ export class SessionPool {
 
         // ---- ephemeral state ----
         case "agent_start":
-          // 一次用户输入 = 一回合：清空上一回合的文件快照，
-          // 变更卡片 / 审查 diff / 撤销都按「本轮」语义
-          this.resetTurnSnapshots(sessionId);
           this.setState(tracked, sessionId, "thinking");
           break;
         case "turn_start":

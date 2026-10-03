@@ -111,10 +111,8 @@ export function createAgentStore(bus: DataBus) {
   /** 当前回合开始时间；结束后保留并写入 turnEndedAt（「已工作 · 耗时」折叠行用） */
   const turnStartedAt = ref<number | null>(null);
   const turnEndedAt = ref<number | null>(null);
-  /** 回合内被修改的文件（快照 vs 磁盘统计），回合结束后拉取 */
-  const fileChanges = ref<Array<{ path: string; added: number; removed: number; isNew: boolean }>>([]);
-  /** 上述变更归属的回合 id（session.file_changes 返回，与快照落盘一致） */
-  const fileChangesTurnId = ref<string>("");
+  /** 各回合的文件变更（按轮累积，turnId = 回合官方 id），回合结束后拉取 */
+  const turnFileChanges = ref<Array<{ turnId: string; files: Array<{ path: string; added: number; removed: number; isNew: boolean }> }>>([]);
   /** 全量可用模型（已配置供应商，config.models.list），供模型下拉选择 */
   const allModels = ref<ModelInfo[]>([]);
 
@@ -504,28 +502,40 @@ export function createAgentStore(bus: DataBus) {
     }
   }
 
-  /** 回合结束后拉取文件变更列表 */
+  /** 回合结束后拉取各回合文件变更（按轮分组） */
   async function fetchFileChanges(): Promise<void> {
     if (!activeId.value) return;
     try {
       const r = await bus.request("session.file_changes", { session_id: activeId.value });
-      fileChanges.value = r.files ?? [];
-      fileChangesTurnId.value = r.turn_id ?? "";
+      turnFileChanges.value = (r.turns ?? []).map((t: any) => ({
+        turnId: t.turn_id ?? "",
+        files: t.files ?? [],
+      }));
     } catch {
-      fileChanges.value = [];
+      turnFileChanges.value = [];
     }
   }
 
-  /** 单文件快照 vs 当前的 diff 内容 */
-  async function fileDiff(path: string): Promise<{ oldText: string; newText: string }> {
-    return bus.request("session.file_diff", { session_id: activeId.value, path });
+  /** 单文件快照 vs 当前内容的 diff（可指定回合，缺省最近回合） */
+  async function fileDiff(
+    path: string,
+    turnId?: string,
+  ): Promise<{ oldText: string; newText: string }> {
+    return bus.request("session.file_diff", {
+      session_id: activeId.value,
+      path,
+      ...(turnId ? { turn_id: turnId } : {}),
+    });
   }
 
-  /** 撤销回合内全部文件更改 */
-  async function revertFiles(): Promise<void> {
+  /** 撤销指定回合（缺省最近回合）的文件更改，成功后重新拉取 */
+  async function revertFiles(turnId?: string): Promise<void> {
     if (!activeId.value) return;
-    await bus.request("session.revert_files", { session_id: activeId.value });
-    fileChanges.value = [];
+    await bus.request("session.revert_files", {
+      session_id: activeId.value,
+      ...(turnId ? { turn_id: turnId } : {}),
+    });
+    await fetchFileChanges();
   }
 
   return reactive({
@@ -542,8 +552,7 @@ export function createAgentStore(bus: DataBus) {
     pendingApproval,
     turnStartedAt,
     turnEndedAt,
-    fileChanges,
-    fileChangesTurnId,
+    turnFileChanges,
     allModels,
     // actions
     start,

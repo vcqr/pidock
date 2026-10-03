@@ -239,22 +239,48 @@ function textOnlyFor(index: number): boolean {
   const g = groupAt(index);
   return !!g && isTurnCollapsed(g) && index === finalTextIndexOf(g);
 }
-// ---- 文件变更卡片（回合结束后） ----
-const fileChangesOpen = ref(true);
-const totalAdd = computed(() => props.store.fileChanges.reduce((n, f) => n + f.added, 0));
-const totalDel = computed(() => props.store.fileChanges.reduce((n, f) => n + f.removed, 0));
-/** 右侧审查面板：多标签，每项为该文件的快照 diff（ReviewPanel 用 CodeMirror 渲染） */
+// ---- 文件变更卡片（按回合，挂回合尾部；回合结束后拉取，新回合不清掉历史轮卡片） ----
+const filesCollapsed = ref(new Set<string>());
+function toggleFilesCard(key: string): void {
+  const next = new Set(filesCollapsed.value);
+  next.has(key) ? next.delete(key) : next.add(key);
+  filesCollapsed.value = next;
+}
+function tfAdd(files: Array<{ added: number }>): number {
+  return files.reduce((n, f) => n + f.added, 0);
+}
+function tfDel(files: Array<{ removed: number }>): number {
+  return files.reduce((n, f) => n + f.removed, 0);
+}
+/** 该回合的变更组：index 为回合最后一个条目时返回（按回合 id 匹配） */
+function turnFilesAt(
+  index: number,
+): { turnId: string; files: Array<{ path: string; added: number; removed: number; isNew: boolean }> } | null {
+  const g = groupAt(index);
+  if (!g || index !== g.endIndex) return null;
+  return props.store.turnFileChanges.find((t) => t.turnId === g.key) ?? null;
+}
+/** 右侧审查面板：多标签，每项为该文件在该回合的快照 diff（ReviewPanel 用 CodeMirror 渲染） */
 const reviewTabs = ref<Array<{ path: string; oldText: string; newText: string; added: number; removed: number }>>([]);
 const reviewActive = ref<string | null>(null);
-async function toggleReview(path: string): Promise<void> {
+async function toggleReview(path: string, turnId: string): Promise<void> {
   if (reviewActive.value === path) {
     closeReviewTab(path);
     return;
   }
   // 已有标签也重新拉取（新回合后 diff 可能变化），然后激活
-  const f = props.store.fileChanges.find((x) => x.path === path);
-  const r = await props.store.fileDiff(path);
-  const data = { path, oldText: r.oldText, newText: r.newText, added: f?.added ?? 0, removed: f?.removed ?? 0 };
+  let added = 0;
+  let removed = 0;
+  for (const t of props.store.turnFileChanges) {
+    const f = t.files.find((x) => x.path === path);
+    if (f && t.turnId === turnId) {
+      added = f.added;
+      removed = f.removed;
+      break;
+    }
+  }
+  const r = await props.store.fileDiff(path, turnId);
+  const data = { path, oldText: r.oldText, newText: r.newText, added, removed };
   const i = reviewTabs.value.findIndex((t) => t.path === path);
   if (i >= 0) reviewTabs.value[i] = data;
   else reviewTabs.value.push(data);
@@ -314,10 +340,10 @@ function dirOfPath(p: string): string {
   segs.pop();
   return segs.length ? segs.slice(-2).join("/") + "/" : "";
 }
-async function revertAll(): Promise<void> {
-  if (!props.store.fileChanges.length) return;
-  if (!window.confirm(`撤销本轮全部 ${props.store.fileChanges.length} 个文件的更改？`)) return;
-  await props.store.revertFiles();
+async function revertAll(turnId: string, count: number): Promise<void> {
+  if (!count) return;
+  if (!window.confirm(`撤销该回合全部 ${count} 个文件的更改？`)) return;
+  await props.store.revertFiles(turnId);
   closeReviewAll();
 }
 
@@ -335,13 +361,13 @@ watch(
   { immediate: true },
 );
 watch(busy, (b) => {
-  if (b) props.store.fileChanges = [];
-  else void props.store.fetchFileChanges();
+  // 回合结束后拉取；回合开始不清空 —— 历史回合的变更卡片保留在各自回合尾部
+  if (!b) void props.store.fetchFileChanges();
 });
 watch(
   () => props.store.activeId,
   () => {
-    props.store.fileChanges = [];
+    props.store.turnFileChanges = [];
     closeReviewAll();
   },
 );
@@ -528,6 +554,37 @@ watch(
             <span class="turn-label">工作中 · {{ formatSpan(Math.max(1000, nowTick - (store.turnStartedAt ?? nowTick))) }}</span>
             <span class="turn-line"></span>
           </div>
+          <!-- 该回合的文件变更卡片（挂在回合尾部；撤销/审查针对该回合） -->
+          <div v-if="turnFilesAt(index)" class="files-card">
+            <button class="files-head" @click="toggleFilesCard(groupAt(index)!.key)">
+              <Icon name="arrow-down-s-line" :size="13" :class="{ fold: filesCollapsed.has(groupAt(index)!.key) }" />
+              <span>{{ turnFilesAt(index)!.files.length }} 个文件已更改</span>
+              <span v-if="tfAdd(turnFilesAt(index)!.files)" class="t-add">+{{ tfAdd(turnFilesAt(index)!.files) }}</span>
+              <span v-if="tfDel(turnFilesAt(index)!.files)" class="t-del">−{{ tfDel(turnFilesAt(index)!.files) }}</span>
+              <span class="flex-sp"></span>
+              <span class="revert" @click.stop="revertAll(groupAt(index)!.key, turnFilesAt(index)!.files.length)">
+                <Icon name="history-line" :size="13" />撤销
+              </span>
+            </button>
+            <div v-if="!filesCollapsed.has(groupAt(index)!.key)" class="files-list">
+              <template v-for="f in turnFilesAt(index)!.files" :key="f.path">
+                <div class="file-row">
+                  <span class="tile"><FileIcon :path="f.path" :size="15" /></span>
+                  <span class="f-name" :title="f.path">{{ baseOf(f.path) }}</span>
+                  <span class="f-dir">{{ dirOfPath(f.path) }}</span>
+                  <span class="t-add">+{{ f.added }}</span>
+                  <span class="t-del">−{{ f.removed }}</span>
+                  <button
+                    class="review-btn"
+                    :class="{ on: reviewTabs.some((t) => t.path === f.path) }"
+                    @click="toggleReview(f.path, groupAt(index)!.key)"
+                  >
+                    {{ reviewActive === f.path ? "收起" : "审查" }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
         </template>
         <!-- 工作中尾部的旋转 loading（消息/工具流到来前后的活动指示） -->
         <div v-if="busy" class="working-load">
@@ -536,38 +593,6 @@ watch(
         <div v-if="busy && lastUserIndex === -1" class="turn-divider">
           <span class="turn-label">工作中 · {{ formatSpan(Math.max(1000, nowTick - (store.turnStartedAt ?? nowTick))) }}</span>
           <span class="turn-line"></span>
-        </div>
-
-        <!-- 文件变更卡片 -->
-        <div v-if="store.fileChanges.length" class="files-card">
-          <button class="files-head" @click="fileChangesOpen = !fileChangesOpen">
-            <Icon name="arrow-down-s-line" :size="13" :class="{ fold: !fileChangesOpen }" />
-            <span>{{ store.fileChanges.length }} 个文件已更改</span>
-            <span v-if="totalAdd" class="t-add">+{{ totalAdd }}</span>
-            <span v-if="totalDel" class="t-del">−{{ totalDel }}</span>
-            <span class="flex-sp"></span>
-            <span class="revert" @click.stop="revertAll">
-              <Icon name="history-line" :size="13" />撤销
-            </span>
-          </button>
-          <div v-if="fileChangesOpen" class="files-list">
-            <template v-for="f in store.fileChanges" :key="f.path">
-              <div class="file-row">
-                <span class="tile"><FileIcon :path="f.path" :size="15" /></span>
-                <span class="f-name" :title="f.path">{{ baseOf(f.path) }}</span>
-                <span class="f-dir">{{ dirOfPath(f.path) }}</span>
-                <span class="t-add">+{{ f.added }}</span>
-                <span class="t-del">−{{ f.removed }}</span>
-                <button
-                  class="review-btn"
-                  :class="{ on: reviewTabs.some((t) => t.path === f.path) }"
-                  @click="toggleReview(f.path)"
-                >
-                  {{ reviewActive === f.path ? "收起" : "审查" }}
-                </button>
-              </div>
-            </template>
-          </div>
         </div>
       </div>
       <div v-if="store.pendingApproval" class="approval">
