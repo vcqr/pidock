@@ -48,7 +48,7 @@ const duration = computed(() => {
 <template>
   <div class="think">
     <button class="think-head" @click="expanded = !expanded">
-      <Icon name="psychotherapy-line" :size="14" />
+      <Icon name="brain-line" :size="16" />
       <span class="think-label">思考</span>
       <span v-if="duration" class="think-dur">· 持续了 {{ duration }}</span>
       <span class="chev" :class="{ open: expanded }"><Icon name="arrow-down-s-line" :size="12" /></span>
@@ -77,7 +77,7 @@ const duration = computed(() => {
 .chev { display: grid; place-items: center; color: var(--pd-text-4); transition: transform 0.12s; }
 .chev.open { transform: rotate(180deg); }
 .think-body {
-  margin: 2px 0 8px 21px;
+  margin: 2px 0 8px 23px;
   padding: 10px 12px;
   background: var(--pd-bg-card);
   border-left: 2px solid var(--pd-border);

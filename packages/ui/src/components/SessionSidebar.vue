@@ -13,6 +13,8 @@ const props = defineProps<{
   showSettingsBtn?: boolean;
   /** currently open main-area tool view, for nav highlight */
   activeTool?: string;
+  /** 面板宽度（px）；缺省用 CSS 默认 260。拖拽分隔条实时改写 */
+  width?: number;
 }>();
 const emit = defineEmits<{
   select: [sessionId: string];
@@ -117,7 +119,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :style="width ? { width: width + 'px', minWidth: width + 'px' } : undefined">
     <div class="sb-head">
       <div class="logo">π</div>
       <button class="icon-btn" disabled title="后退"><Icon name="arrow-left-line" :size="16" /></button>
@@ -137,10 +139,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <Icon name="time-line" :size="16" />自动化
       </div>
       <div v-if="showToolNav" class="nav-item" :class="{ active: activeTool === 'plugins' }" @click="emit('open-tools', 'plugins')">
-        <Icon name="grid-line" :size="16" />插件
+        <Icon name="puzzle-2-line" :size="16" />插件
       </div>
       <div v-if="showToolNav" class="nav-item" :class="{ active: activeTool === 'skills' }" @click="emit('open-tools', 'skills')">
-        <Icon name="flashlight-line" :size="16" />技能
+        <Icon name="magic-line" :size="16" />技能
       </div>
       <div v-if="showToolNav" class="nav-item" :class="{ active: activeTool === 'providers' }" @click="emit('open-tools', 'providers')">
         <Icon name="stack-line" :size="16" />模型供应商

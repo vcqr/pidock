@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import DiffView from "./DiffView.vue";
+import FileIcon from "./FileIcon.vue";
 import Icon from "./Icon.vue";
 
 /**
@@ -46,6 +47,10 @@ interface Info {
   icon: string;
   target: string;
   dir?: string;
+  /** 目标文件完整路径；存在时前置图标显示文件类型图标 */
+  file?: string;
+  /** 目标为多行命令：完整展示并按原始换行渲染 */
+  wrap?: boolean;
   added?: number;
   removed?: number;
 }
@@ -63,9 +68,10 @@ const info = computed<Info>(() => {
       const newSet = new Set(newLines);
       return {
         verb: "编辑",
-        icon: "edit-2-line",
+        icon: "quill-pen-line",
         target: base(p),
         dir: dirOf(p),
+        file: p,
         added: newLines.filter((l) => !oldSet.has(l)).length,
         removed: oldLines.filter((l) => !newSet.has(l)).length,
       };
@@ -73,24 +79,24 @@ const info = computed<Info>(() => {
     case "write": {
       const p = String(a.path ?? "");
       const content = String(a.content ?? a.newText ?? "");
-      return { verb: "写入", icon: "file-add-line", target: base(p), dir: dirOf(p), added: content ? content.split("\n").length : 0 };
+      return { verb: "写入", icon: "file-add-line", target: base(p), dir: dirOf(p), file: p, added: content ? content.split("\n").length : 0 };
     }
     case "bash":
-      return { verb: "终端", icon: "terminal-box-line", target: String(a.command ?? a.cmd ?? "").replace(/\s+/g, " ").slice(0, 120) };
+      return { verb: "终端", icon: "terminal-line", target: String(a.command ?? a.cmd ?? ""), wrap: true };
     case "read": {
       const p = String(a.path ?? "");
-      return { verb: "查阅", icon: "eye-line", target: base(p), dir: dirOf(p) };
+      return { verb: "查阅", icon: "eye-line", target: base(p), dir: dirOf(p), file: p };
     }
     case "grep":
       return { verb: "搜索", icon: "search-line", target: String(a.pattern ?? "") };
     case "find":
-      return { verb: "查找", icon: "search-line", target: String(a.pattern ?? a.glob ?? "") };
+      return { verb: "查找", icon: "file-search-line", target: String(a.pattern ?? a.glob ?? "") };
     case "ls": {
       const p = String(a.path ?? "");
       return { verb: "列目录", icon: "folder-line", target: base(p) || "/" };
     }
     default:
-      return { verb: props.toolName, icon: "settings-3-line", target: props.args.replace(/\s+/g, " ").slice(0, 120) };
+      return { verb: props.toolName, icon: "tools-line", target: props.args.replace(/\s+/g, " ").slice(0, 120) };
   }
 });
 
@@ -116,10 +122,11 @@ const expandable = computed(() => hasDiff.value || hasOutput.value);
 
 <template>
   <div class="tool-wrap">
-    <div class="tool-row" :class="{ clickable: expandable }" @click="expandable && (expanded = !expanded)">
-      <span class="t-icon"><Icon :name="info.icon" :size="13" /></span>
+    <div class="tool-row" :class="{ clickable: expandable, wrapped: info.wrap }" @click="expandable && (expanded = !expanded)">
+      <span class="t-icon"><Icon :name="info.icon" :size="15" /></span>
       <span class="t-verb">{{ info.verb }}</span>
-      <span class="t-target" :title="fullTarget">{{ info.target }}</span>
+      <span v-if="info.file" class="t-file"><FileIcon :path="info.file" :size="14" /></span>
+      <span class="t-target" :class="{ wrap: info.wrap }" :title="fullTarget">{{ info.target }}</span>
       <span v-if="info.dir" class="t-dir">{{ info.dir }}</span>
       <span v-if="info.added" class="t-add">+{{ info.added }}</span>
       <span v-if="info.removed" class="t-del">−{{ info.removed }}</span>
@@ -150,7 +157,9 @@ const expandable = computed(() => hasDiff.value || hasOutput.value);
   min-width: 0;
 }
 .tool-row.clickable { cursor: pointer; }
+.tool-row.wrapped { align-items: flex-start; }
 .t-icon { color: var(--pd-text-3); flex: none; display: grid; place-items: center; }
+.t-file { flex: none; display: grid; place-items: center; margin-left: -3px; }
 .t-verb { color: var(--pd-text-2); flex: none; }
 .t-target {
   color: var(--pd-text);
@@ -158,6 +167,16 @@ const expandable = computed(() => hasDiff.value || hasOutput.value);
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 420px;
+}
+/* 多行命令：完整展示，保留原始换行 */
+.t-target.wrap {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .t-dir {
   color: var(--pd-text-4);
@@ -186,7 +205,7 @@ const expandable = computed(() => hasDiff.value || hasOutput.value);
   to { transform: rotate(360deg); }
 }
 .t-output {
-  margin: 2px 0 8px 21px;
+  margin: 2px 0 8px 23px;
   padding: 8px 10px;
   background: var(--pd-code-bg);
   border: 1px solid var(--pd-border-soft);

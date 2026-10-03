@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { NSplit } from "naive-ui";
 import type { AgentStore, UiItem } from "../store.js";
 import { formatSpan, greeting } from "../utils/time.js";
-import DiffView from "./DiffView.vue";
+import FileIcon from "./FileIcon.vue";
 import MdContent from "./MdContent.vue";
+import ReviewPanel from "./ReviewPanel.vue";
 import Composer from "./Composer.vue";
 import Icon from "./Icon.vue";
 
@@ -32,12 +34,24 @@ const permissionMode = computed(
 const thinkingLevel = computed(
   () => (props.store.activeId ? props.store.thinkingLevels[props.store.activeId] : undefined) ?? "medium",
 );
-/** 工作区里出现过的模型（模型下拉的可选项） */
+/** 首页选中的模型（暂存，新建会话时生效） */
+const homeModel = ref<string | null>(null);
+/** 模型下拉可选项：全部已配置供应商的模型（provider/id），兜底合并历史会话里出现过的模型 */
 const modelOptions = computed(() => {
   const set = new Set<string>();
+  for (const m of props.store.allModels) {
+    if (m.provider && m.id) set.add(`${m.provider}/${m.id}`);
+  }
   for (const s of props.store.sessions) if (s.model) set.add(s.model);
-  return [...set];
+  if (homeModel.value) set.add(homeModel.value);
+  return [...set].sort();
 });
+/** 首页输入卡显示：暂存模型优先，其次沿用当前会话模型 */
+const homeComposerModel = computed(() => homeModel.value ?? props.model);
+function setModel(m: string): void {
+  if (home.value) homeModel.value = m;
+  else void props.store.setModel(m);
+}
 
 // distinct project dirs for the composer folder selector
 const projects = computed(() => {
@@ -192,16 +206,70 @@ function textOnlyFor(index: number): boolean {
 }
 // ---- 文件变更卡片（回合结束后） ----
 const fileChangesOpen = ref(true);
-const expandedFileDiffs = ref(new Set<string>());
-const fileDiffCache = reactive<Record<string, { oldText: string; newText: string }>>({});
 const totalAdd = computed(() => props.store.fileChanges.reduce((n, f) => n + f.added, 0));
 const totalDel = computed(() => props.store.fileChanges.reduce((n, f) => n + f.removed, 0));
-
-function extOf(p: string): string {
-  const b = p.replace(/\\/g, "/").split("/").pop() ?? "";
-  const i = b.lastIndexOf(".");
-  return i > 0 ? b.slice(i + 1, i + 5) : "txt";
+/** 右侧审查面板：多标签，每项为该文件的快照 diff（ReviewPanel 用 CodeMirror 渲染） */
+const reviewTabs = ref<Array<{ path: string; oldText: string; newText: string; added: number; removed: number }>>([]);
+const reviewActive = ref<string | null>(null);
+async function toggleReview(path: string): Promise<void> {
+  if (reviewActive.value === path) {
+    closeReviewTab(path);
+    return;
+  }
+  // 已有标签也重新拉取（新回合后 diff 可能变化），然后激活
+  const f = props.store.fileChanges.find((x) => x.path === path);
+  const r = await props.store.fileDiff(path);
+  const data = { path, oldText: r.oldText, newText: r.newText, added: f?.added ?? 0, removed: f?.removed ?? 0 };
+  const i = reviewTabs.value.findIndex((t) => t.path === path);
+  if (i >= 0) reviewTabs.value[i] = data;
+  else reviewTabs.value.push(data);
+  reviewActive.value = path;
 }
+function closeReviewTab(path: string): void {
+  const i = reviewTabs.value.findIndex((t) => t.path === path);
+  if (i < 0) return;
+  reviewTabs.value.splice(i, 1);
+  if (reviewActive.value === path) {
+    reviewActive.value = reviewTabs.value[Math.min(i, reviewTabs.value.length - 1)]?.path ?? null;
+  }
+}
+function closeReviewAll(): void {
+  reviewTabs.value = [];
+  reviewActive.value = null;
+}
+
+// ---- 审查面板拖拽调宽（NSplit）：size 指对话区（pane1），持久化审查面板宽度 ----
+const REVIEW_KEY = "pidock.reviewWidth";
+const REVIEW_MIN = 320;
+const SPLIT_TRIGGER = 6;
+const chatEl = ref<HTMLElement | null>(null);
+const chatW = ref(1000);
+const reviewWidth = ref<number | null>(readReviewWidth());
+function readReviewWidth(): number | null {
+  const v = Number(localStorage.getItem(REVIEW_KEY));
+  return Number.isFinite(v) && v >= REVIEW_MIN && v <= 1200 ? Math.round(v) : null;
+}
+/** pane1（对话区）flex-basis：未开审查时占满；打开时 = 容器 − 触发条 − 面板宽 */
+const reviewPane1Size = computed(() =>
+  reviewTabs.value.length
+    ? `calc(100% - ${SPLIT_TRIGGER}px - ${(reviewWidth.value ?? Math.round(chatW.value * 0.42))}px)`
+    : "100%",
+);
+const reviewPane1Max = computed(() => `${Math.max(360, chatW.value - SPLIT_TRIGGER - REVIEW_MIN)}px`);
+function onReviewSplitSize(s: string | number): void {
+  const usable = Math.max(0, chatW.value - SPLIT_TRIGGER);
+  const px = typeof s === "string" ? parseFloat(s) : s * usable;
+  if (!Number.isFinite(px)) return;
+  reviewWidth.value = Math.round(Math.min(usable - 360, Math.max(REVIEW_MIN, usable - px)));
+}
+function saveReview(): void {
+  try {
+    if (reviewWidth.value != null) localStorage.setItem(REVIEW_KEY, String(reviewWidth.value));
+  } catch {
+    // localStorage 不可用时忽略
+  }
+}
+
 function baseOf(p: string): string {
   const norm = p.replace(/\\/g, "/");
   return norm.slice(norm.lastIndexOf("/") + 1);
@@ -211,26 +279,11 @@ function dirOfPath(p: string): string {
   segs.pop();
   return segs.length ? segs.slice(-2).join("/") + "/" : "";
 }
-function diffOpen(path: string): boolean {
-  return expandedFileDiffs.value.has(path);
-}
-async function toggleFileDiff(path: string): Promise<void> {
-  if (expandedFileDiffs.value.has(path)) {
-    const next = new Set(expandedFileDiffs.value);
-    next.delete(path);
-    expandedFileDiffs.value = next;
-    return;
-  }
-  const r = await props.store.fileDiff(path);
-  fileDiffCache[path] = { oldText: r.oldText, newText: r.newText };
-  const next = new Set(expandedFileDiffs.value);
-  next.add(path);
-  expandedFileDiffs.value = next;
-}
 async function revertAll(): Promise<void> {
   if (!props.store.fileChanges.length) return;
   if (!window.confirm(`撤销本轮全部 ${props.store.fileChanges.length} 个文件的更改？`)) return;
   await props.store.revertFiles();
+  closeReviewAll();
 }
 
 const nowTick = ref(Date.now());
@@ -254,11 +307,25 @@ watch(
   () => props.store.activeId,
   () => {
     props.store.fileChanges = [];
-    expandedFileDiffs.value = new Set();
+    closeReviewAll();
   },
 );
+let chatRO: ResizeObserver | undefined;
 onBeforeUnmount(() => {
   if (dividerTimer) clearInterval(dividerTimer);
+  chatRO?.disconnect();
+  chatRO = undefined;
+});
+// 每次进入对话页刷新一次全量模型（从供应商页改完配置返回后立即可见）
+onMounted(() => {
+  void props.store.refreshModels();
+  // 跟踪对话区宽度：NSplit 的 min/max 与面板宽度换算依赖它
+  if (chatEl.value && typeof ResizeObserver !== "undefined") {
+    chatRO = new ResizeObserver((entries) => {
+      chatW.value = entries[0]?.contentRect.width ?? 1000;
+    });
+    chatRO.observe(chatEl.value);
+  }
 });
 
 const chips: { name: string; text: string }[] = [
@@ -288,10 +355,10 @@ function fillChip(text: string): void {
 
 async function sendFromHome(text: string, cwd?: string | null): Promise<void> {
   // cwd 为 null = 「不在项目中工作」（host 落到主目录）；
-  // 未指定时用最近会话的目录兜底
+  // 未指定时用最近会话的目录兜底；首页选中的模型随新会话生效
   const last = props.store.sessions[0];
   const dir = cwd === null ? undefined : cwd || last?.cwd || ".";
-  await props.store.newSession(dir);
+  await props.store.newSession(dir, homeModel.value ?? undefined);
   await props.store.send(text);
 }
 
@@ -326,7 +393,7 @@ watch(
 </script>
 
 <template>
-  <div class="chat" :class="{ home }">
+  <div ref="chatEl" class="chat" :class="{ home }">
     <!-- home: watermark + greeting + composer -->
     <div v-if="home" class="home-wrap">
       <div class="watermark">π</div>
@@ -343,13 +410,15 @@ watch(
           :busy="false"
           :disabled="disabled"
           :disabled-hint="disabledHint"
-          :model="model"
+          :model="homeComposerModel"
+          :models="modelOptions"
           centered
           :projects="projects"
           :default-cwd="defaultCwd"
           placeholder="描述你的任务，Enter 发送"
           :preset="preset"
           @send="sendFromHome"
+          @set-model="setModel"
           @open-providers="emit('open-providers')"
         />
         <div class="chips">
@@ -362,6 +431,21 @@ watch(
 
     <!-- conversation -->
     <template v-else>
+      <n-split
+        direction="horizontal"
+        class="chat-split"
+        :size="reviewPane1Size"
+        min="360px"
+        :max="reviewPane1Max"
+        :resize-trigger-size="6"
+        :disabled="!reviewTabs.length"
+        :pane1-style="{ display: 'flex' }"
+        :pane2-style="{ flex: '1 1 0', minWidth: '0', overflow: 'hidden' }"
+        @update:size="onReviewSplitSize"
+        @drag-end="saveReview"
+      >
+        <template #1>
+      <div class="chat-main">
       <div ref="scroller" class="scroll">
         <div v-if="store.loadingHistory" class="hint">加载历史中…</div>
         <template v-for="(item, index) in store.items" :key="item.key">
@@ -393,6 +477,10 @@ watch(
             <span class="turn-line"></span>
           </div>
         </template>
+        <!-- 工作中尾部的旋转 loading（消息/工具流到来前后的活动指示） -->
+        <div v-if="busy" class="working-load">
+          <Icon name="loader-2-line" :size="18" />
+        </div>
         <div v-if="busy && lastUserIndex === -1" class="turn-divider">
           <span class="turn-label">工作中 · {{ formatSpan(Math.max(1000, nowTick - (store.turnStartedAt ?? nowTick))) }}</span>
           <span class="turn-line"></span>
@@ -413,21 +501,19 @@ watch(
           <div v-if="fileChangesOpen" class="files-list">
             <template v-for="f in store.fileChanges" :key="f.path">
               <div class="file-row">
-                <span class="tile">{{ extOf(f.path) }}</span>
+                <span class="tile"><FileIcon :path="f.path" :size="15" /></span>
                 <span class="f-name" :title="f.path">{{ baseOf(f.path) }}</span>
                 <span class="f-dir">{{ dirOfPath(f.path) }}</span>
                 <span class="t-add">+{{ f.added }}</span>
                 <span class="t-del">−{{ f.removed }}</span>
-                <button class="review-btn" @click="toggleFileDiff(f.path)">
-                  {{ diffOpen(f.path) ? "收起" : "审查" }}
+                <button
+                  class="review-btn"
+                  :class="{ on: reviewTabs.some((t) => t.path === f.path) }"
+                  @click="toggleReview(f.path)"
+                >
+                  {{ reviewActive === f.path ? "收起" : "审查" }}
                 </button>
               </div>
-              <DiffView
-                v-if="diffOpen(f.path) && fileDiffCache[f.path]"
-                :old-text="fileDiffCache[f.path]!.oldText"
-                :new-text="fileDiffCache[f.path]!.newText"
-                :file="f.path"
-              />
             </template>
           </div>
         </div>
@@ -452,10 +538,24 @@ watch(
           @abort="store.abort()"
           @set-permission-mode="(m: string) => store.setPermissionMode(m)"
           @set-thinking-level="(l: string) => store.setThinkingLevel(l)"
-          @set-model="(m: string) => store.setModel(m)"
+          @set-model="setModel"
           @open-providers="emit('open-providers')"
         />
       </div>
+      </div>
+      </template>
+        <template #2>
+          <ReviewPanel
+            v-if="reviewTabs.length"
+            :tabs="reviewTabs"
+            :active="reviewActive ?? reviewTabs[0]!.path"
+            @select="(p: string) => (reviewActive = p)"
+            @close-tab="closeReviewTab"
+            @close="closeReviewAll"
+          />
+        </template>
+        <template #resize-trigger><div class="rz-line" /></template>
+      </n-split>
     </template>
   </div>
 </template>
@@ -472,6 +572,37 @@ export default { components: { ToolCard, MessageItem } };
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+}
+.chat-split {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* NSplit 触发条内容：6px 命中区 + 悬停主题色线 */
+.rz-line {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  cursor: col-resize;
+}
+.rz-line::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: transparent;
+  transition: background-color 0.15s;
+}
+.rz-line:hover::after {
+  background: var(--pd-accent);
+  opacity: 0.55;
+}
+.chat-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 360px;
   min-height: 0;
 }
 .chat.home { background: var(--pd-bg); }
@@ -585,6 +716,18 @@ export default { components: { ToolCard, MessageItem } };
   margin: 14px 0 6px;
   user-select: none;
 }
+.working-load {
+  padding: 8px 0 10px;
+  color: var(--pd-text-4);
+  user-select: none;
+}
+.working-load svg {
+  display: block;
+  animation: work-spin 0.9s linear infinite;
+}
+@keyframes work-spin {
+  to { transform: rotate(360deg); }
+}
 .turn-label {
   flex: none;
   font-size: 12px;
@@ -661,17 +804,11 @@ export default { components: { ToolCard, MessageItem } };
 }
 .file-row:last-child { border-bottom: none; }
 .tile {
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
   flex: none;
-  border-radius: 7px;
   display: grid;
   place-items: center;
-  background: var(--pd-accent-soft);
-  color: var(--pd-accent);
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
 }
 .f-name {
   color: var(--pd-text);
@@ -698,6 +835,11 @@ export default { components: { ToolCard, MessageItem } };
   cursor: pointer;
 }
 .review-btn:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
+.review-btn.on {
+  color: var(--pd-text);
+  background: var(--pd-bg-hover);
+  border-color: var(--pd-accent);
+}
 
 /* ---- 工具审批横幅 ---- */
 .approval {

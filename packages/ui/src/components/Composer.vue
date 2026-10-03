@@ -102,9 +102,37 @@ function selectThink(level: string): void {
   thinkOpen.value = false;
   emit("setThinkingLevel", level);
 }
+function toggleModelMenu(): void {
+  modelOpen.value = !modelOpen.value;
+  permOpen.value = false;
+  thinkOpen.value = false;
+  modelQuery.value = "";
+}
 function selectModel(model: string): void {
   modelOpen.value = false;
+  modelQuery.value = "";
   emit("setModel", model);
+}
+
+/** 模型菜单：按 provider 分组（provider/id → 组标题 + 模型 id），支持过滤 */
+const modelQuery = ref("");
+const modelGroups = computed(() => {
+  const q = modelQuery.value.trim().toLowerCase();
+  const groups = new Map<string, Array<{ id: string; full: string }>>();
+  for (const m of props.models ?? []) {
+    if (q && !m.toLowerCase().includes(q)) continue;
+    const slash = m.indexOf("/");
+    const provider = slash > 0 ? m.slice(0, slash) : "其他";
+    const id = slash > 0 ? m.slice(slash + 1) : m;
+    const list = groups.get(provider) ?? [];
+    list.push({ id, full: m });
+    groups.set(provider, list);
+  }
+  return [...groups.entries()].map(([provider, items]) => ({ provider, items }));
+});
+function selectFirstModel(): void {
+  const first = modelGroups.value[0]?.items[0];
+  if (first) selectModel(first.full);
 }
 
 const CUSTOM_KEY = "pidock.customProjects";
@@ -216,6 +244,7 @@ function onDocClick(e: MouseEvent): void {
     permOpen.value = false;
     thinkOpen.value = false;
     modelOpen.value = false;
+    modelQuery.value = "";
   }
 }
 onMounted(() => document.addEventListener("click", onDocClick));
@@ -337,22 +366,35 @@ function onKeydown(e: KeyboardEvent): void {
 
       <!-- 模型 -->
       <div class="dd">
-        <button class="dd-btn" @click="modelOpen = !modelOpen; permOpen = false; thinkOpen = false">
+        <button class="dd-btn" @click="toggleModelMenu">
           <span class="ring"></span>
           <span>{{ model ?? "默认模型" }}</span>
           <span class="c-chev" :class="{ open: modelOpen }"><Icon :name="I.chevD" :size="11" /></span>
         </button>
         <div v-if="modelOpen" class="dd-menu up right">
-          <button
-            v-for="m in models"
-            :key="m"
-            class="c-item"
-            :class="{ on: m === model }"
-            @click="selectModel(m)"
-          >
-            <span class="c-item-name">{{ m }}</span>
-            <Icon v-if="m === model" class="c-check" :name="I.check" :size="14" />
-          </button>
+          <div class="c-search">
+            <Icon :name="I.search" :size="13" />
+            <input v-model="modelQuery" placeholder="搜索模型" @keydown.enter="selectFirstModel" />
+          </div>
+          <div class="m-list">
+            <template v-for="g in modelGroups" :key="g.provider">
+              <div class="m-group">{{ g.provider }}</div>
+              <button
+                v-for="it in g.items"
+                :key="it.full"
+                class="c-item"
+                :class="{ on: it.full === model }"
+                :title="it.full"
+                @click="selectModel(it.full)"
+              >
+                <span class="c-item-name">{{ it.id }}</span>
+                <Icon v-if="it.full === model" class="c-check" :name="I.check" :size="14" />
+              </button>
+            </template>
+            <div v-if="!modelGroups.length" class="c-empty">
+              {{ models?.length ? "没有匹配的模型" : "暂无可用模型，请在供应商页添加" }}
+            </div>
+          </div>
           <div class="c-sep"></div>
           <button class="c-item c-action" @click="modelOpen = false; emit('openProviders')">
             <Icon :name="I.gear" :size="14" />
@@ -592,6 +634,16 @@ textarea:disabled { opacity: 0.45; }
   z-index: 60;
 }
 .dd-menu.right { left: auto; right: 0; }
+.m-list { max-height: 280px; overflow-y: auto; }
+.m-group {
+  padding: 7px 10px 3px;
+  font-size: 11px;
+  color: var(--pd-text-4);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+.m-group:first-child { padding-top: 5px; }
 .perm-item {
   display: flex;
   align-items: flex-start;

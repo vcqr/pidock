@@ -28,14 +28,14 @@ const meta = {
     title: "插件",
     sub: "来源：~/.pi/agent/extensions（全局）与项目 .pi/extensions，改动对新会话生效。",
     placeholder: "搜索已安装的插件",
-    icon: "grid-line",
+    icon: "puzzle-2-line",
     empty: "还没有安装插件。把 .ts 扩展文件放进 ~/.pi/agent/extensions 即可。",
   },
   skills: {
     title: "技能",
     sub: "来源：~/.pi/agent/skills（全局）与项目 .pi/skills，改动对新会话生效。",
     placeholder: "搜索已安装的技能",
-    icon: "flashlight-line",
+    icon: "magic-line",
     empty: "还没有安装技能。把含 SKILL.md 的目录放进 ~/.pi/agent/skills 即可。",
   },
   mcp: {

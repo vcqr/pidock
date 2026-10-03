@@ -71,6 +71,14 @@ export interface SessionSummaryUi {
 let keyCounter = 0;
 const nextKey = (): string => `k${++keyCounter}`;
 
+/** config.models.list 返回的单个模型（全量可用模型，来自已配置供应商） */
+export interface ModelInfo {
+  provider: string;
+  id: string;
+  name: string;
+  reasoning: boolean;
+}
+
 /** 工具调用权限模式（与 host pool.ts 保持一致） */
 export type PermissionMode = "plan" | "confirm" | "edit-auto" | "full";
 
@@ -101,6 +109,8 @@ export function createAgentStore(bus: DataBus) {
   const turnEndedAt = ref<number | null>(null);
   /** 回合内被修改的文件（快照 vs 磁盘统计），回合结束后拉取 */
   const fileChanges = ref<Array<{ path: string; added: number; removed: number; isNew: boolean }>>([]);
+  /** 全量可用模型（已配置供应商，config.models.list），供模型下拉选择 */
+  const allModels = ref<ModelInfo[]>([]);
 
   let liveTools = new Map<string, UiToolItem>();
   let streaming: UiMessageItem | null = null;
@@ -305,11 +315,22 @@ export function createAgentStore(bus: DataBus) {
     }
   });
   await refreshSessions();
+  void refreshModels();
   }
 
   async function refreshSessions(): Promise<void> {
     const r = await bus.request("session.list");
     sessions.value = r.sessions ?? [];
+  }
+
+  /** 拉取全量可用模型（失败静默，下拉退回会话历史模型） */
+  async function refreshModels(): Promise<void> {
+    try {
+      const r = await bus.request("config.models.list");
+      allModels.value = r?.models ?? [];
+    } catch {
+      // 旧 host / 未配置供应商时忽略
+    }
   }
 
   /** merge a pushed session snapshot (web live updates) into the list */
@@ -356,6 +377,8 @@ export function createAgentStore(bus: DataBus) {
     } finally {
       loadingHistory.value = false;
     }
+    // 重启后打开会话：从落盘快照恢复文件变更卡片（无快照时为空）
+    void fetchFileChanges();
   }
 
   async function newSession(cwd?: string, model?: string): Promise<void> {
@@ -431,13 +454,18 @@ export function createAgentStore(bus: DataBus) {
     thinkingLevels.value = { ...thinkingLevels.value, [sid]: level };
   }
 
-  /** 按名称切换会话模型 */
+  /** 按名称切换会话模型（provider/model-id 唯一匹配） */
   async function setModel(model: string): Promise<void> {
     const sid = activeId.value;
     if (!sid) return;
-    const r = await bus.request("session.set_model", { session_id: sid, model });
-    const s = sessions.value.find((x) => x.session_id === sid);
-    if (s && r?.model) s.model = r.model;
+    try {
+      const r = await bus.request("session.set_model", { session_id: sid, model });
+      const s = sessions.value.find((x) => x.session_id === sid);
+      if (s && r?.model) s.model = r.model;
+      lastError.value = null;
+    } catch (err) {
+      lastError.value = err instanceof Error ? err.message : String(err);
+    }
   }
 
   /** 回合结束后拉取文件变更列表 */
@@ -477,9 +505,11 @@ export function createAgentStore(bus: DataBus) {
     turnStartedAt,
     turnEndedAt,
     fileChanges,
+    allModels,
     // actions
     start,
     refreshSessions,
+    refreshModels,
     upsertSessionSummary,
     openSession,
     newSession,

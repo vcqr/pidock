@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, provide, ref, watch } from "vue";
-import { darkTheme, NConfigProvider } from "naive-ui";
+import { darkTheme, NConfigProvider, NSplit } from "naive-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -37,6 +37,26 @@ const bus = createTauriBus();
 function startNewTask(): void {
   mainView.value = "chat";
   newTaskMode.value = true;
+}
+
+// ---- 左栏（会话侧栏）拖拽调宽（NSplit），宽度记忆在 localStorage ----
+const SIDEBAR_KEY = "pidock.sidebarWidth";
+const sidebarWidth = ref<number | null>(readSidebarWidth());
+function readSidebarWidth(): number | null {
+  const v = Number(localStorage.getItem(SIDEBAR_KEY));
+  return Number.isFinite(v) && v >= 190 && v <= 520 ? Math.round(v) : null;
+}
+function onSidebarSize(s: string | number): void {
+  // size 始终传 px 字符串，回调回来的也是 px 字符串
+  const px = typeof s === "string" ? parseFloat(s) : NaN;
+  if (Number.isFinite(px)) sidebarWidth.value = Math.round(Math.min(520, Math.max(190, px)));
+}
+function saveSidebar(): void {
+  try {
+    if (sidebarWidth.value != null) localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth.value));
+  } catch {
+    // localStorage 不可用时忽略
+  }
 }
 
 provide(ATTACHMENT_LOADER, (id: string) => bus.loadAttachment(id));
@@ -127,11 +147,25 @@ onMounted(async () => {
       <p>检查 PIDOCK_HOST_CMD / PIDOCK_HOST_DIR 环境变量，或先运行 bun build 编译 host。</p>
     </div>
     <div v-else-if="store" class="layout">
+      <n-split
+        direction="horizontal"
+        class="layout-split"
+        :size="`${sidebarWidth ?? 260}px`"
+        min="190px"
+        max="520px"
+        :resize-trigger-size="6"
+        :pane1-style="{ display: 'flex' }"
+        :pane2-style="{ flex: '1 1 0', minWidth: 0, display: 'flex' }"
+        @update:size="onSidebarSize"
+        @drag-end="saveSidebar"
+      >
+        <template #1>
       <SessionSidebar
         :sessions="store.sessions"
         :active-id="store.activeId"
         :show-tool-nav="true"
         :active-tool="mainView === 'chat' ? undefined : mainView"
+        :width="sidebarWidth ?? undefined"
         @select="(id) => { mainView = 'chat'; store?.openSession(id); }"
         @new-task="startNewTask"
         @open-tools="(t) => (mainView = t)"
@@ -139,6 +173,9 @@ onMounted(async () => {
       >
         <template #bottom><SyncPanel /></template>
       </SessionSidebar>
+      </template>
+        <template #resize-trigger><div class="rz-line" /></template>
+        <template #2>
       <main class="main">
         <header class="titlebar" data-tauri-drag-region>
           <StatePill :state="store.agentState" />
@@ -179,6 +216,8 @@ onMounted(async () => {
           @close="showSettings = false"
         />
       </main>
+        </template>
+      </n-split>
     </div>
     <div v-else class="boot-error">正在启动 pi-host…</div>
   </n-config-provider>
@@ -188,6 +227,29 @@ onMounted(async () => {
 .layout {
   display: flex;
   height: 100vh;
+}
+.layout-split {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+/* NSplit 触发条内容：6px 命中区 + 悬停主题色线 */
+.rz-line {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  cursor: col-resize;
+}
+.rz-line::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: transparent;
+  transition: background-color 0.15s;
+}
+.rz-line:hover::after {
+  background: var(--pd-accent);
+  opacity: 0.55;
 }
 .main {
   flex: 1;
