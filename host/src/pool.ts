@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -95,11 +95,18 @@ export class SessionPool {
   private permissionStates = new Map<string, { mode: PermissionMode }>();
   /** 每会话回合内被修改文件的快照（撤销/文件变更卡片的数据源） */
   private fileSnapshots = new Map<string, Map<string, { existed: boolean; content: Buffer }>>();
+  /** bash 工具执行前的目录元数据扫描（执行后 diff 出新建文件补快照） */
+  private bashPreScans = new Map<string, Map<string, { mtime: number; size: number }>>();
   /** 等待用户审批的工具调用 */
   private pendingApprovals = new Map<
     string,
     { sessionId: string; resolve: (approved: boolean) => void }
   >();
+
+  constructor() {
+    // 启动时清理 registry 里已不存在会话的快照落盘文件
+    this.pruneSnapshots();
+  }
 
   // ---------------------------------------------------------------- model
 
@@ -286,7 +293,9 @@ export class SessionPool {
     const tracked = this.sessions.get(params.session_id);
     if (!tracked) return { closed: false };
     this.denyApprovals(params.session_id);
+    // 只清内存；落盘快照保留，重新打开会话后文件变更/审查/撤销仍可用
     this.fileSnapshots.delete(params.session_id);
+    this.bashPreScans.delete(params.session_id);
     tracked.unsubscribe();
     tracked.session.dispose();
     this.sessions.delete(params.session_id);
@@ -474,17 +483,154 @@ export class SessionPool {
 
   // ---------------------------------------------------------- file changes
 
-  /** 修改类工具执行前快照目标文件（每回合每路径只保留最早的版本） */
-  private snapshotBeforeMutation(sessionId: string, cwd: string, toolName: string, input: unknown): void {
+  /** 快照落盘目录：~/.pi/agent/pidock/snapshots/<session_id>.json（重启后审查/撤销仍可用） */
+  private snapshotsDir(): string {
+    return join(getAgentDir(), "pidock", "snapshots");
+  }
+
+  private snapshotPath(sessionId: string): string {
+    return join(this.snapshotsDir(), `${sessionId}.json`);
+  }
+
+  /** 取会话的快照表；内存没有时从磁盘懒加载（重启恢复） */
+  private loadSnapshots(sessionId: string): Map<string, { existed: boolean; content: Buffer }> {
+    const cached = this.fileSnapshots.get(sessionId);
+    if (cached) return cached;
+    const map = new Map<string, { existed: boolean; content: Buffer }>();
+    try {
+      const raw: unknown = JSON.parse(readFileSync(this.snapshotPath(sessionId), "utf8"));
+      if (Array.isArray(raw)) {
+        for (const e of raw as Array<Record<string, unknown>>) {
+          if (typeof e?.path === "string" && typeof e?.content === "string") {
+            map.set(e.path, {
+              existed: Boolean(e.existed),
+              content: Buffer.from(e.content, "base64"),
+            });
+          }
+        }
+      }
+    } catch {
+      // 无落盘文件或损坏 → 空表
+    }
+    this.fileSnapshots.set(sessionId, map);
+    return map;
+  }
+
+  /** 把会话的内存快照写盘；空表时移除落盘文件 */
+  private persistSnapshots(sessionId: string): void {
+    const map = this.fileSnapshots.get(sessionId);
+    try {
+      if (!map || map.size === 0) {
+        rmSync(this.snapshotPath(sessionId), { force: true });
+        return;
+      }
+      mkdirSync(this.snapshotsDir(), { recursive: true });
+      const data = [...map.entries()].map(([path, snap]) => ({
+        path,
+        existed: snap.existed,
+        content: snap.content.toString("base64"),
+      }));
+      writeFileSync(this.snapshotPath(sessionId), JSON.stringify(data));
+    } catch {
+      // 落盘失败不影响内存快照
+    }
+  }
+
+  /** 启动时清理 registry 里已不存在会话的快照落盘文件 */
+  private pruneSnapshots(): void {
+    try {
+      const dir = this.snapshotsDir();
+      if (!existsSync(dir)) return;
+      const known = new Set(this.readRegistry().map((e) => e.session_id));
+      for (const f of readdirSync(dir)) {
+        if (f.endsWith(".json") && !known.has(f.slice(0, -5))) {
+          rmSync(join(dir, f), { force: true });
+        }
+      }
+    } catch {
+      // 清理失败无碍运行
+    }
+  }
+
+  /**
+   * 目录元数据扫描（路径 → mtime+size），供 bash 前后 diff 出新建文件。
+   * 只存元数据不存内容；跳过依赖/产物目录，限制条目数与深度防止大仓卡顿。
+   */
+  private scanTreeMeta(root: string): Map<string, { mtime: number; size: number }> {
+    const SKIP_DIRS = new Set([
+      "node_modules", ".git", "target", "dist", "build", ".next", "out",
+      "__pycache__", ".venv", "venv", "coverage", ".idea", ".vscode", ".cache",
+    ]);
+    const MAX_FILES = 20_000;
+    const MAX_DEPTH = 10;
+    const out = new Map<string, { mtime: number; size: number }>();
+    const walk = (dir: string, depth: number): void => {
+      if (depth > MAX_DEPTH || out.size >= MAX_FILES) return;
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (out.size >= MAX_FILES) return;
+        const abs = join(dir, e.name);
+        if (e.isDirectory()) {
+          if (!SKIP_DIRS.has(e.name)) walk(abs, depth + 1);
+        } else if (e.isFile()) {
+          try {
+            const st = statSync(abs);
+            out.set(abs, { mtime: st.mtimeMs, size: st.size });
+          } catch {
+            // 不可读的条目跳过
+          }
+        }
+      }
+    };
+    walk(root, 0);
+    return out;
+  }
+
+  /** bash 执行前：记录目录元数据基线 */
+  private bashScanStart(sessionId: string, cwd: string): void {
+    this.bashPreScans.set(sessionId, this.scanTreeMeta(cwd));
+  }
+
+  /**
+   * bash 执行后：与基线 diff，把「新建文件」补入快照（ existed=false，
+   * 撤销时删除、卡片显示全部新增行）。bash 修改已有文件的原始内容无法
+   * 回取，不纳入快照 —— edit/write 路径的快照不受影响。
+   */
+  private bashScanEnd(sessionId: string, cwd: string): void {
+    const pre = this.bashPreScans.get(sessionId);
+    this.bashPreScans.delete(sessionId);
+    if (!pre) return;
+    const post = this.scanTreeMeta(cwd);
+    const map = this.loadSnapshots(sessionId);
+    let added = 0;
+    for (const [abs, meta] of post) {
+      const before = pre.get(abs);
+      if (before) continue; // 已存在（无论内容是否变化）→ 无法回取原文，跳过
+      if (map.has(abs)) continue; // edit/write 已有更早快照，保留最早版本
+      if (added >= 200) break; // 单次 bash 命令的追踪上限
+      try {
+        const st = statSync(abs);
+        if (!st.isFile() || st.size > 4 * 1024 * 1024) continue;
+        map.set(abs, { existed: false, content: Buffer.alloc(0) });
+        added++;
+      } catch {
+        // 竞态中被删除/不可读 → 跳过
+      }
+    }
+    if (added > 0) this.persistSnapshots(sessionId);
+  }
+
+  /** 修改类工具执行前快照目标文件（每回合每路径只保留最早的版本） */  private snapshotBeforeMutation(sessionId: string, cwd: string, toolName: string, input: unknown): void {
     if (toolName !== "edit" && toolName !== "write") return;
     const a = (input ?? {}) as Record<string, unknown>;
     const rel = String(a.path ?? "");
     if (!rel) return;
-    let map = this.fileSnapshots.get(sessionId);
-    if (!map) {
-      map = new Map();
-      this.fileSnapshots.set(sessionId, map);
-    }
+    const map = this.loadSnapshots(sessionId);
     const abs = resolve(cwd, rel);
     if (map.has(abs)) return;
     try {
@@ -494,14 +640,15 @@ export class SessionPool {
     } catch {
       map.set(abs, { existed: false, content: Buffer.alloc(0) }); // 新建文件
     }
+    this.persistSnapshots(sessionId);
   }
 
   /** 回合内被修改的文件列表（快照 vs 磁盘当前内容的行级统计） */
   fileChanges(params: { session_id: string }): {
     files: Array<{ path: string; added: number; removed: number; isNew: boolean }>;
   } {
-    const map = this.fileSnapshots.get(params.session_id);
-    if (!map) return { files: [] };
+    const map = this.loadSnapshots(params.session_id);
+    if (map.size === 0) return { files: [] };
     const files = [...map.entries()].map(([abs, snap]) => {
       let current: string | null = null;
       try {
@@ -510,8 +657,15 @@ export class SessionPool {
         current = null;
       }
       const oldText = snap.existed ? snap.content.toString("utf8") : "";
-      const oldLines = oldText ? oldText.split("\n") : [];
-      const newLines = current ? current.split("\n") : [];
+      // 末尾换行不产生空行（split("\n") 会多出一个尾元素）
+      const splitLines = (t: string): string[] => {
+        if (!t) return [];
+        const ls = t.split("\n");
+        if (ls[ls.length - 1] === "") ls.pop();
+        return ls;
+      };
+      const oldLines = splitLines(oldText);
+      const newLines = splitLines(current ?? "");
       const oldSet = new Set(oldLines);
       const newSet = new Set(newLines);
       return {
@@ -526,7 +680,7 @@ export class SessionPool {
 
   /** 单个文件的快照与当前内容（供 UI 渲染 diff） */
   fileDiff(params: { session_id: string; path: string }): { oldText: string; newText: string } {
-    const map = this.fileSnapshots.get(params.session_id);
+    const map = this.loadSnapshots(params.session_id);
     const abs = resolve(params.path ?? "");
     const snap = map?.get(abs);
     if (!snap) throw new RpcError("not_found", "no snapshot for this path");
@@ -541,8 +695,8 @@ export class SessionPool {
 
   /** 撤销：恢复所有快照文件（新建的删除），返回恢复数量 */
   revertFiles(params: { session_id: string }): { reverted: number } {
-    const map = this.fileSnapshots.get(params.session_id);
-    if (!map) return { reverted: 0 };
+    const map = this.loadSnapshots(params.session_id);
+    if (map.size === 0) return { reverted: 0 };
     let reverted = 0;
     for (const [abs, snap] of map) {
       try {
@@ -554,6 +708,7 @@ export class SessionPool {
       }
     }
     this.fileSnapshots.delete(params.session_id);
+    this.persistSnapshots(params.session_id);
     return { reverted };
   }
 
@@ -717,6 +872,8 @@ export class SessionPool {
         }
         case "tool_execution_start": {
           this.setState(tracked, sessionId, "executing_tool");
+          // bash 建文件绕过 edit/write 快照：执行前记录目录基线，结束后 diff 补快照
+          if (event.toolName === "bash") this.bashScanStart(sessionId, tracked.cwd);
           const args = JSON.stringify(event.args ?? {});
           emitEvent(sessionId, Event.TOOL_EXECUTION_START, {
             call_id: event.toolCallId,
@@ -739,6 +896,7 @@ export class SessionPool {
         }
         case "tool_execution_end": {
           this.setState(tracked, sessionId, "thinking");
+          if (event.toolName === "bash") this.bashScanEnd(sessionId, tracked.cwd);
           const result =
             typeof event.result === "string"
               ? event.result
