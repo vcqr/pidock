@@ -40,6 +40,8 @@ export interface UiMessageItem {
   thinkingMs?: number;
   /** 消息时间戳（历史回放来自 session 条目），用于回合耗时统计 */
   ts?: string;
+  /** 回合 id（本条用户消息的 session 条目官方 id，回合分组/变更卡片聚合键） */
+  turnId?: string;
 }
 
 export interface UiToolItem {
@@ -111,6 +113,8 @@ export function createAgentStore(bus: DataBus) {
   const turnEndedAt = ref<number | null>(null);
   /** 回合内被修改的文件（快照 vs 磁盘统计），回合结束后拉取 */
   const fileChanges = ref<Array<{ path: string; added: number; removed: number; isNew: boolean }>>([]);
+  /** 上述变更归属的回合 id（session.file_changes 返回，与快照落盘一致） */
+  const fileChangesTurnId = ref<string>("");
   /** 全量可用模型（已配置供应商，config.models.list），供模型下拉选择 */
   const allModels = ref<ModelInfo[]>([]);
 
@@ -167,18 +171,20 @@ export function createAgentStore(bus: DataBus) {
       );
       if (pendingUser) {
         pendingUser.pending = false;
+        pendingUser.turnId = p.entry_id || pendingUser.turnId;
         if (!pendingUser.ts) pendingUser.ts = itemTs;
         return;
       }
       pushItem(items.value, {
         kind: "message",
-        key: p.message_id ?? nextKey(),
+        key: p.entry_id ?? nextKey(),
         role: "user",
         text: firstText(p) ?? "",
         thinking: "",
         blocks: null,
         streaming: false,
         ts: itemTs,
+        turnId: p.entry_id || undefined,
       });
       return;
     }
@@ -502,6 +508,7 @@ export function createAgentStore(bus: DataBus) {
     try {
       const r = await bus.request("session.file_changes", { session_id: activeId.value });
       fileChanges.value = r.files ?? [];
+      fileChangesTurnId.value = r.turn_id ?? "";
     } catch {
       fileChanges.value = [];
     }
@@ -534,6 +541,7 @@ export function createAgentStore(bus: DataBus) {
     turnStartedAt,
     turnEndedAt,
     fileChanges,
+    fileChangesTurnId,
     allModels,
     // actions
     start,

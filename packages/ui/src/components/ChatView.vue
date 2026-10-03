@@ -164,7 +164,8 @@ const turnGroups = computed(() => {
       if (ms > 0) duration = formatSpan(ms);
     }
     groups.push({
-      key: uIt && uIt.kind === "message" ? uIt.key : `turn-${u}`,
+      // 分组键优先用官方回合 id（该轮用户消息的 session 条目 id），旧数据回退到消息 key
+      key: uIt && uIt.kind === "message" ? (uIt.turnId ?? uIt.key) : `turn-${u}`,
       userIndex: u,
       endIndex,
       finished,
