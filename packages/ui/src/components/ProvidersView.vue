@@ -1071,7 +1071,9 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
 .adv-toggle svg.fold { transform: rotate(-90deg); }
 .adv-body { display: flex; flex-direction: column; gap: 8px; padding-left: 2px; }
 .cap-chips { display: flex; gap: 8px; flex-wrap: wrap; }
-.cap-chip {
+/* .me-card 前缀提高特异性：压过 .field label/input 的块级与全宽样式 */
+.me-card .cap-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.me-card .cap-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -1083,10 +1085,16 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   font-size: 12.5px;
   cursor: pointer;
   user-select: none;
+  margin-bottom: 0;
 }
-.cap-chip.on { border-color: var(--pd-accent); color: var(--pd-accent-text); background: var(--pd-accent-soft); }
-.cap-chip input { accent-color: var(--pd-accent); margin: 0; }
-.cap-chip.locked { color: var(--pd-text-4); cursor: default; }
+.me-card .cap-chip.on { border-color: var(--pd-accent); color: var(--pd-accent-text); background: var(--pd-accent-soft); }
+.me-card .cap-chip input {
+  width: auto;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--pd-accent);
+}
+.me-card .cap-chip.locked { color: var(--pd-text-4); cursor: default; }
 .mono { font-family: Consolas, monospace; font-size: 12px; }
 .me-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .me-cancel {
