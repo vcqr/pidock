@@ -235,6 +235,7 @@ export const Method = {
   SESSION_CLOSE: "session.close",
   SESSION_EVENTS: "session.events",
   SESSION_RENAME: "session.rename",
+  MODEL_OVERRIDE_SET: "config.model_override.set",
   WORKSPACE_FILES: "workspace.files",
   SESSION_SET_PERMISSION_MODE: "session.set_permission_mode",
   SESSION_RESOLVE_APPROVAL: "session.resolve_approval",

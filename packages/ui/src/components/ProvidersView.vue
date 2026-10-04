@@ -39,7 +39,7 @@ const notice = ref<string | null>(null);
 const query = ref("");
 const providers = ref<ProviderRow[]>([]);
 const modelsJsonPath = ref("");
-const allModels = ref<Array<{ provider: string; id: string; name?: string; reasoning: boolean }>>([]);
+const allModels = ref<Array<{ provider: string; id: string; name?: string; reasoning: boolean; input?: string[]; contextWindow?: number; maxTokens?: number }>>([]);
 const defaultProvider = ref("");
 const defaultModel = ref("");
 const selected = ref<string | null>(null);
@@ -75,7 +75,11 @@ const formModelRows = ref<Array<ModelRow>>([]);
 
 // ---- 模型编辑弹窗 ----
 const editingModel = ref<{
-  index: number;
+  /** row = 自定义供应商表单行；override = 内置模型覆盖（保存即写入 host） */
+  mode: "row" | "override";
+  providerId?: string;
+  origId?: string;
+  index?: number;
   id: string;
   contextWindow: string;
   maxTokens: string;
@@ -93,6 +97,7 @@ function openModelEditor(i: number): void {
   const r = formModelRows.value[i];
   if (!r) return;
   editingModel.value = {
+    mode: "row",
     index: i,
     id: r.id,
     contextWindow: r.contextWindow != null ? String(r.contextWindow) : "",
@@ -106,7 +111,32 @@ function openModelEditor(i: number): void {
   advOpen.value = false;
 }
 
-function saveModelEditor(): void {
+/** 内置模型：点击行打开覆盖配置弹窗（预填运行时当前值） */
+function openModelOverrideEditor(m: {
+  provider: string;
+  id: string;
+  input?: string[];
+  reasoning?: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+}): void {
+  editingModel.value = {
+    mode: "override",
+    providerId: m.provider,
+    origId: m.id,
+    id: m.id,
+    contextWindow: m.contextWindow != null ? String(m.contextWindow) : "",
+    maxTokens: m.maxTokens != null ? String(m.maxTokens) : "",
+    image: m.input?.includes("image") ?? false,
+    reasoning: m.reasoning ?? false,
+    video: false,
+    pdf: false,
+    tlmText: "",
+  };
+  advOpen.value = false;
+}
+
+async function saveModelEditor(): Promise<void> {
   const e = editingModel.value;
   if (!e) return;
   let tlm: unknown;
@@ -118,7 +148,33 @@ function saveModelEditor(): void {
       return;
     }
   }
-  const r = formModelRows.value[e.index];
+  if (e.mode === "override") {
+    formBusy.value = true;
+    try {
+      const extInput = [e.video && "video", e.pdf && "pdf"].filter(Boolean);
+      await props.bus.request("config.model_override.set", {
+        provider: e.providerId,
+        model: e.origId,
+        override: {
+          input: e.image ? ["text", "image"] : ["text"],
+          ...(e.reasoning ? { reasoning: true } : {}),
+          ...(Number(e.contextWindow) ? { contextWindow: Number(e.contextWindow) } : {}),
+          ...(Number(e.maxTokens) ? { maxTokens: Number(e.maxTokens) } : {}),
+          ...(tlm ? { thinkingLevelMap: tlm } : {}),
+          ...(extInput.length ? { extInput } : {}),
+        },
+      });
+      await load();
+      flash(`已保存「${e.origId}」的模型配置`);
+      editingModel.value = null;
+    } catch (err) {
+      flash(String(err));
+    } finally {
+      formBusy.value = false;
+    }
+    return;
+  }
+  const r = formModelRows.value[e.index!];
   if (r) {
     r.id = e.id.trim() || r.id;
     r.image = e.image;
@@ -187,7 +243,18 @@ async function load(): Promise<void> {
     providers.value = [...ids].map((id) => {
       const entry = entries[id] ?? null;
       const rt = runtime[id];
-      const source = entry ? "custom" : "builtin";
+      // 仅含 modelOverrides 的条目 = 内置模型的覆盖配置，不算自定义供应商
+      const overrideOnly =
+        entry &&
+        !entry.baseUrl &&
+        !entry.api &&
+        !entry.apiKey &&
+        !entry.oauth &&
+        !entry.headers &&
+        !entry.compat &&
+        !entry.authHeader &&
+        !(Array.isArray(entry.models) && entry.models.length);
+      const source = entry && !overrideOnly ? "custom" : "builtin";
       return {
         id,
         source,
@@ -233,7 +300,10 @@ const isCustom = computed(() => selectedRow.value?.source === "custom");
 
 const providerModels = computed(() => {
   if (!selected.value) return [];
-  return allModels.value.filter((m) => m.provider === selected.value).slice(0, 200);
+  return allModels.value
+    .filter((m) => m.provider === selected.value)
+    .slice(0, 200)
+    .map((m) => ({ ...m, image: m.input?.includes("image") ?? false }));
 });
 const isDefaultModel = (m: { provider: string; id: string }): boolean =>
   defaultProvider.value === m.provider && defaultModel.value === m.id;
@@ -598,11 +668,18 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
           <h2>模型 <span class="count">{{ providerModels.length }}</span></h2>
         </div>
         <div class="model-list">
-          <div v-for="m in providerModels" :key="m.id" class="model-row">
+          <div
+            v-for="m in providerModels"
+            :key="m.id"
+            class="model-row"
+            title="点击编辑模型配置"
+            @click="openModelOverrideEditor(m)"
+          >
             <span class="m-id">{{ m.id }}</span>
+            <span v-if="m.image" class="type-badge">视觉</span>
             <span v-if="m.reasoning" class="type-badge">推理</span>
             <span v-if="isDefaultModel(m)" class="badge">默认</span>
-            <button v-else class="ghost-btn wide" @click="setDefault(m)">设为默认</button>
+            <button v-else class="ghost-btn wide" @click.stop="setDefault(m)">设为默认</button>
           </div>
           <div v-if="!providerModels.length" class="state small">该供应商暂无可用模型（可能缺少密钥）</div>
         </div>

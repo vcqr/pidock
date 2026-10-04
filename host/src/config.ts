@@ -190,7 +190,7 @@ export class ConfigService {
   }
 
   async modelsList(): Promise<{
-    models: Array<{ provider: string; id: string; name: string; reasoning: boolean; input: string[] }>;
+    models: Array<{ provider: string; id: string; name: string; reasoning: boolean; input: string[]; contextWindow?: number; maxTokens?: number }>;
   }> {
     const mr = await this.pool.modelRuntime();
     const models = mr.getModels().map((m: any) => ({
@@ -199,6 +199,8 @@ export class ConfigService {
       name: m.name ?? m.id,
       reasoning: Boolean(m.reasoning),
       input: Array.isArray(m.input) ? m.input.map(String) : ["text"],
+      contextWindow: typeof m.contextWindow === "number" ? m.contextWindow : undefined,
+      maxTokens: typeof m.maxTokens === "number" ? m.maxTokens : undefined,
     }));
     return { models };
   }
@@ -402,6 +404,32 @@ export class ConfigService {
 
   // ------------------------------------------------------------- models.json
   // 自定义模型供应商（pi 的 models.json），供桌面端「模型供应商」页读写
+
+  /** 设置/清除内置模型的覆盖配置（写入 models.json providers[id].modelOverrides，运行时实时应用） */
+  modelOverrideSet(params: { provider: string; model: string; override: Json | null }): { ok: true } {
+    const provider = (params.provider ?? "").trim();
+    const model = (params.model ?? "").trim();
+    if (!provider || !model) throw new RpcError("bad_request", "provider and model are required");
+    const path = join(getAgentDir(), "models.json");
+    const config = readJson(path) ?? {};
+    if (!config.providers || typeof config.providers !== "object") config.providers = {};
+    const raw = config.providers[provider];
+    const entry = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    if (params.override && typeof params.override === "object" && !Array.isArray(params.override)) {
+      entry.modelOverrides = entry.modelOverrides && typeof entry.modelOverrides === "object" ? entry.modelOverrides : {};
+      entry.modelOverrides[model] = params.override;
+    } else if (entry.modelOverrides && typeof entry.modelOverrides === "object") {
+      delete entry.modelOverrides[model];
+      if (Object.keys(entry.modelOverrides).length === 0) delete entry.modelOverrides;
+    }
+    if (Object.keys(entry).length === 0) {
+      delete config.providers[provider];
+    } else {
+      config.providers[provider] = entry;
+    }
+    writeJson(path, config);
+    return { ok: true };
+  }
 
   customProvidersGet(): { config: Json | null; path: string } {
     const path = join(getAgentDir(), "models.json");

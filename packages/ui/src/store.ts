@@ -88,6 +88,8 @@ export interface ModelInfo {
   reasoning: boolean;
   /** 模型输入能力（["text"] 或 ["text","image"]） */
   input?: string[];
+  contextWindow?: number;
+  maxTokens?: number;
 }
 
 /** 工具调用权限模式（与 host pool.ts 保持一致） */
@@ -527,6 +529,16 @@ export function createAgentStore(bus: DataBus) {
     }
   }
 
+  /** 设置/清除内置模型覆盖配置（写入 models.json modelOverrides，null 清除） */
+  async function setModelOverride(
+    provider: string,
+    model: string,
+    override: Record<string, unknown> | null,
+  ): Promise<void> {
+    await bus.request("config.model_override.set", { provider, model, override: override ?? null });
+    await refreshModels();
+  }
+
   /** 技能列表（$ 选择技能用），仅返回启用的 */
   async function listSkills(
     cwd?: string,
@@ -605,6 +617,7 @@ export function createAgentStore(bus: DataBus) {
     setPermissionMode,
     renameSession,
     listSkills,
+    setModelOverride,
     listWorkspaceFiles,
     resolveApproval,
     setThinkingLevel,
