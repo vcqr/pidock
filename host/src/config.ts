@@ -402,6 +402,28 @@ export class ConfigService {
     return { ok: true };
   }
 
+  // --------------------------------------------------------------- AGENTS.md
+  // 「记忆」页：pi 每次会话都会把 ~/.pi/agent/AGENTS.md 作为长期上下文注入，
+  // 这里提供该文件的读写，让用户在桌面端维护跨项目记忆。
+
+  agentsRead(): { path: string; exists: boolean; text: string } {
+    const path = join(getAgentDir(), "AGENTS.md");
+    if (!existsSync(path)) return { path, exists: false, text: "" };
+    return { path, exists: true, text: readFileSync(path, "utf8") };
+  }
+
+  agentsWrite(params: { text: string }): { ok: true; path: string } {
+    if (typeof params.text !== "string") {
+      throw new RpcError("bad_request", "text must be a string");
+    }
+    if (params.text.length > 1024 * 1024) {
+      throw new RpcError("bad_request", "AGENTS.md too large (1MB cap)");
+    }
+    const path = join(getAgentDir(), "AGENTS.md");
+    writeFileSync(path, params.text);
+    return { ok: true, path };
+  }
+
   // ------------------------------------------------------------- models.json
   // 自定义模型供应商（pi 的 models.json），供桌面端「模型供应商」页读写
 

@@ -268,6 +268,9 @@ export const Method = {
   CONFIG_PROVIDERS_FETCH_MODELS: "config.providers.fetch_models",
   CONFIG_MCP_GET: "config.mcp.get",
   CONFIG_MCP_SET: "config.mcp.set",
+  CONFIG_AGENTS_READ: "config.agents.read",
+  CONFIG_AGENTS_WRITE: "config.agents.write",
+  STATS_USAGE: "stats.usage",
   ATTACHMENT_GET: "attachment.get",
 } as const;
 

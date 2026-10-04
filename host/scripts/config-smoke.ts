@@ -191,6 +191,65 @@ async function main(): Promise<number> {
     const settingsFinal = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"));
     check("models.set_default", settingsFinal.defaultProvider === "anthropic");
 
+    // ---- memory (AGENTS.md) ----
+    const memBefore = await request("config.agents.read");
+    check("agents.read absent file", memBefore.exists === false && memBefore.text === "");
+    await request("config.agents.write", { text: "# 记忆\n- smoke test\n" });
+    const memAfter = await request("config.agents.read");
+    check(
+      "agents.write/read roundtrip",
+      memAfter.exists === true && memAfter.text.includes("smoke test") && memAfter.path.endsWith("AGENTS.md"),
+    );
+
+    // ---- usage stats（植入 registry + 会话 JSONL 后聚合） ----
+    const sessDir = join(agentDir, "sessions", "proj");
+    mkdirSync(sessDir, { recursive: true });
+    const jsonl = [
+      JSON.stringify({ type: "session", version: 3, id: "smoke-1", timestamp: "2026-10-03T10:00:00.000Z", cwd: workDir }),
+      JSON.stringify({ type: "model_change", id: "a1", parentId: null, timestamp: "2026-10-03T10:00:01.000Z", provider: "volcengine", modelId: "minimax-m3" }),
+      JSON.stringify({ type: "message", id: "a2", parentId: "a1", timestamp: "2026-10-03T10:00:02.000Z", message: { role: "user", content: "hi" } }),
+      JSON.stringify({ type: "message", id: "a3", parentId: "a2", timestamp: "2026-10-03T10:00:03.000Z", message: { role: "assistant", content: [], provider: "volcengine", model: "minimax-m3", usage: { input: 100, output: 20, cacheRead: 5, cacheWrite: 0, reasoning: 0, totalTokens: 125, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.5 } } } }),
+      JSON.stringify({ type: "message", id: "a4", parentId: "a3", timestamp: "2026-10-04T10:00:04.000Z", message: { role: "assistant", content: [], provider: "volcengine", model: "minimax-m3", usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 } } }),
+    ].join("\n");
+    const sessFile = join(sessDir, "2026-10-03T10-00-00-000Z_smoke-1.jsonl");
+    writeFileSync(sessFile, jsonl + "\n");
+    mkdirSync(join(agentDir, "pidock"), { recursive: true });
+    writeFileSync(
+      join(agentDir, "pidock", "registry.json"),
+      JSON.stringify({
+        sessions: [
+          {
+            session_id: "smoke-1",
+            file: sessFile,
+            cwd: workDir,
+            provider: "volcengine",
+            model: "minimax-m3",
+            created_at: "2026-10-03T10:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    const usage = await request("stats.usage", {});
+    check(
+      "stats.usage totals",
+      usage.scanned_sessions === 1 &&
+        usage.messages.user === 1 &&
+        usage.messages.assistant === 2 &&
+        usage.tokens.input === 110 &&
+        usage.tokens.output === 25 &&
+        usage.tokens.total === 140 &&
+        Math.abs(usage.cost - 0.5) < 1e-9,
+      JSON.stringify(usage.tokens),
+    );
+    check(
+      "stats.usage by_model/by_day",
+      usage.by_model?.[0]?.key === "volcengine/minimax-m3" &&
+        usage.by_model?.[0]?.tokens === 140 &&
+        usage.by_day?.length === 2,
+      usage.by_model?.map((m: any) => m.key).join(","),
+    );
+    check("stats.usage top_sessions", usage.top_sessions?.[0]?.tokens === 140 && usage.top_sessions?.[0]?.session_id === "smoke-1");
+
     clearTimeout(timeout);
     child.stdin.end();
     child.kill();

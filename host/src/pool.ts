@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -37,6 +38,11 @@ export class RpcError extends Error {
   ) {
     super(message);
   }
+}
+
+/** sum helper for JSONL usage counters that may be absent/non-numeric */
+function num(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
 interface TrackedSession {
@@ -335,6 +341,121 @@ export class SessionPool {
     if (s.retryAttempt > 0) return "retrying";
     if (s.isStreaming) return "responding";
     return s.isIdle ? "idle" : "thinking";
+  }
+
+  // ------------------------------------------------------------ usage stats
+
+  /**
+   * Aggregate usage statistics by scanning persisted session JSONL files
+   * (assistant message entries carry per-call token usage). Scanning is
+   * async line-streamed so live sessions are never blocked by big histories.
+   */
+  async usageStats(params: { max_sessions?: number } = {}): Promise<{
+    scanned_sessions: number;
+    messages: { user: number; assistant: number };
+    tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+    cost: number;
+    by_model: Array<{ key: string; sessions: number; messages: number; tokens: number }>;
+    by_day: Array<{ day: string; messages: number; tokens: number }>;
+    top_sessions: Array<{
+      session_id: string;
+      name?: string;
+      cwd: string;
+      model?: string;
+      messages: number;
+      tokens: number;
+      created_at: string;
+    }>;
+  }> {
+    const MAX_SESSIONS = Math.min(Math.max(params.max_sessions ?? 500, 1), 2000);
+    const MAX_LINE_CHARS = 2 * 1024 * 1024; // skip giant lines (embedded images etc.)
+
+    const entries = this.readRegistry()
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+      .slice(0, MAX_SESSIONS);
+
+    const messages = { user: 0, assistant: 0 };
+    const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+    let cost = 0;
+    const perModel = new Map<string, { sessions: Set<string>; messages: number; tokens: number }>();
+    const perDay = new Map<string, { messages: number; tokens: number }>();
+    const perSession = new Map<string, { messages: number; tokens: number }>();
+    let scanned = 0;
+
+    for (const entry of entries) {
+      if (!existsSync(entry.file)) continue;
+      scanned++;
+      const sid = entry.session_id;
+      const sess = { messages: 0, tokens: 0 };
+      const rl = createInterface({
+        input: createReadStream(entry.file, { encoding: "utf8" }),
+        crlfDelay: Infinity,
+      });
+      for await (const line of rl) {
+        if (!line || line.length > MAX_LINE_CHARS) continue;
+        let e: any;
+        try {
+          e = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (e?.type !== "message") continue;
+        const msg = e.message ?? {};
+        const ts: string = typeof e.timestamp === "string" ? e.timestamp : "";
+        if (msg.role === "user") {
+          messages.user++;
+          sess.messages++;
+        } else if (msg.role === "assistant") {
+          messages.assistant++;
+          sess.messages++;
+          const u = msg.usage ?? {};
+          const t = typeof u.totalTokens === "number" ? u.totalTokens : 0;
+          tokens.input += num(u.input);
+          tokens.output += num(u.output);
+          tokens.cacheRead += num(u.cacheRead);
+          tokens.cacheWrite += num(u.cacheWrite);
+          tokens.total += t;
+          cost += num(u.cost?.total);
+          sess.tokens += t;
+          const key = `${msg.provider ?? entry.provider ?? "?"}/${msg.model ?? entry.model ?? "?"}`;
+          const m = perModel.get(key) ?? { sessions: new Set<string>(), messages: 0, tokens: 0 };
+          m.sessions.add(sid);
+          m.messages++;
+          m.tokens += t;
+          perModel.set(key, m);
+          if (ts) {
+            const day = ts.slice(0, 10);
+            const d = perDay.get(day) ?? { messages: 0, tokens: 0 };
+            d.messages++;
+            d.tokens += t;
+            perDay.set(day, d);
+          }
+        }
+      }
+      perSession.set(sid, sess);
+    }
+
+    const byModel = [...perModel.entries()]
+      .map(([key, m]) => ({ key, sessions: m.sessions.size, messages: m.messages, tokens: m.tokens }))
+      .sort((a, b) => b.tokens - a.tokens);
+    const byDay = [...perDay.entries()]
+      .map(([day, d]) => ({ day, messages: d.messages, tokens: d.tokens }))
+      .sort((a, b) => (a.day < b.day ? -1 : 1));
+    const topSessions = entries
+      .map((e) => ({
+        session_id: e.session_id,
+        ...(e.name ? { name: e.name } : {}),
+        cwd: e.cwd,
+        ...(e.model ? { model: e.model } : {}),
+        messages: perSession.get(e.session_id)?.messages ?? 0,
+        tokens: perSession.get(e.session_id)?.tokens ?? 0,
+        created_at: e.created_at,
+      }))
+      .filter((s) => s.messages > 0)
+      .sort((a, b) => b.tokens - a.tokens)
+      .slice(0, 8);
+
+    return { scanned_sessions: scanned, messages, tokens, cost, by_model: byModel, by_day: byDay, top_sessions: topSessions };
   }
 
   /**
