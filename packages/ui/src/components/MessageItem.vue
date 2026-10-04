@@ -109,13 +109,38 @@ const userImages = computed<string[]>(() => {
 const toolEntries = computed(
   () => entries.value.filter((e) => e.kind === "tool") as Extract<Entry, { kind: "tool" }>[],
 );
+
+// ---- /skill: 展开（pi 会把用户消息整段替换为 <skill> 块 + 参数）→ 渲染层折叠 ----
+interface SkillExpansion {
+  name: string;
+  location: string;
+  body: string;
+  args: string;
+}
+const SKILL_EXPANSION_RE = /^<skill name="([^"]*)" location="([^"]*)">\n([\s\S]*?)\n<\/skill>\n\n?([\s\S]*)$/;
+const skillExpansion = computed<SkillExpansion | null>(() => {
+  if (props.item.role !== "user") return null;
+  const m = props.item.text.match(SKILL_EXPANSION_RE);
+  if (!m) return null;
+  return { name: m[1]!, location: m[2]!, body: m[3]!, args: m[4]! };
+});
+const skillOpen = ref(false);
 </script>
 
 <template>
   <!-- user message -->
   <div v-if="item.role === 'user'" class="row user" :class="{ dimmed }">
     <div class="bubble user-bubble" :class="{ pending: item.pending }">
-      <span class="content">{{ item.text }}</span>
+      <template v-if="skillExpansion">
+        <button class="skill-chip" :title="skillOpen ? '收起技能内容' : '展开技能内容'" @click="skillOpen = !skillOpen">
+          <Icon name="magic-line" :size="13" />
+          <span>技能 · {{ skillExpansion.name }}</span>
+          <Icon :name="skillOpen ? 'subtract-line' : 'add-line'" :size="12" />
+        </button>
+        <pre v-if="skillOpen" class="skill-body">{{ skillExpansion.body }}</pre>
+        <span v-if="skillExpansion.args" class="content">{{ skillExpansion.args }}</span>
+      </template>
+      <span v-else class="content">{{ item.text }}</span>
       <span v-if="item.pending" class="pending-mark">· 发送中</span>
       <div v-if="userImages.length" class="bubble-imgs">
         <img v-for="(u, i) in userImages" :key="i" :src="u" alt="" />
@@ -186,6 +211,36 @@ const toolEntries = computed(
 }
 .user-bubble.pending { opacity: 0.65; }
 .pending-mark { font-size: 11px; opacity: 0.75; margin-left: 6px; }
+
+/* /skill: 展开折叠 */
+.user-bubble .skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--pd-accent-soft);
+  color: var(--pd-accent-text);
+  border: none;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+.user-bubble .skill-body {
+  margin: 0 0 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--pd-bg);
+  border: 1px solid var(--pd-border-soft);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--pd-text-2);
+  white-space: pre-wrap;
+}
 
 .stream {
   position: relative;
