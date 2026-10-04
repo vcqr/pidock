@@ -682,9 +682,7 @@ async function removeServer(it: Row): Promise<void> {
   min-height: 0;
 }
 .wrap {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 30px 32px 48px;
+  padding: 30px 36px 48px;
 }
 .head {
   display: flex;
