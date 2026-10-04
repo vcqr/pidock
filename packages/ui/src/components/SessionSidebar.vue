@@ -471,7 +471,7 @@ onBeforeUnmount(() => {
         class="icon-btn"
         title="设置"
         @click="emit('open-settings')"
-      ><Icon name="settings-3-line" :size="15" /></button>
+      ><Icon name="settings-3-line" :size="17" /></button>
     </div>
   </aside>
 </template>

@@ -671,7 +671,7 @@ function onKeydown(e: KeyboardEvent): void {
       <!-- 思考级别 -->
       <div class="dd">
         <button class="dd-btn" @click="thinkOpen = !thinkOpen; permOpen = false; modelOpen = false; mention = null">
-          <Icon :name="I.gauge" :size="14" />
+          <Icon :name="I.gauge" :size="15" />
           <span>{{ thinkLabel }}</span>
           <span class="c-chev" :class="{ open: thinkOpen }"><Icon :name="I.chevD" :size="11" /></span>
         </button>
@@ -1068,8 +1068,8 @@ textarea:disabled { opacity: 0.45; }
 }
 
 .ring {
-  width: 9px;
-  height: 9px;
+  width: 12px;
+  height: 12px;
   border: 2px solid var(--pd-text-4);
   border-radius: 50%;
 }
