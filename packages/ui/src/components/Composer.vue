@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { basename } from "../utils/time.js";
+import { basename, fmtBytes } from "../utils/time.js";
 import { FOLDER_PICKER } from "../databus.js";
 import FileIcon from "./FileIcon.vue";
 import Icon from "./Icon.vue";
@@ -38,7 +38,12 @@ const props = withDefaults(
   { placeholder: "输入消息，Enter 发送，Shift+Enter 换行" },
 );
 const emit = defineEmits<{
-  send: [text: string, cwd?: string | null, images?: Array<{ data: string; mime_type: string }>];
+  send: [
+    text: string,
+    cwd?: string | null,
+    images?: Array<{ data: string; mime_type: string }>,
+    files?: Array<{ name: string; mime_type: string; size: number; data: string }>,
+  ];
   abort: [];
   setPermissionMode: [mode: string];
   setThinkingLevel: [level: string];
@@ -64,6 +69,7 @@ const I = {
   gear: "settings-3-line",
   gauge: "dashboard-2-line",
   img: "image-add-line",
+  fileAdd: "file-add-line",
   magic: "magic-line",
 };
 
@@ -84,7 +90,7 @@ const permOpen = ref(false);
 const thinkOpen = ref(false);
 const modelOpen = ref(false);
 
-// ---- + 菜单：图片附件 / 文件提及 / 技能 ----
+// ---- + 菜单：图片附件 / 文档附件 / 文件提及 / 技能 ----
 interface PendingImage {
   data: string; // base64，不带 data: 前缀
   mime_type: string;
@@ -96,6 +102,19 @@ const skills = ref<Array<{ name: string; description: string }>>([]);
 const skillsLoading = ref(false);
 const MAX_IMAGES = 6;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+/** 文档附件（txt/pdf/office 等）：整文件 base64 上报，host 提取文本注入 prompt */
+interface PendingFile {
+  name: string;
+  mime_type: string;
+  size: number;
+  data: string; // base64，不带 data: 前缀
+}
+const pendingFiles = ref<PendingFile[]>([]);
+const docInput = ref<HTMLInputElement | null>(null);
+const docWarn = ref("");
+const MAX_FILES = 6;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 function ensureSkills(): void {
   if (!skillsLoading.value && skills.value.length === 0 && props.skillsLoader) {
@@ -143,6 +162,43 @@ function onFilesPicked(e: Event): void {
 
 function removeImage(i: number): void {
   pendingImages.value.splice(i, 1);
+}
+
+function pickFiles(): void {
+  docWarn.value = "";
+  docInput.value?.click();
+  plusOpen.value = false;
+}
+
+function onDocsPicked(e: Event): void {
+  const input = e.target as HTMLInputElement;
+  const slots = Math.max(0, MAX_FILES - pendingFiles.value.length);
+  let picked = 0;
+  for (const f of input.files ?? []) {
+    if (picked >= slots) {
+      docWarn.value = `最多 ${MAX_FILES} 个附件，多余文件已忽略`;
+      break;
+    }
+    if (f.size > MAX_FILE_BYTES) {
+      docWarn.value = `${f.name} 超过 20 MB，已跳过`;
+      continue;
+    }
+    picked++;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result ?? "");
+      const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+      if (base64) {
+        pendingFiles.value.push({ name: f.name, mime_type: f.type || "", size: f.size, data: base64 });
+      }
+    };
+    reader.readAsDataURL(f);
+  }
+  input.value = "";
+}
+
+function removeFile(i: number): void {
+  pendingFiles.value.splice(i, 1);
 }
 
 /** 在光标处插入文本并移动光标 */
@@ -487,10 +543,18 @@ function submit(): boolean {
   if (!value || props.busy || props.disabled) return false;
   const cwd = props.centered ? selected.value : undefined;
   const images = pendingImages.value.map((p) => ({ data: p.data, mime_type: p.mime_type }));
-  emit("send", value, cwd === null ? null : cwd || undefined, images.length ? images : undefined);
+  const files = pendingFiles.value.map((p) => ({
+    name: p.name,
+    mime_type: p.mime_type,
+    size: p.size,
+    data: p.data,
+  }));
+  emit("send", value, cwd === null ? null : cwd || undefined, images.length ? images : undefined, files.length ? files : undefined);
   if (props.draft) return true; // 草稿模式：内容归父级表单所有，成功与否由父级决定
   text.value = "";
   pendingImages.value = [];
+  pendingFiles.value = [];
+  docWarn.value = "";
   slash.value = null;
   return true;
 }
@@ -652,6 +716,21 @@ function onKeydown(e: KeyboardEvent): void {
       </button>
     </div>
 
+    <!-- 附件（文档类）chip 行 -->
+    <div v-if="pendingFiles.length || docWarn" class="files-row">
+      <div v-for="(p, i) in pendingFiles" :key="i" class="file-chip" :title="p.name">
+        <FileIcon :path="p.name" :size="15" />
+        <span class="file-name">{{ p.name }}</span>
+        <span class="file-size">{{ fmtBytes(p.size) }}</span>
+        <button class="file-x" title="移除" @click="removeFile(i)">
+          <Icon :name="I.x" :size="10" />
+        </button>
+      </div>
+      <div v-if="docWarn" class="img-warn">
+        <Icon name="error-warning-line" :size="14" />
+        <span>{{ docWarn }}</span>
+      </div>
+    </div>
     <!-- 图片附件缩略图 -->
     <div v-if="pendingImages.length" class="imgs-row">
       <div v-for="(p, i) in pendingImages" :key="i" class="img-chip" :title="p.name">
@@ -666,9 +745,9 @@ function onKeydown(e: KeyboardEvent): void {
       </div>
     </div>
     <div class="bar">
-      <!-- + 菜单：图片 / 文件提及 / 技能 -->
+      <!-- + 菜单：图片 / 附件 / 文件提及 / 技能 -->
       <div class="dd plus-dd">
-        <button class="plus-btn" title="添加图片 / 文件 / 技能" @click="togglePlus">
+        <button class="plus-btn" title="添加图片 / 附件 / 文件 / 技能" @click="togglePlus">
           <Icon :name="I.plus" :size="16" />
         </button>
         <div v-if="plusOpen" class="dd-menu up plus-menu" @click.stop>
@@ -676,6 +755,11 @@ function onKeydown(e: KeyboardEvent): void {
             <Icon :name="I.img" :size="15" />
             <span>添加图片</span>
             <span class="plus-hint">≤ 6 张</span>
+          </button>
+          <button v-if="!draft" class="plus-item" @click="pickFiles">
+            <Icon :name="I.fileAdd" :size="15" />
+            <span>上传附件</span>
+            <span class="plus-hint">txt / pdf / office</span>
           </button>
           <button class="plus-item" @click="addFileMention">
             <Icon :name="I.folderAdd" :size="15" />
@@ -703,6 +787,14 @@ function onKeydown(e: KeyboardEvent): void {
           </div>
         </div>
         <input ref="fileInput" type="file" accept="image/*" multiple hidden @change="onFilesPicked" />
+        <input
+          ref="docInput"
+          type="file"
+          accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,.markdown,.csv,.tsv,.log,.json,.yaml,.yml,.toml,.xml,.html,.htm,text/*,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+          multiple
+          hidden
+          @change="onDocsPicked"
+        />
       </div>
 
       <!-- 权限模式 -->
@@ -1055,6 +1147,43 @@ textarea:disabled { opacity: 0.45; }
 }
 .plus-empty { padding: 10px; font-size: 12px; color: var(--pd-text-4); }
 .plus-sep { height: 1px; background: var(--pd-border-soft); margin: 4px; }
+.files-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.file-chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 6px 22px 6px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--pd-border);
+  background: var(--pd-bg-card);
+  font-size: 12px;
+}
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pd-text);
+  font-weight: 500;
+}
+.file-size { flex: none; font-size: 11px; color: var(--pd-text-4); }
+.file-x {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--pd-text-4);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+.file-x:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 .imgs-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .img-chip {
   position: relative;

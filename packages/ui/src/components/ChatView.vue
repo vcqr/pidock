@@ -437,6 +437,7 @@ async function sendFromHome(
   text: string,
   cwd?: string | null,
   images?: Array<{ data: string; mime_type: string }>,
+  files?: Array<{ name: string; mime_type: string; size: number; data: string }>,
 ): Promise<void> {
   // cwd 为 null = 「不在项目中工作」（host 落到主目录）；
   // 未指定时用最近会话的目录兜底；首页选中的模型随新会话生效
@@ -454,7 +455,7 @@ async function sendFromHome(
     homePermissionMode.value = null;
     homeThinkingLevel.value = null;
   }
-  await props.store.send(text, images);
+  await props.store.send(text, images, files);
 }
 
 function dismissError(): void {
@@ -640,7 +641,7 @@ watch(
           :skills-loader="skillsLoader"
           :model-images-ok="modelSupportsImages"
           :models="modelOptions"
-          @send="(t: string, _cwd: unknown, imgs?: Array<{ data: string; mime_type: string }>) => store.send(t, imgs)"
+          @send="(t: string, _cwd: unknown, imgs?: Array<{ data: string; mime_type: string }>, files?: Array<{ name: string; mime_type: string; size: number; data: string }>) => store.send(t, imgs, files)"
           @abort="store.abort()"
           @set-permission-mode="setPermissionMode"
           @set-thinking-level="setThinkingLevel"

@@ -266,7 +266,18 @@ async fn execute_command(
 ) -> Result<Option<Value>, String> {
     let supervisor = app.state::<Supervisor>();
     let (method, params) = match cmd_type {
-        "agent.prompt" => ("agent.prompt", json!({"session_id": session_id, "text": payload.get("text").and_then(|t| t.as_str()).unwrap_or("")})),
+        // 图片/文档附件原样透传（web 端共享同一 UI，发送载荷含 images/attachments）
+        "agent.prompt" => {
+            let mut p = json!({"session_id": session_id, "text": payload.get("text").and_then(|t| t.as_str()).unwrap_or("")});
+            for key in ["images", "attachments"] {
+                if let Some(v) = payload.get(key) {
+                    if v.is_array() && !v.as_array().unwrap().is_empty() {
+                        p[key] = v.clone();
+                    }
+                }
+            }
+            ("agent.prompt", p)
+        }
         "agent.steer" => ("agent.steer", json!({"session_id": session_id, "text": payload.get("text").and_then(|t| t.as_str()).unwrap_or("")})),
         "agent.follow_up" => ("agent.follow_up", json!({"session_id": session_id, "text": payload.get("text").and_then(|t| t.as_str()).unwrap_or("")})),
         "agent.abort" => ("agent.abort", json!({"session_id": session_id})),

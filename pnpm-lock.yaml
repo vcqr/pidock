@@ -78,6 +78,9 @@ importers:
       '@pidock/protocol':
         specifier: workspace:*
         version: link:../packages/protocol
+      unpdf:
+        specifier: ^1.8.1
+        version: 1.8.1
     devDependencies:
       '@types/node':
         specifier: ^24
@@ -1476,6 +1479,15 @@ packages:
   undici@8.5.0:
     resolution: {integrity: sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==}
     engines: {node: '>=22.19.0'}
+
+  unpdf@1.8.1:
+    resolution: {integrity: sha512-xkURhy2SoGpOIH0a1gLHNkASPIQYonadDJs2AQwPEfUakafeD9EA1WTWWsaR++gfTCXJpV27W7tU1nXuk82UKQ==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      '@napi-rs/canvas': ^0.1.69 || ^1.0.0
+    peerDependenciesMeta:
+      '@napi-rs/canvas':
+        optional: true
 
   vdirs@0.1.8:
     resolution: {integrity: sha512-H9V1zGRLQZg9b+GdMk8MXDN2Lva0zx72MPahDKc30v+DtwKjfyOSXWRIX4t2mhDubM1H09gPhWeth/BJWPHGUw==}
@@ -3120,6 +3132,8 @@ snapshots:
   undici-types@7.24.6: {}
 
   undici@8.5.0: {}
+
+  unpdf@1.8.1: {}
 
   vdirs@0.1.8(vue@3.5.43(typescript@5.9.3)):
     dependencies:

@@ -39,3 +39,11 @@ export function formatSpan(ms: number): string {
   const h = Math.floor(m / 60);
   return `${h} 小时 ${m % 60} 分`;
 }
+
+/** 字节数 → 「N B」/「N KB」/「N.N MB」 */
+export function fmtBytes(n: number | undefined): string {
+  if (!n || n <= 0) return "";
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  if (n >= 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+  return `${n} B`;
+}

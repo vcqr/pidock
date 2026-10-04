@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { UiMessageItem } from "../store.js";
+import { fmtBytes } from "../utils/time.js";
 import MdContent from "./MdContent.vue";
 import ToolRow from "./ToolRow.vue";
 import ThinkingRow from "./ThinkingRow.vue";
+import FileIcon from "./FileIcon.vue";
 import Icon from "./Icon.vue";
 
 /**
@@ -118,9 +120,33 @@ interface SkillExpansion {
   args: string;
 }
 const SKILL_EXPANSION_RE = /^<skill name="([^"]*)" location="([^"]*)">\n([\s\S]*?)\n<\/skill>\n\n?([\s\S]*)$/;
+
+// ---- 文档附件（host 把提取文本以 <attachment> 块注入用户消息，这里折叠为 chip） ----
+const ATTACHMENT_BLOCK_RE = /<attachment name="([^"]*)" size="(\d+)">\n([\s\S]*?)\n<\/attachment>/g;
+interface UserAttachment {
+  name: string;
+  size: number;
+  /** null = 乐观气泡（全文尚在途/在 host 侧），只有名字可展示 */
+  body: string | null;
+}
+/** 去掉 attachment 块后的正文（技能匹配与内容展示都用它，避免块体混进参数区） */
+const cleanText = computed(() => props.item.text.replace(ATTACHMENT_BLOCK_RE, "").trim());
+const userAttachments = computed<UserAttachment[]>(() => {
+  if (props.item.role !== "user") return [];
+  if (props.item.pending) {
+    return (props.item.attachmentNames ?? []).map((a) => ({ name: a.name, size: a.size ?? 0, body: null }));
+  }
+  const found: UserAttachment[] = [];
+  for (const m of props.item.text.matchAll(ATTACHMENT_BLOCK_RE)) {
+    found.push({ name: m[1]!, size: Number(m[2]!), body: m[3]! });
+  }
+  return found;
+});
+const openAtt = ref<number | null>(null);
+
 const skillExpansion = computed<SkillExpansion | null>(() => {
   if (props.item.role !== "user") return null;
-  const m = props.item.text.match(SKILL_EXPANSION_RE);
+  const m = cleanText.value.match(SKILL_EXPANSION_RE);
   if (!m) return null;
   return { name: m[1]!, location: m[2]!, body: m[3]!, args: m[4]! };
 });
@@ -140,7 +166,22 @@ const skillOpen = ref(false);
         <pre v-if="skillOpen" class="skill-body">{{ skillExpansion.body }}</pre>
         <span v-if="skillExpansion.args" class="content">{{ skillExpansion.args }}</span>
       </template>
-      <span v-else class="content">{{ item.text }}</span>
+      <span v-else-if="cleanText" class="content">{{ cleanText }}</span>
+      <div v-if="userAttachments.length" class="att-row">
+        <template v-for="(a, i) in userAttachments" :key="i">
+          <button
+            class="att-chip"
+            :title="a.body ? (openAtt === i ? '收起附件内容' : '展开附件内容') : a.name"
+            @click="a.body && (openAtt = openAtt === i ? null : i)"
+          >
+            <FileIcon :path="a.name" :size="14" />
+            <span class="att-name">{{ a.name }}</span>
+            <span class="att-size">{{ fmtBytes(a.size) }}</span>
+            <Icon v-if="a.body" :name="openAtt === i ? 'subtract-line' : 'add-line'" :size="12" />
+          </button>
+          <pre v-if="a.body && openAtt === i" class="att-body">{{ a.body }}</pre>
+        </template>
+      </div>
       <span v-if="item.pending" class="pending-mark">· 发送中</span>
       <div v-if="userImages.length" class="bubble-imgs">
         <img v-for="(u, i) in userImages" :key="i" :src="u" alt="" />
@@ -211,6 +252,40 @@ const skillOpen = ref(false);
 }
 .user-bubble.pending { opacity: 0.65; }
 .pending-mark { font-size: 11px; opacity: 0.75; margin-left: 6px; }
+
+/* 文档附件 chip（发送中的乐观气泡只有名字，历史消息可展开全文） */
+.att-row { display: flex; flex-direction: column; gap: 5px; margin-top: 7px; align-items: flex-end; }
+.att-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-border);
+  border-radius: 7px;
+  font-size: 12px;
+  padding: 4px 9px;
+  cursor: pointer;
+  text-align: left;
+}
+.att-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pd-text); font-weight: 500; }
+.att-size { flex: none; font-size: 11px; color: var(--pd-text-4); }
+.att-body {
+  margin: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--pd-bg);
+  border: 1px solid var(--pd-border-soft);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--pd-text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  align-self: stretch;
+}
 
 /* /skill: 展开折叠 */
 .user-bubble .skill-chip {

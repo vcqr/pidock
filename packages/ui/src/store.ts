@@ -47,6 +47,8 @@ export interface UiMessageItem {
   turnId?: string;
   /** 用户消息随附图片（data URL，发送时展示用） */
   imageUrls?: string[];
+  /** 用户消息随附文档附件（仅名称与大小，乐观气泡展示用；全文由 host 注入消息文本） */
+  attachmentNames?: Array<{ name: string; size?: number }>;
   /** 助手消息错误（模型/供应商返回的 errorMessage，空回复时也要可见） */
   errorMessage?: string;
 }
@@ -423,6 +425,7 @@ export function createAgentStore(bus: DataBus) {
   async function send(
     text: string,
     images?: Array<{ data: string; mime_type: string }>,
+    attachments?: Array<{ name: string; mime_type: string; size: number; data: string }>,
   ): Promise<void> {
     if (!activeId.value || !text.trim()) return;
     if (!turnStartedAt.value || turnEndedAt.value) {
@@ -440,12 +443,16 @@ export function createAgentStore(bus: DataBus) {
       pending: true,
       ts: new Date().toISOString(),
       ...(images?.length ? { imageUrls: images.map((i) => `data:${i.mime_type};base64,${i.data}`) } : {}),
+      ...(attachments?.length
+        ? { attachmentNames: attachments.map((a) => ({ name: a.name, size: a.size })) }
+        : {}),
     });
     try {
       await bus.request("agent.prompt", {
         session_id: activeId.value,
         text,
         ...(images?.length ? { images } : {}),
+        ...(attachments?.length ? { attachments } : {}),
       });
       lastError.value = null;
     } catch (err) {

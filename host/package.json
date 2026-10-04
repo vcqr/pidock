@@ -18,11 +18,12 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.6",
-    "@pidock/protocol": "workspace:*"
+    "@pidock/protocol": "workspace:*",
+    "unpdf": "^1.8.1"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
     "@types/node": "^24",
+    "typescript": "^5.9.3",
     "ws": "^8.18.0"
   }
 }
