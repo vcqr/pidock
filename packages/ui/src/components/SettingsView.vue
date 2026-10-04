@@ -172,6 +172,57 @@ function boolSetting(key: string, fallback = false): boolean {
   return typeof v === "boolean" ? v : fallback;
 }
 
+// ---------------------------------------------------------------- 代理设置
+
+type ProxyMode = "direct" | "http" | "system";
+interface ProxyConf {
+  mode: ProxyMode;
+  url: string;
+  noProxy: string;
+  caPath: string;
+}
+const proxy = ref<ProxyConf>({ mode: "direct", url: "", noProxy: "", caPath: "" });
+const proxyLoaded = ref(false);
+const proxySaving = ref(false);
+const PROXY_MODE_HINT: Record<ProxyMode, string> = {
+  direct: "所有请求直连，不使用代理",
+  system: "自动读取系统代理设置（Windows Internet 选项）",
+  http: "手动指定 HTTP 代理地址",
+};
+
+async function ensureProxy(force = false): Promise<void> {
+  if (proxyLoaded.value && !force) return;
+  try {
+    const r = await props.bus.request("pidock.settings.get");
+    const p = r.settings?.proxy ?? {};
+    proxy.value = {
+      mode: p.mode === "http" || p.mode === "system" ? p.mode : "direct",
+      url: p.url ?? "",
+      noProxy: p.noProxy ?? "",
+      caPath: p.caPath ?? "",
+    };
+    proxyLoaded.value = true;
+  } catch (err) {
+    flash(String(err));
+  }
+}
+
+async function saveProxy(): Promise<void> {
+  if (proxy.value.mode === "http" && !proxy.value.url.trim()) {
+    flash("请填写代理地址");
+    return;
+  }
+  proxySaving.value = true;
+  try {
+    await props.bus.request("pidock.settings.set", { proxy: proxy.value });
+    flash("代理已保存，重启 PiDock 后生效");
+  } catch (err) {
+    flash(String(err));
+  } finally {
+    proxySaving.value = false;
+  }
+}
+
 // ---------------------------------------------------------------- 模型设置
 
 interface ModelUi {
@@ -385,6 +436,7 @@ watch(
     if (p === "models" || p === "guide") void ensureModels();
     else if (p === "memory") void ensureMemory();
     else if (p === "usage") void ensureUsage();
+    else if (p === "general") void ensureProxy();
   },
   { immediate: true },
 );
@@ -511,6 +563,50 @@ function openFolder(): void {
                 <option value="always">总是信任</option>
                 <option value="never">从不信任</option>
               </select>
+            </div>
+          </div>
+
+          <h3 class="grp-title">代理设置</h3>
+          <div class="group">
+            <div class="row col">
+              <div class="row-text">
+                <b>代理模式</b>
+                <span>{{ PROXY_MODE_HINT[proxy.mode] }}</span>
+              </div>
+              <div class="seg">
+                <button :class="{ on: proxy.mode === 'direct' }" @click="proxy.mode = 'direct'">直连</button>
+                <button :class="{ on: proxy.mode === 'system' }" @click="proxy.mode = 'system'">跟随系统</button>
+                <button :class="{ on: proxy.mode === 'http' }" @click="proxy.mode = 'http'">HTTP 代理</button>
+              </div>
+            </div>
+            <div v-if="proxy.mode === 'http'" class="row col">
+              <div class="row-text">
+                <b>代理地址</b>
+                <span>对模型 API、MCP 等出站请求生效</span>
+              </div>
+              <input v-model="proxy.url" class="txt" placeholder="http://127.0.0.1:7890" spellcheck="false" />
+            </div>
+            <div class="row col">
+              <div class="row-text">
+                <b>绕过列表（NO_PROXY）</b>
+                <span>逗号分隔，匹配的主机不走代理；跟随系统时与系统例外合并</span>
+              </div>
+              <input v-model="proxy.noProxy" class="txt" placeholder="localhost,127.0.0.1,.internal" spellcheck="false" />
+            </div>
+            <div class="row col">
+              <div class="row-text">
+                <b>自定义 CA 证书</b>
+                <span>PEM 文件路径，自签名或企业代理所需；留空使用内置证书</span>
+              </div>
+              <input v-model="proxy.caPath" class="txt" placeholder="C:\certs\corp-root.pem" spellcheck="false" />
+            </div>
+            <div class="row">
+              <div class="row-text">
+                <span>代理为进程级配置，保存后重启 PiDock 生效</span>
+              </div>
+              <button class="dark-btn" :disabled="proxySaving" @click="saveProxy">
+                {{ proxySaving ? "保存中…" : "保存" }}
+              </button>
             </div>
           </div>
 
@@ -1026,6 +1122,42 @@ function openFolder(): void {
 }
 .sel:focus { outline: none; border-color: var(--pd-accent); }
 .sel option { background: var(--pd-bg-raised); }
+
+/* 分段选择器（代理模式） */
+.seg {
+  display: inline-flex;
+  background: var(--pd-bg-raised);
+  border: 1px solid var(--pd-border);
+  border-radius: 9px;
+  padding: 2px;
+  gap: 2px;
+}
+.seg button {
+  background: none;
+  border: none;
+  border-radius: 7px;
+  color: var(--pd-text-3);
+  font-size: 12.5px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.seg button:hover { color: var(--pd-text); }
+.seg button.on { background: var(--pd-bg-active); color: var(--pd-text); font-weight: 600; }
+
+/* 单行文本输入（代理地址/绕过列表/证书路径） */
+.txt {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--pd-bg);
+  border: 1px solid var(--pd-border);
+  border-radius: 9px;
+  color: var(--pd-text);
+  font-size: 12.5px;
+  font-family: Consolas, monospace;
+  padding: 7px 10px;
+}
+.txt:focus { outline: none; border-color: var(--pd-accent); }
+.txt::placeholder { color: var(--pd-text-4); }
 
 .ghost-btn {
   display: inline-flex;

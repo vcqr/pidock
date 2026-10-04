@@ -80,6 +80,14 @@ impl Supervisor {
         if !host_dir.is_empty() {
             command.current_dir(&host_dir);
         }
+        // 代理设置（设置中心·常规）：以环境变量形式注入 pi-host，
+        // Bun 的 fetch 会遵循 HTTP(S)_PROXY/NO_PROXY，证书走 NODE_EXTRA_CA_CERTS
+        for key in proxy_clear_keys() {
+            command.env_remove(key);
+        }
+        for (key, value) in proxy_env_overrides() {
+            command.env(key, value);
+        }
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -314,6 +322,183 @@ fn normalize_path(p: &std::path::Path) -> std::path::PathBuf {
     out
 }
 
+// ------------------------------------------------------------------ proxy ---
+// 设置中心「常规 · 代理设置」→ pi-host 环境变量。代理属于进程级配置
+//（Bun 在 spawn 时读取），修改后需重启应用生效。
+
+/// 代理模式下需要先清掉的继承变量：mode=direct 必须真正直连
+fn proxy_clear_keys() -> &'static [&'static str] {
+    &[
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "NODE_EXTRA_CA_CERTS",
+    ]
+}
+
+#[derive(Debug, PartialEq)]
+struct ProxyConf {
+    mode: String,
+    url: Option<String>,
+    no_proxy: Option<String>,
+    ca_path: Option<String>,
+}
+
+fn load_proxy_conf() -> Option<ProxyConf> {
+    let base = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()?;
+    let path = std::path::Path::new(&base)
+        .join(".pi")
+        .join("agent")
+        .join("pidock")
+        .join("settings.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    let p = v.get("proxy")?;
+    Some(ProxyConf {
+        mode: p.get("mode")?.as_str()?.to_string(),
+        url: p.get("url").and_then(|v| v.as_str()).map(str::to_string),
+        no_proxy: p.get("noProxy").and_then(|v| v.as_str()).map(str::to_string),
+        ca_path: p.get("caPath").and_then(|v| v.as_str()).map(str::to_string),
+    })
+}
+
+/// 解析 `reg query` 的值行（`    Name    REG_SZ    value`），取最后一列
+fn parse_reg_value(output: &str, name: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let key = parts.next()?;
+        if !key.eq_ignore_ascii_case(name) {
+            return None;
+        }
+        parts.next()?; // REG_SZ / REG_DWORD
+        let value = parts.next()?; // 值本身不含空格（代理地址/0x1）
+        Some(value.to_string())
+    })
+}
+
+/// 解析 WinINET ProxyServer：`host:port` 或 `http=…;https=…;ftp=…`（优先 https）
+fn parse_proxy_server(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let picked = if raw.contains('=') {
+        let mut https = None;
+        let mut http = None;
+        for pair in raw.split(';') {
+            let (k, v) = pair.split_once('=')?;
+            match k.trim().to_ascii_lowercase().as_str() {
+                "https" => https = Some(v.trim().to_string()),
+                "http" => http = Some(v.trim().to_string()),
+                _ => {}
+            }
+        }
+        https.or(http)?
+    } else {
+        raw.to_string()
+    };
+    if picked.is_empty() {
+        return None;
+    }
+    // scheme 补全（socks= 前缀的场景上面未命中，直接带上 http 也可被 Bun 解析）
+    if picked.contains("://") {
+        Some(picked)
+    } else {
+        Some(format!("http://{picked}"))
+    }
+}
+
+/// 代理绕过列表合并：用户列表 + （跟随系统时的）系统 ProxyOverride
+fn merge_no_proxy(user: Option<&str>, system: Option<&str>) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for source in [user, system].into_iter().flatten() {
+        for item in source.split([',', ';']) {
+            let item = item.trim();
+            if item.is_empty() || parts.iter().any(|p| p.eq_ignore_ascii_case(item)) {
+                continue;
+            }
+            parts.push(item.to_string());
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(","))
+}
+
+/// Windows 系统代理（WinINET）：读注册表 ProxyEnable/ProxyServer/ProxyOverride
+#[cfg(target_os = "windows")]
+fn system_proxy() -> Option<(String, Option<String>)> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+    let query = |v: &str| -> Option<String> {
+        let out = std::process::Command::new("reg")
+            .args(["query", key, "/v", v])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        parse_reg_value(&String::from_utf8_lossy(&out.stdout), v)
+    };
+    if query("ProxyEnable")?.to_ascii_lowercase() != "0x1" {
+        return None;
+    }
+    let server = parse_proxy_server(&query("ProxyServer")?)?;
+    let bypass = query("ProxyOverride");
+    Some((server, bypass))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn system_proxy() -> Option<(String, Option<String>)> {
+    // 非 Windows 暂不读取桌面环境代理设置
+    None
+}
+
+/// 由代理配置计算要注入 pi-host 的环境变量
+fn proxy_env_overrides() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(conf) = load_proxy_conf() else {
+        return out;
+    };
+    let mut no_proxy = conf.no_proxy.clone();
+    let proxy_url = match conf.mode.as_str() {
+        "http" => conf.url.clone().filter(|u| !u.trim().is_empty()),
+        "system" => match system_proxy() {
+            Some((url, bypass)) => {
+                no_proxy = merge_no_proxy(conf.no_proxy.as_deref(), bypass.as_deref());
+                Some(url)
+            }
+            // 系统未开代理：保持直连
+            None => None,
+        },
+        _ => None, // direct
+    };
+    if let Some(url) = proxy_url {
+        out.push(("HTTP_PROXY".into(), url.clone()));
+        out.push(("HTTPS_PROXY".into(), url));
+    }
+    if let Some(list) = no_proxy {
+        if !list.trim().is_empty() {
+            out.push(("NO_PROXY".into(), list.clone()));
+            out.push(("no_proxy".into(), list));
+        }
+    }
+    if let Some(ca) = conf.ca_path {
+        let ca = ca.trim();
+        if !ca.is_empty() && std::path::Path::new(ca).is_file() {
+            out.push(("NODE_EXTRA_CA_CERTS".into(), ca.to_string()));
+        } else {
+            eprintln!("[supervisor] proxy.caPath 不存在，忽略：{ca}");
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,6 +507,36 @@ mod tests {
     fn normalize_resolves_parent_dirs() {
         let p = normalize_path(std::path::Path::new("D:/a/b/c/../../host"));
         assert_eq!(p, std::path::PathBuf::from("D:/a/host"));
+    }
+
+    #[test]
+    fn reg_value_parses_last_column() {
+        let out = "\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\r\n    ProxyEnable    REG_DWORD    0x1\r\n\r\n";
+        assert_eq!(parse_reg_value(out, "ProxyEnable").as_deref(), Some("0x1"));
+        assert_eq!(parse_reg_value(out, "ProxyServer"), None);
+    }
+
+    #[test]
+    fn proxy_server_handles_both_formats() {
+        assert_eq!(
+            parse_proxy_server("127.0.0.1:7890").as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+        assert_eq!(
+            parse_proxy_server("http=10.0.0.1:8080;https=10.0.0.1:8443;ftp=10.0.0.1:21").as_deref(),
+            Some("http://10.0.0.1:8443")
+        );
+        assert_eq!(parse_proxy_server(""), None);
+        assert_eq!(parse_proxy_server("https="), None);
+    }
+
+    #[test]
+    fn no_proxy_merges_and_dedupes() {
+        assert_eq!(
+            merge_no_proxy(Some("localhost, 127.0.0.1"), Some("*.local;localhost;<local>")).as_deref(),
+            Some("localhost,127.0.0.1,*.local,<local>")
+        );
+        assert_eq!(merge_no_proxy(None, None), None);
     }
 
     #[cfg(target_os = "windows")]

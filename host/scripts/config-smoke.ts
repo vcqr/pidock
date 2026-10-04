@@ -250,6 +250,35 @@ async function main(): Promise<number> {
     );
     check("stats.usage top_sessions", usage.top_sessions?.[0]?.tokens === 140 && usage.top_sessions?.[0]?.session_id === "smoke-1");
 
+    // ---- pidock 自有设置（代理） ----
+    const appBefore = await request("pidock.settings.get");
+    check("pidock.settings.get empty default", typeof appBefore.path === "string" && !appBefore.settings?.proxy);
+    try {
+      await request("pidock.settings.set", { proxy: { mode: "http", url: "not-a-url" } });
+      check("pidock.settings.set rejects bad url", false);
+    } catch (e) {
+      check("pidock.settings.set rejects bad url", String(e).includes("bad_request"));
+    }
+    await request("pidock.settings.set", {
+      proxy: { mode: "http", url: "http://127.0.0.1:7890", noProxy: "localhost,127.0.0.1,.internal", caPath: "C:\\ca.pem" },
+    });
+    const appAfter = await request("pidock.settings.get");
+    check(
+      "pidock.settings.set/get roundtrip",
+      appAfter.settings?.proxy?.mode === "http" &&
+        appAfter.settings?.proxy?.url === "http://127.0.0.1:7890" &&
+        appAfter.settings?.proxy?.noProxy === "localhost,127.0.0.1,.internal" &&
+        appAfter.settings?.proxy?.caPath === "C:\\ca.pem",
+      JSON.stringify(appAfter.settings?.proxy),
+    );
+    await request("pidock.settings.set", { proxy: { mode: "direct" } });
+    const appDirect = await request("pidock.settings.get");
+    check(
+      "pidock.settings proxy switch to direct drops fields",
+      appDirect.settings?.proxy?.mode === "direct" &&
+        appDirect.settings?.proxy?.url === undefined,
+    );
+
     clearTimeout(timeout);
     child.stdin.end();
     child.kill();

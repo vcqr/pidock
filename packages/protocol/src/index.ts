@@ -271,6 +271,8 @@ export const Method = {
   CONFIG_AGENTS_READ: "config.agents.read",
   CONFIG_AGENTS_WRITE: "config.agents.write",
   STATS_USAGE: "stats.usage",
+  PIDOCK_SETTINGS_GET: "pidock.settings.get",
+  PIDOCK_SETTINGS_SET: "pidock.settings.set",
   ATTACHMENT_GET: "attachment.get",
 } as const;
 

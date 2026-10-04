@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { getAgentDir, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { RpcError, type SessionPool } from "./pool.js";
@@ -421,6 +421,57 @@ export class ConfigService {
     }
     const path = join(getAgentDir(), "AGENTS.md");
     writeFileSync(path, params.text);
+    return { ok: true, path };
+  }
+
+  // -------------------------------------------------------- pidock settings
+  // PiDock 自己的设置（区别于 pi 的 settings.json），目前只有代理配置。
+  // 代理在 supervisor 启动 host 时转成 HTTP(S)_PROXY/NO_PROXY/NODE_EXTRA_CA_CERTS
+  // 环境变量，因此修改后需要重启应用生效。
+
+  static pidockSettingsPath(): string {
+    return join(getAgentDir(), "pidock", "settings.json");
+  }
+
+  appSettingsGet(): { settings: Json; path: string } {
+    const path = ConfigService.pidockSettingsPath();
+    return { settings: readJson(path) ?? {}, path };
+  }
+
+  appSettingsSet(params: { proxy: Json }): { ok: true; path: string } {
+    const proxy = params.proxy;
+    if (!proxy || typeof proxy !== "object" || Array.isArray(proxy)) {
+      throw new RpcError("bad_request", "proxy must be an object");
+    }
+    const mode = proxy.mode;
+    if (mode !== "direct" && mode !== "http" && mode !== "system") {
+      throw new RpcError("bad_request", "proxy.mode must be direct | http | system");
+    }
+    if (mode === "http") {
+      const url = typeof proxy.url === "string" ? proxy.url.trim() : "";
+      if (!/^https?:\/\/[^\s]+$/i.test(url)) {
+        throw new RpcError("bad_request", "proxy.url must be an http(s) URL when mode is http");
+      }
+    }
+    for (const key of ["url", "noProxy", "caPath"] as const) {
+      const v = proxy[key];
+      if (v !== undefined && v !== null && typeof v !== "string") {
+        throw new RpcError("bad_request", `proxy.${key} must be a string`);
+      }
+      if (typeof v === "string" && v.length > 4096) {
+        throw new RpcError("bad_request", `proxy.${key} too long`);
+      }
+    }
+    const path = ConfigService.pidockSettingsPath();
+    mkdirSync(dirname(path), { recursive: true });
+    const settings = readJson(path) ?? {};
+    settings.proxy = {
+      mode,
+      ...(proxy.url ? { url: proxy.url.trim() } : {}),
+      ...(proxy.noProxy ? { noProxy: proxy.noProxy } : {}),
+      ...(proxy.caPath ? { caPath: proxy.caPath } : {}),
+    };
+    writeJson(path, settings);
     return { ok: true, path };
   }
 
