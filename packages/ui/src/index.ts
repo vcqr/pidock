@@ -1,8 +1,8 @@
 export { createAgentStore } from "./store.js";
 export type { AgentStore, UiItem, UiMessageItem, UiToolItem, SessionSummaryUi, UiBlock } from "./store.js";
 export type { DataBus, ReplayEvent } from "./databus.js";
-export { ATTACHMENT_LOADER, FOLDER_PICKER, REVEAL_PATH } from "./databus.js";
-export { initTheme, toggleTheme, themeMode, type ThemeMode } from "./theme.js";
+export { ATTACHMENT_LOADER, FOLDER_PICKER, REVEAL_PATH, WINDOW_CONTROLS, type WindowControls } from "./databus.js";
+export { initTheme, toggleTheme, applyTheme, themeMode, themePref, type ThemeMode, type ThemePref } from "./theme.js";
 export { default as ChatView } from "./components/ChatView.vue";
 export { default as Composer } from "./components/Composer.vue";
 export { default as FileIcon } from "./components/FileIcon.vue";

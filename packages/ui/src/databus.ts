@@ -22,13 +22,23 @@ export interface DataBus {
   readonly transport: string;
 }
 
-import type { InjectionKey } from "vue";
+import type { InjectionKey, Ref } from "vue";
 /** optional provide/inject handle for ToolCard full-text viewing */
 export const ATTACHMENT_LOADER: InjectionKey<(id: string) => Promise<string>> = Symbol("pidock.attachmentLoader");
 /** optional provide/inject handle for the native folder picker (desktop only); resolves null on cancel */
 export const FOLDER_PICKER: InjectionKey<() => Promise<string | null>> = Symbol("pidock.folderPicker");
 /** optional provide/inject handle for revealing a path in the OS file manager (desktop only) */
 export const REVEAL_PATH: InjectionKey<(path: string) => Promise<void>> = Symbol("pidock.revealPath");
+
+/** 无边框窗口控制（桌面端提供）；全屏页面（如设置中心）盖住标题栏时用它补齐窗口按钮 */
+export interface WindowControls {
+  minimize(): void;
+  toggleMaximize(): void;
+  close(): void;
+  /** 当前是否最大化（最大化/还原图标切换） */
+  isMax: Ref<boolean>;
+}
+export const WINDOW_CONTROLS: InjectionKey<WindowControls> = Symbol("pidock.windowControls");
 
 export interface ReplayEvent {
   seq: number;

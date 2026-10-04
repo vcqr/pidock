@@ -1,397 +1,1333 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, inject, onMounted, ref, watch } from "vue";
 import type { DataBus } from "../databus.js";
+import { REVEAL_PATH, WINDOW_CONTROLS } from "../databus.js";
+import Icon from "./Icon.vue";
+import ProvidersView from "./ProvidersView.vue";
+import ToolsView from "./ToolsView.vue";
+import { applyTheme, themePref, type ThemePref } from "../theme.js";
 
-const props = withDefaults(
-  defineProps<{ bus: DataBus; initialTab?: "models" | "extensions" | "skills" | "mcp" }>(),
-  { initialTab: "models" },
-);
-const emit = defineEmits<{ close: [] }>();
+/**
+ * 设置中心：左侧分组导航 + 右侧内容页（参考主流 AI 客户端布局）。
+ * 设置是唯一的配置中心：插件/技能/MCP/供应商的完整管理直接内嵌本页
+ * （复用 ToolsView / ProvidersView），主区只保留会话。
+ * 页面按 pi 的真实能力取舍：常规 / 外观 / 模型 / 供应商 / 快捷键 /
+ * 记忆(AGENTS.md) / 插件 / MCP / 技能 / 命令 / 使用统计 / 引导。
+ */
+const props = withDefaults(defineProps<{ bus: DataBus; initialPane?: string }>(), {
+  initialPane: "general",
+});
+const emit = defineEmits<{
+  close: [];
+  resetLayout: [];
+}>();
 
-const tab = ref<"models" | "extensions" | "skills" | "mcp">(props.initialTab);
+type PaneId =
+  | "general"
+  | "appearance"
+  | "models"
+  | "providers"
+  | "shortcuts"
+  | "memory"
+  | "plugins"
+  | "mcp"
+  | "skills"
+  | "commands"
+  | "usage"
+  | "sync"
+  | "guide";
 
-interface ProviderUi {
-  id: string;
-  auth: string;
-  models: number;
-  default: boolean;
+const PANE_IDS = new Set<PaneId>([
+  "general", "appearance", "models", "providers", "shortcuts", "memory",
+  "plugins", "mcp", "skills", "commands", "usage", "sync", "guide",
+]);
+
+/** legacy tab names (旧设置中心的 initialTab) → 新页面 */
+const LEGACY_PANE: Record<string, PaneId> = {
+  models: "models",
+  providers: "providers",
+  extensions: "plugins",
+  skills: "skills",
+  mcp: "mcp",
+};
+
+const initial = LEGACY_PANE[props.initialPane] ?? (props.initialPane as PaneId);
+const pane = ref<PaneId>(initial && PANE_IDS.has(initial) ? initial : "general");
+
+interface NavItem {
+  id: PaneId;
+  label: string;
+  icon: string;
+  count?: () => number | undefined;
 }
+const navSections: Array<{ title: string; items: NavItem[] }> = [
+  {
+    title: "基础设置",
+    items: [
+      { id: "general", label: "常规", icon: "settings-3-line" },
+      { id: "appearance", label: "外观", icon: "palette-line" },
+      { id: "shortcuts", label: "键盘快捷键", icon: "keyboard-line" },
+    ],
+  },
+  {
+    title: "模型",
+    items: [
+      { id: "models", label: "模型设置", icon: "box-3-line" },
+      { id: "providers", label: "供应商与密钥", icon: "key-2-line" },
+    ],
+  },
+  {
+    title: "Agent 能力",
+    items: [
+      { id: "memory", label: "记忆", icon: "brain-line" },
+      { id: "plugins", label: "插件", icon: "puzzle-2-line", count: () => counts.value.plugins },
+      { id: "mcp", label: "MCP 服务器", icon: "plug-line", count: () => counts.value.mcp },
+      { id: "skills", label: "技能", icon: "magic-line", count: () => counts.value.skills },
+      { id: "commands", label: "命令", icon: "terminal-line" },
+    ],
+  },
+  {
+    title: "数据与同步",
+    items: [
+      { id: "usage", label: "使用统计", icon: "bar-chart-line" },
+      { id: "sync", label: "云同步", icon: "cloud-line" },
+    ],
+  },
+  {
+    title: "引导",
+    items: [{ id: "guide", label: "引导", icon: "rocket-line" }],
+  },
+];
+
+/** 这些页面的内容是完整内嵌的管理页（自带标题与滚动），不需要设置层再包标题 */
+const EMBED_PANES = new Set<PaneId>(["plugins", "mcp", "skills", "providers"]);
+
+const revealPath = inject(REVEAL_PATH, null);
+/** 桌面端无边框窗口控制；设置页全屏盖住标题栏时，由它在页头补齐窗口按钮 */
+const win = inject(WINDOW_CONTROLS, null);
+
+let flashTimer: ReturnType<typeof setTimeout> | undefined;
+const notice = ref<string | null>(null);
+function flash(msg: string): void {
+  notice.value = msg;
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => (notice.value = null), 2500);
+}
+
+// ---------------------------------------------------------------- shared state
+
+const loading = ref(true);
+const agentDir = ref("");
+/** ~/.pi/agent/settings.json 的本地副本（保存成功后同步更新） */
+const settings = ref<Record<string, any>>({});
+
+/** 三类资源的全量列表（nav 计数、摘要卡、命令页共用） */
+const extAll = ref<any[]>([]);
+const skillAll = ref<any[]>([]);
+const mcpServers = ref<Record<string, any>>({});
+const counts = computed(() => ({
+  plugins: extAll.value.length,
+  skills: skillAll.value.length,
+  mcp: Object.keys(mcpServers.value).length,
+}));
+
+async function loadCore(): Promise<void> {
+  loading.value = true;
+  try {
+    const g = await props.bus.request("config.get");
+    settings.value = g.settings ?? {};
+    agentDir.value = g.agent_dir ?? "";
+    const [ext, sk, mcp] = await Promise.all([
+      props.bus.request("config.extensions.list", {}).catch(() => null),
+      props.bus.request("config.skills.list", {}).catch(() => null),
+      props.bus.request("config.mcp.get", {}).catch(() => null),
+    ]);
+    extAll.value = ext?.extensions ?? [];
+    skillAll.value = sk?.skills ?? [];
+    mcpServers.value = mcp?.config?.mcpServers ?? mcp?.config?.servers ?? {};
+  } catch (err) {
+    flash(String(err));
+  } finally {
+    loading.value = false;
+  }
+  void ensureMemory();
+}
+onMounted(loadCore);
+
+/** 写一个 settings.json 字段（全部作用于新会话） */
+async function setSetting(key: string, value: unknown, msg = "已保存，对新会话生效"): Promise<void> {
+  const old = settings.value[key];
+  settings.value[key] = value; // optimistic
+  try {
+    await props.bus.request("config.settings.set", { patch: { [key]: value } });
+    flash(msg);
+  } catch (err) {
+    settings.value[key] = old;
+    flash(String(err));
+  }
+}
+
+function boolSetting(key: string, fallback = false): boolean {
+  const v = settings.value[key];
+  return typeof v === "boolean" ? v : fallback;
+}
+
+// ---------------------------------------------------------------- 模型设置
+
 interface ModelUi {
   provider: string;
   id: string;
   name: string;
   reasoning: boolean;
 }
-interface ExtensionUi {
-  name: string;
-  file: string;
-  scope: string;
-  enabled: boolean;
+interface ProviderUi {
+  id: string;
+  auth: string;
+  models: number;
+  default: boolean;
 }
-interface SkillUi {
-  name: string;
-  description: string;
-  path: string;
-  scope: string;
-  enabled: boolean;
-}
-
-const providers = ref<ProviderUi[]>([]);
 const models = ref<ModelUi[]>([]);
-const modelFilter = ref("");
-const extensions = ref<ExtensionUi[]>([]);
-const skills = ref<SkillUi[]>([]);
-const mcpText = ref("");
-const mcpPath = ref("");
-const settings = ref<any>(null);
-const agentDir = ref("");
-const notice = ref<string | null>(null);
-const loading = ref(false);
+const providers = ref<ProviderUi[]>([]);
+const modelsLoaded = ref(false);
+const modelsLoading = ref(false);
+const modelQuery = ref("");
 
-const filteredModels = ref<ModelUi[]>([]);
-function applyModelFilter(): void {
-  const q = modelFilter.value.trim().toLowerCase();
-  filteredModels.value = !q
-    ? models.value.slice(0, 200)
-    : models.value.filter((m) => `${m.provider}/${m.id}`.toLowerCase().includes(q)).slice(0, 200);
-}
+const defaultModelKey = computed(
+  () => `${settings.value.defaultProvider ?? ""}/${settings.value.defaultModel ?? ""}`,
+);
 
-function flash(msg: string): void {
-  notice.value = msg;
-  setTimeout(() => (notice.value = null), 2500);
-}
+const filteredModels = computed(() => {
+  const q = modelQuery.value.trim().toLowerCase();
+  const list = q
+    ? models.value.filter((m) => `${m.provider}/${m.id}`.toLowerCase().includes(q))
+    : models.value.slice();
+  return list.slice(0, 200);
+});
 
-async function loadModels(): Promise<void> {
-  const r = await props.bus.request("config.providers.list");
-  providers.value = r.providers ?? [];
-  const m = await props.bus.request("config.models.list");
-  models.value = m.models ?? [];
-  applyModelFilter();
-}
-
-async function loadExtensions(): Promise<void> {
-  const r = await props.bus.request("config.extensions.list", {});
-  extensions.value = r.extensions ?? [];
-}
-
-async function loadSkills(): Promise<void> {
-  const r = await props.bus.request("config.skills.list", {});
-  skills.value = r.skills ?? [];
-}
-
-async function loadMcp(): Promise<void> {
-  const r = await props.bus.request("config.mcp.get");
-  mcpText.value = r.config ? JSON.stringify(r.config, null, 2) : "{\n}";
-  mcpPath.value = r.path;
-}
-
-async function loadAll(): Promise<void> {
-  loading.value = true;
+async function ensureModels(force = false): Promise<void> {
+  if (modelsLoaded.value && !force) return;
+  modelsLoading.value = true;
   try {
-    const g = await props.bus.request("config.get");
-    settings.value = g.settings;
-    agentDir.value = g.agent_dir;
-    await Promise.all([loadModels(), loadExtensions(), loadSkills(), loadMcp()]);
+    const [m, p] = await Promise.all([
+      props.bus.request("config.models.list"),
+      props.bus.request("config.providers.list"),
+    ]);
+    models.value = m.models ?? [];
+    providers.value = p.providers ?? [];
+    modelsLoaded.value = true;
   } catch (err) {
     flash(String(err));
   } finally {
-    loading.value = false;
+    modelsLoading.value = false;
   }
-}
-onMounted(loadAll);
-
-async function setKey(p: ProviderUi): Promise<void> {
-  const key = window.prompt(`为 ${p.id} 输入 API Key：`);
-  if (!key) return;
-  await props.bus.request("config.providers.set_key", { provider: p.id, key });
-  flash(`${p.id} 密钥已保存`);
-  await loadModels();
-}
-
-async function removeKey(p: ProviderUi): Promise<void> {
-  if (!window.confirm(`删除 ${p.id} 的凭据？`)) return;
-  await props.bus.request("config.providers.remove_key", { provider: p.id });
-  flash(`${p.id} 凭据已删除`);
-  await loadModels();
 }
 
 async function setDefaultModel(m: ModelUi): Promise<void> {
-  await props.bus.request("config.models.set_default", { provider: m.provider, model: m.id });
-  flash(`默认模型已设为 ${m.provider}/${m.id}`);
-  await loadModels();
-}
-
-async function toggleExtension(e: ExtensionUi): Promise<void> {
-  await props.bus.request("config.extensions.toggle", { file: e.file, enabled: !e.enabled });
-  e.enabled = !e.enabled;
-  flash("改动对新会话生效");
-}
-
-async function toggleSkill(s: SkillUi): Promise<void> {
-  await props.bus.request("config.skills.toggle", { path: s.path, enabled: !s.enabled });
-  s.enabled = !s.enabled;
-  flash("改动对新会话生效");
-}
-
-async function saveMcp(): Promise<void> {
   try {
-    const config = JSON.parse(mcpText.value);
-    await props.bus.request("config.mcp.set", { config });
-    flash("MCP 配置已保存");
+    await props.bus.request("config.models.set_default", { provider: m.provider, model: m.id });
+    settings.value.defaultProvider = m.provider;
+    settings.value.defaultModel = m.id;
+    flash(`默认模型已设为 ${m.provider}/${m.id}`);
   } catch (err) {
-    flash("JSON 解析失败：" + String(err));
+    flash(String(err));
   }
 }
 
-async function saveTrust(v: string): Promise<void> {
-  await props.bus.request("config.settings.set", { patch: { defaultProjectTrust: v } });
-  flash("已保存");
+const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+// ---------------------------------------------------------------- 记忆 (AGENTS.md)
+
+const memoryText = ref("");
+const memoryPath = ref("");
+const memoryExists = ref(false);
+const memoryLoaded = ref(false);
+const memorySaving = ref(false);
+
+async function ensureMemory(force = false): Promise<void> {
+  if (memoryLoaded.value && !force) return;
+  try {
+    const r = await props.bus.request("config.agents.read");
+    memoryText.value = r.text ?? "";
+    memoryPath.value = r.path ?? "";
+    memoryExists.value = !!r.exists;
+    memoryLoaded.value = true;
+  } catch (err) {
+    flash(String(err));
+  }
+}
+
+async function saveMemory(): Promise<void> {
+  memorySaving.value = true;
+  try {
+    const r = await props.bus.request("config.agents.write", { text: memoryText.value });
+    memoryPath.value = r.path ?? memoryPath.value;
+    memoryExists.value = true;
+    flash("记忆已保存，对新会话生效");
+  } catch (err) {
+    flash(String(err));
+  } finally {
+    memorySaving.value = false;
+  }
+}
+
+// ------------------------------------------------------- 插件/MCP/技能 计数
+// 完整管理页直接内嵌 ToolsView；这里仅保留列表数据供 nav 角标与命令页使用
+
+// ---------------------------------------------------------------- 使用统计
+
+interface Usage {
+  scanned_sessions: number;
+  messages: { user: number; assistant: number };
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  cost: number;
+  by_model: Array<{ key: string; sessions: number; messages: number; tokens: number }>;
+  by_day: Array<{ day: string; messages: number; tokens: number }>;
+  top_sessions: Array<{
+    session_id: string;
+    name?: string;
+    cwd: string;
+    model?: string;
+    messages: number;
+    tokens: number;
+    created_at: string;
+  }>;
+}
+const usage = ref<Usage | null>(null);
+const usageLoading = ref(false);
+
+async function ensureUsage(force = false): Promise<void> {
+  if (usage.value && !force) return;
+  usageLoading.value = true;
+  try {
+    usage.value = await props.bus.request("stats.usage", {});
+  } catch (err) {
+    flash(String(err));
+  } finally {
+    usageLoading.value = false;
+  }
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  return String(n);
+}
+
+function baseName(p: string): string {
+  const norm = (p || "").replace(/\\/g, "/");
+  return norm.slice(norm.lastIndexOf("/") + 1) || norm || "—";
+}
+
+const maxDayTokens = computed(() => Math.max(1, ...(usage.value?.by_day ?? []).map((d) => d.tokens)));
+/** 最近 30 天（不足补空） */
+const usageDays = computed(() => usage.value?.by_day?.slice(-30) ?? []);
+
+// ---------------------------------------------------------------- 命令页
+
+const commandList = computed(() =>
+  skillAll.value.map((x) => ({
+    name: x.name,
+    description: x.description || "",
+    enabled: !!x.enabled,
+  })),
+);
+
+// ---------------------------------------------------------------- 引导
+
+const guideSteps = computed<Array<{ id: PaneId; title: string; desc: string; done: boolean; cta: string }>>(() => {
+  const keyOk = providers.value.some((p) => p.auth !== "missing");
+  const modelOk = !!settings.value.defaultModel;
+  const extOk = counts.value.plugins > 0 || counts.value.skills > 0 || counts.value.mcp > 0;  return [
+    {
+      id: "providers",
+      title: "配置模型密钥",
+      desc: "为模型供应商填入 API Key，或确认环境变量已就位。",
+      done: keyOk,
+      cta: keyOk ? "查看" : "去配置",
+    },
+    {
+      id: "models",
+      title: "选择默认模型",
+      desc: "新会话默认使用的供应商与模型，可随时在输入卡片里切换。",
+      done: modelOk,
+      cta: "去选择",
+    },
+    {
+      id: "memory",
+      title: "写下你的记忆",
+      desc: "AGENTS.md 会作为长期上下文注入每次会话，适合放偏好与规范。",
+      done: memoryExists.value,
+      cta: "去书写",
+    },
+    {
+      id: "skills",
+      title: "装上技能与插件",
+      desc: "技能、插件、MCP 服务器扩展 Agent 能力，放入目录即被发现。",
+      done: extOk,
+      cta: "去管理",
+    },
+    {
+      id: "general",
+      title: "确认项目信任策略",
+      desc: "决定项目内 .pi 资源（扩展/技能/设置）默认是否被信任。",
+      done: !!settings.value.defaultProjectTrust && settings.value.defaultProjectTrust !== "ask",
+      cta: "去设置",
+    },
+  ];
+});
+
+// ---------------------------------------------------------------- 懒加载分发
+
+watch(
+  pane,
+  (p) => {
+    if (p === "models" || p === "guide") void ensureModels();
+    else if (p === "memory") void ensureMemory();
+    else if (p === "usage") void ensureUsage();
+  },
+  { immediate: true },
+);
+
+function switchTheme(m: ThemePref): void {
+  applyTheme(m);
+}
+
+function resetSidebarWidth(): void {
+  emit("resetLayout");
+  flash("已恢复默认布局");
+}
+
+// 快捷键清单（与 Composer/App 实际绑定保持一致）
+const shortcuts = [
+  { keys: ["Enter"], desc: "发送消息" },
+  { keys: ["Shift", "Enter"], desc: "输入框换行" },
+  { keys: ["Esc"], desc: "关闭弹层 / 菜单" },
+  { keys: ["Ctrl", "N"], desc: "新建任务" },
+  { keys: ["@"], desc: "提及工作区文件" },
+  { keys: ["/"], desc: "打开技能与命令菜单" },
+];
+
+function openFolder(): void {
+  if (agentDir.value) void revealPath?.(agentDir.value);
 }
 </script>
 
 <template>
   <div class="settings">
-    <header class="head">
-      <button class="back" @click="emit('close')">← 返回</button>
-      <h2>设置中心</h2>
-      <span class="agent-dir" :title="agentDir">{{ agentDir }}</span>
-    </header>
-    <div v-if="notice" class="notice">{{ notice }}</div>
-
-    <nav class="tabs">
-      <button :class="{ on: tab === 'models' }" @click="tab = 'models'">模型与密钥</button>
-      <button :class="{ on: tab === 'extensions' }" @click="tab = 'extensions'">
-        扩展 ({{ extensions.length }})
+    <header class="head" data-tauri-drag-region>
+      <button class="back-btn" title="返回工作区" @click="emit('close')">
+        <Icon name="arrow-left-line" :size="16" />
+        <span>返回工作区</span>
       </button>
-      <button :class="{ on: tab === 'skills' }" @click="tab = 'skills'">技能 ({{ skills.length }})</button>
-      <button :class="{ on: tab === 'mcp' }" @click="tab = 'mcp'">MCP</button>
-    </nav>
+      <h1>设置</h1>
+      <span class="flex-sp"></span>
+      <span v-if="agentDir" class="agent-dir" :title="agentDir + '（点击打开）'" @click="openFolder">
+        {{ agentDir }}
+      </span>
+      <template v-if="win">
+        <span class="win-sep"></span>
+        <button class="wbtn" title="最小化" @click="win.minimize()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14" /></svg>
+        </button>
+        <button class="wbtn" :title="win.isMax.value ? '还原' : '最大化'" @click="win.toggleMaximize()">
+          <svg v-if="win.isMax.value" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 9h10v10H9z" /><path d="M5 15V5h10" /></svg>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 6h12v12H6z" /></svg>
+        </button>
+        <button class="wbtn close" title="关闭" @click="win.close()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      </template>
+    </header>
 
     <div class="body">
-      <!-- models & keys -->
-      <section v-if="tab === 'models'" class="pane">
-        <h3>Providers（{{ providers.length }}）</h3>
-        <div class="grid">
-          <div v-for="p in providers" :key="p.id" class="card" :class="{ off: p.auth === 'missing' }">
-            <div class="card-head">
-              <b>{{ p.id }}</b>
-              <span class="badge">{{ p.auth }}</span>
-              <span v-if="p.default" class="badge blue">默认</span>
+      <nav class="nav">
+        <div v-for="sec in navSections" :key="sec.title" class="nav-sec">
+          <div class="nav-sec-title">{{ sec.title }}</div>
+          <button
+            v-for="it in sec.items"
+            :key="it.id"
+            class="nav-item"
+            :class="{ on: pane === it.id }"
+            @click="pane = it.id"
+          >
+            <Icon :name="it.icon" :size="16" />
+            <span class="nav-label">{{ it.label }}</span>
+            <span v-if="it.count?.()" class="nav-count">{{ it.count() }}</span>
+          </button>
+        </div>
+      </nav>
+
+      <section class="content" :class="{ embed: EMBED_PANES.has(pane) }">
+        <div v-if="notice" class="notice">{{ notice }}</div>
+
+        <!-- ============ 常规 ============ -->
+        <template v-if="pane === 'general'">
+          <h2>常规</h2>
+          <p class="pane-sub">pi 全局配置（{{ agentDir }}/settings.json），改动对新会话生效。</p>
+
+          <div class="group">
+            <div class="row">
+              <div class="row-text">
+                <b>启动时静默</b>
+                <span>不显示启动横幅与提示信息</span>
+              </div>
+              <label class="switch" @click.prevent="setSetting('quietStartup', !boolSetting('quietStartup'))">
+                <input type="checkbox" :checked="boolSetting('quietStartup')" />
+                <span class="slider"></span>
+              </label>
             </div>
-            <div class="muted">{{ p.models }} 个模型</div>
-            <div class="card-actions">
-              <button @click="setKey(p)">设置密钥</button>
-              <button v-if="p.auth !== 'missing'" class="danger" @click="removeKey(p)">删除</button>
+            <div class="row">
+              <div class="row-text">
+                <b>技能斜杠命令</b>
+                <span>在输入框中以 /skill:名称 调用技能</span>
+              </div>
+              <label class="switch" @click.prevent="setSetting('enableSkillCommands', !boolSetting('enableSkillCommands', true))">
+                <input type="checkbox" :checked="boolSetting('enableSkillCommands', true)" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="row">
+              <div class="row-text">
+                <b>隐藏思考块</b>
+                <span>不展示模型的思考（thinking）内容</span>
+              </div>
+              <label class="switch" @click.prevent="setSetting('hideThinkingBlock', !boolSetting('hideThinkingBlock'))">
+                <input type="checkbox" :checked="boolSetting('hideThinkingBlock')" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="row">
+              <div class="row-text">
+                <b>项目信任策略</b>
+                <span>项目内 .pi 资源（扩展/技能/设置）的默认信任方式</span>
+              </div>
+              <select
+                class="sel"
+                :value="settings.defaultProjectTrust ?? 'ask'"
+                @change="setSetting('defaultProjectTrust', ($event.target as HTMLSelectElement).value)"
+              >
+                <option value="ask">每次询问</option>
+                <option value="always">总是信任</option>
+                <option value="never">从不信任</option>
+              </select>
             </div>
           </div>
-        </div>
 
-        <h3>
-          模型（{{ models.length }}，显示前 {{ filteredModels.length }} 个）
-          <input v-model="modelFilter" class="filter" placeholder="过滤，如 minimax / claude / kimi" @input="applyModelFilter" />
-        </h3>
-        <table class="tbl">
-          <thead>
-            <tr><th>provider/model</th><th>推理</th><th></th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="m in filteredModels" :key="m.provider + '/' + m.id">
-              <td><code>{{ m.provider }}/{{ m.id }}</code></td>
-              <td>{{ m.reasoning ? "✓" : "" }}</td>
-              <td><button @click="setDefaultModel(m)">设为默认</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <!-- extensions -->
-      <section v-else-if="tab === 'extensions'" class="pane">
-        <p class="muted">来源：~/.pi/agent/extensions（全局）与项目 .pi/extensions。停用通过 settings.json 的排除规则实现，对新会话生效。</p>
-        <div v-for="e in extensions" :key="e.file" class="row-item">
-          <div>
-            <b>{{ e.name }}</b>
-            <span class="badge">{{ e.scope }}</span>
-            <div class="muted small">{{ e.file }}</div>
+          <h3 class="grp-title">数据目录</h3>
+          <div class="group">
+            <div class="row">
+              <div class="row-text">
+                <b>pi 配置目录</b>
+                <span class="mono">{{ agentDir || "—" }}</span>
+              </div>
+              <button v-if="revealPath && agentDir" class="ghost-btn" @click="openFolder">
+                <Icon name="folder-open-line" :size="14" />打开
+              </button>
+            </div>
           </div>
-          <label class="switch">
-            <input type="checkbox" :checked="e.enabled" @change="toggleExtension(e)" />
-            {{ e.enabled ? "启用" : "停用" }}
-          </label>
-        </div>
-        <div v-if="!extensions.length" class="empty">还没有安装扩展。把 .ts 文件放进 ~/.pi/agent/extensions 即可。</div>
-      </section>
+        </template>
 
-      <!-- skills -->
-      <section v-else-if="tab === 'skills'" class="pane">
-        <p class="muted">来源：~/.pi/agent/skills 与项目 .pi/skills。</p>
-        <div v-for="s in skills" :key="s.path" class="row-item">
-          <div>
-            <b>{{ s.name }}</b>
-            <span class="badge">{{ s.scope }}</span>
-            <div class="muted small">{{ s.description }}</div>
+        <!-- ============ 外观 ============ -->
+        <template v-else-if="pane === 'appearance'">
+          <h2>外观</h2>
+          <p class="pane-sub">界面主题立即生效；标题栏 ☀/☾ 按钮可随时切换。</p>
+
+          <div class="group">
+            <div class="row col">
+              <div class="row-text">
+                <b>界面主题</b>
+                <span>跟随系统时自动响应系统深浅色切换</span>
+              </div>
+              <div class="theme-cards">
+                <button class="theme-card" :class="{ on: themePref === 'dark' }" @click="switchTheme('dark')">
+                  <Icon name="moon-line" :size="18" />
+                  <span>暗色</span>
+                </button>
+                <button class="theme-card" :class="{ on: themePref === 'light' }" @click="switchTheme('light')">
+                  <Icon name="sun-line" :size="18" />
+                  <span>亮色</span>
+                </button>
+                <button class="theme-card" :class="{ on: themePref === 'system' }" @click="switchTheme('system')">
+                  <Icon name="computer-line" :size="18" />
+                  <span>跟随系统</span>
+                </button>
+              </div>
+            </div>
+            <div class="row">
+              <div class="row-text">
+                <b>恢复默认布局</b>
+                <span>重置会话侧栏宽度</span>
+              </div>
+              <button class="ghost-btn" @click="resetSidebarWidth">重置</button>
+            </div>
           </div>
-          <label class="switch">
-            <input type="checkbox" :checked="s.enabled" @change="toggleSkill(s)" />
-            {{ s.enabled ? "启用" : "停用" }}
-          </label>
-        </div>
-        <div v-if="!skills.length" class="empty">还没有安装技能。把含 SKILL.md 的目录放进 ~/.pi/agent/skills 即可。</div>
-      </section>
+        </template>
 
-      <!-- mcp -->
-      <section v-else class="pane">
-        <p class="muted">
-          pi 的 MCP 能力由扩展提供（如社区 MCP 扩展），本页编辑其配置文件
-          <code>{{ mcpPath }}</code>。格式以所用 MCP 扩展的文档为准。
-        </p>
-        <textarea v-model="mcpText" class="json" rows="16" spellcheck="false" />
-        <div class="pane-actions">
-          <button class="primary" @click="saveMcp">保存 mcp.json</button>
-        </div>
-        <h3>项目信任</h3>
-        <p class="muted">defaultProjectTrust：项目本地 .pi 资源（扩展/技能/设置）的默认信任策略。</p>
-        <select :value="settings?.defaultProjectTrust ?? 'ask'" @change="saveTrust(($event.target as HTMLSelectElement).value)">
-          <option value="ask">ask（每次询问）</option>
-          <option value="always">always（总是信任）</option>
-          <option value="never">never（忽略项目资源）</option>
-        </select>
+        <!-- ============ 模型设置 ============ -->
+        <template v-else-if="pane === 'models'">
+          <h2>模型设置</h2>
+          <p class="pane-sub">
+            默认模型作用于新会话，当前会话可在输入卡片中临时切换；密钥、自定义供应商与模型能力配置在
+            <b>供应商与密钥</b> 页。
+          </p>
+
+          <div class="group">
+            <div class="row">
+              <div class="row-text">
+                <b>当前默认</b>
+                <span class="mono">{{ defaultModelKey === "/" ? "未设置" : defaultModelKey }}</span>
+              </div>
+              <select
+                class="sel"
+                :value="settings.defaultThinkingLevel ?? 'off'"
+                title="默认思考等级"
+                @change="setSetting('defaultThinkingLevel', ($event.target as HTMLSelectElement).value)"
+              >
+                <option v-for="l in thinkingLevels" :key="l" :value="l">思考：{{ l }}</option>
+              </select>
+            </div>
+          </div>
+
+          <h3 class="grp-title">设为默认模型（显示前 {{ filteredModels.length }} 个）</h3>
+          <div class="search-row">
+            <Icon name="search-line" :size="14" />
+            <input v-model="modelQuery" placeholder="搜索模型，如 minimax / claude / kimi" />
+          </div>
+          <div v-if="modelsLoading" class="state">加载中…</div>
+          <div v-else class="model-list">
+            <div
+              v-for="m in filteredModels"
+              :key="m.provider + '/' + m.id"
+              class="model-row"
+              :class="{ on: `${m.provider}/${m.id}` === defaultModelKey }"
+              @click="setDefaultModel(m)"
+            >
+              <Icon v-if="`${m.provider}/${m.id}` === defaultModelKey" name="check-line" :size="14" class="ok" />
+              <div class="model-name">
+                <b>{{ m.id }}</b>
+                <span>{{ m.provider }}</span>
+              </div>
+              <span v-if="m.reasoning" class="type-badge">推理</span>
+            </div>
+            <div v-if="!filteredModels.length" class="state">没有匹配的模型</div>
+          </div>
+        </template>
+
+        <!-- ============ 供应商与密钥（内嵌完整管理页） ============ -->
+        <template v-else-if="pane === 'providers'">
+          <ProvidersView :bus="bus" />
+        </template>
+
+        <!-- ============ 键盘快捷键 ============ -->
+        <template v-else-if="pane === 'shortcuts'">
+          <h2>键盘快捷键</h2>
+          <p class="pane-sub">当前版本的固定快捷键。</p>
+          <div class="group">
+            <div v-for="s in shortcuts" :key="s.desc" class="row">
+              <div class="row-text"><b>{{ s.desc }}</b></div>
+              <span class="kbd-row">
+                <kbd v-for="(k, i) in s.keys" :key="i">{{ k }}</kbd>
+              </span>
+            </div>
+          </div>
+        </template>
+
+        <!-- ============ 记忆 ============ -->
+        <template v-else-if="pane === 'memory'">
+          <h2>记忆</h2>
+          <p class="pane-sub">
+            全局 AGENTS.md 会作为长期上下文注入每一次会话，适合记录你的偏好、规范与常用约定。项目级记忆请编辑项目根目录的 AGENTS.md。
+          </p>
+          <div class="group">
+            <div class="row">
+              <div class="row-text">
+                <b class="mono">{{ memoryPath || "加载中…" }}</b>
+                <span>{{ memoryExists ? "已创建" : "尚未创建，保存后自动创建" }}</span>
+              </div>
+              <button class="dark-btn" :disabled="memorySaving" @click="saveMemory">
+                <Icon name="save-3-line" :size="14" />{{ memorySaving ? "保存中…" : "保存" }}
+              </button>
+            </div>
+          </div>
+          <textarea
+            v-model="memoryText"
+            class="memory-editor"
+            placeholder="# 我的记忆&#10;&#10;- 偏好简洁的提交信息（Conventional Commits，中文）&#10;- 测试优先：改动后先跑 pnpm test"
+            spellcheck="false"
+          ></textarea>
+        </template>
+
+        <!-- ============ 插件 / MCP / 技能（内嵌完整管理页） ============ -->
+        <ToolsView
+          v-else-if="pane === 'plugins' || pane === 'mcp' || pane === 'skills'"
+          :kind="pane"
+          :bus="bus"
+        />
+
+        <!-- ============ 命令 ============ -->
+        <template v-else-if="pane === 'commands'">
+          <h2>命令</h2>
+          <p class="pane-sub">
+            技能在输入框中以 <code>/skill:名称</code> 调用（开关见「常规 · 技能斜杠命令」）；插件也可注册命令（pi
+            未提供枚举接口，可在插件页查看源码）。
+          </p>
+          <h3 class="grp-title">可用命令（{{ commandList.length }}）</h3>
+          <div class="group">
+            <div v-for="s in commandList" :key="s.name" class="row" :class="{ dim: !s.enabled }">
+              <div class="row-text">
+                <b class="mono">/skill:{{ s.name }}</b>
+                <span class="clamp">{{ s.description || "—" }}</span>
+              </div>
+              <span class="badge" :class="s.enabled ? 'ok2' : 'warn'">{{ s.enabled ? "可用" : "已停用" }}</span>
+            </div>
+            <div v-if="!commandList.length" class="state">还没有可用命令，先安装技能或插件</div>
+          </div>
+        </template>
+
+        <!-- ============ 使用统计 ============ -->
+        <template v-else-if="pane === 'usage'">
+          <header class="pane-head">
+            <div>
+              <h2>使用统计</h2>
+              <p class="pane-sub">
+                来自本地会话记录（{{ usage?.scanned_sessions ?? 0 }} 个会话）
+              </p>
+            </div>
+            <button class="ghost-btn" title="刷新" @click="ensureUsage(true)">
+              <Icon name="refresh-line" :size="14" />
+            </button>
+          </header>
+
+          <div v-if="usageLoading && !usage" class="state">统计中，大会话历史可能需要几秒…</div>
+          <template v-else-if="usage">
+            <div class="stat-cards">
+              <div class="stat-card">
+                <span class="stat-num">{{ usage.scanned_sessions }}</span>
+                <span class="stat-label">会话</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-num">{{ usage.messages.user }}</span>
+                <span class="stat-label">用户消息</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-num">{{ usage.messages.assistant }}</span>
+                <span class="stat-label">助手回复</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-num">{{ fmtTokens(usage.tokens.total) }}</span>
+                <span class="stat-label">总 Tokens</span>
+              </div>
+              <div v-if="usage.cost > 0" class="stat-card">
+                <span class="stat-num">${{ usage.cost.toFixed(2) }}</span>
+                <span class="stat-label">累计费用</span>
+              </div>
+            </div>
+
+            <h3 class="grp-title">近 30 天活跃</h3>
+            <div class="chart">
+              <div
+                v-for="d in usageDays"
+                :key="d.day"
+                class="bar-col"
+                :title="`${d.day} · ${d.messages} 条回复 · ${fmtTokens(d.tokens)} tokens`"
+              >
+                <div class="bar" :style="{ height: Math.max(3, (d.tokens / maxDayTokens) * 72) + 'px' }"></div>
+                <span class="bar-day">{{ d.day.slice(8) }}</span>
+              </div>
+              <div v-if="!usageDays.length" class="state">暂无数据</div>
+            </div>
+
+            <h3 class="grp-title">按模型</h3>
+            <div class="group">
+              <div v-for="m in usage.by_model.slice(0, 10)" :key="m.key" class="row">
+                <div class="row-text">
+                  <b class="mono">{{ m.key }}</b>
+                  <span>{{ m.sessions }} 会话 · {{ m.messages }} 次调用</span>
+                </div>
+                <span class="tok">{{ fmtTokens(m.tokens) }}</span>
+              </div>
+              <div v-if="!usage.by_model.length" class="state">暂无数据</div>
+            </div>
+
+            <h3 class="grp-title">消耗最多的会话</h3>
+            <div class="group">
+              <div v-for="s in usage.top_sessions" :key="s.session_id" class="row">
+                <div class="row-text">
+                  <b>{{ s.name || baseName(s.cwd) }}</b>
+                  <span class="mono clamp">{{ s.model ?? "?" }} · {{ s.messages }} 条消息 · {{ s.created_at.slice(0, 10) }}</span>
+                </div>
+                <span class="tok">{{ fmtTokens(s.tokens) }}</span>
+              </div>
+              <div v-if="!usage.top_sessions.length" class="state">暂无数据</div>
+            </div>
+          </template>
+        </template>
+
+        <!-- ============ 云同步（内容由宿主注入；桌面端为 SyncSettings） ============ -->
+        <template v-else-if="pane === 'sync'">
+          <h2>云同步</h2>
+          <p class="pane-sub">会话实时上云，Web 端登录同一账号即可查看并远程控制（发消息 / 停止）。</p>
+          <slot name="sync">
+            <div class="state">当前环境不支持云同步</div>
+          </slot>
+        </template>
+
+        <!-- ============ 引导 ============ -->
+        <template v-else-if="pane === 'guide'">
+          <h2>引导</h2>
+          <p class="pane-sub">几步完成 PiDock 初始配置，随时可以回来查看。</p>
+          <div class="steps">
+            <div v-for="(st, i) in guideSteps" :key="i" class="step" :class="{ done: st.done }">
+              <div class="step-dot">
+                <Icon :name="st.done ? 'check-line' : 'arrow-right-line'" :size="13" />
+              </div>
+              <div class="step-text">
+                <b>{{ st.title }}</b>
+                <span>{{ st.desc }}</span>
+              </div>
+              <button class="ghost-btn" @click="pane = st.id">{{ st.cta }}</button>
+            </div>
+          </div>
+          <div class="group">
+            <div class="row">
+              <div class="row-text">
+                <b>云同步</b>
+                <span>登录账号后会话实时上云，网页端可远程控制。</span>
+              </div>
+              <button class="ghost-btn" @click="pane = 'sync'">去开启</button>
+            </div>
+          </div>
+        </template>
       </section>
     </div>
-    <div v-if="loading" class="loading">加载中…</div>
   </div>
 </template>
 
 <style scoped>
 .settings {
-  position: absolute;
+  /* 全屏：盖住整个窗口（含会话侧栏与标题栏），窗口控制由页头按钮补齐 */
+  position: fixed;
   inset: 0;
-  background: #0a0f1a;
+  z-index: 40;
   display: flex;
   flex-direction: column;
-  z-index: 10;
+  background: var(--pd-bg);
 }
 .head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #1f2937;
+  gap: 14px;
+  height: 46px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--pd-border-soft);
+  background: var(--pd-bg-panel);
+  flex: none;
+  user-select: none;
 }
-.head h2 { margin: 0; font-size: 16px; color: #f3f4f6; }
-.agent-dir { margin-left: auto; font-size: 11px; color: #4b5563; }
-.back {
-  background: #1f2937;
-  color: #e5e7eb;
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
   border: none;
-  border-radius: 6px;
-  padding: 6px 12px;
-  cursor: pointer;
-}
-.notice {
-  margin: 8px 16px 0;
-  padding: 8px 12px;
-  background: #064e3b;
-  color: #a7f3d0;
-  border-radius: 6px;
-  font-size: 12.5px;
-}
-.tabs {
-  display: flex;
-  gap: 4px;
-  padding: 10px 16px 0;
-}
-.tabs button {
-  background: transparent;
-  color: #9ca3af;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 8px 14px;
+  color: var(--pd-text-3);
   font-size: 13px;
   cursor: pointer;
-}
-.tabs button.on { color: #60a5fa; border-bottom-color: #3b82f6; }
-.body { flex: 1; overflow-y: auto; padding: 16px; }
-.pane h3 { color: #e5e7eb; font-size: 14px; display: flex; align-items: center; gap: 10px; }
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 8px;
-  margin: 10px 0 24px;
-}
-.card {
-  border: 1px solid #1f2937;
+  padding: 6px 8px;
   border-radius: 8px;
-  padding: 10px;
-  background: #0b1220;
 }
-.card.off { opacity: 0.55; }
-.card-head { display: flex; align-items: center; gap: 8px; }
-.badge {
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: #1f2937;
-  color: #9ca3af;
+.back-btn:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
+.head h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--pd-text);
 }
-.badge.blue { background: #1e3a8a; color: #bfdbfe; }
-.muted { color: #6b7280; font-size: 12px; }
-.small { font-size: 11px; }
-.card-actions { margin-top: 8px; display: flex; gap: 6px; }
-button {
-  background: #1f2937;
-  color: #e5e7eb;
-  border: none;
-  border-radius: 6px;
-  padding: 5px 10px;
-  font-size: 12px;
+.agent-dir {
+  font-size: 11.5px;
+  color: var(--pd-text-4);
+  font-family: Consolas, monospace;
   cursor: pointer;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-button.primary { background: #2563eb; }
-button.danger { background: #7f1d1d; color: #fecaca; }
-.filter {
+.agent-dir:hover { color: var(--pd-text-2); }
+.flex-sp { flex: 1; }
+.win-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--pd-border);
+  margin: 0 2px;
+}
+.wbtn {
+  width: 34px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  color: var(--pd-text-3);
+  cursor: pointer;
+  padding: 0;
+}
+.wbtn:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+.wbtn.close:hover { background: #e04444; color: #fff; }
+
+.body {
   flex: 1;
-  max-width: 300px;
-  background: #111827;
-  border: 1px solid #1f2937;
-  color: #e5e7eb;
-  border-radius: 6px;
-  padding: 5px 8px;
-  font-size: 12px;
+  display: flex;
+  min-height: 0;
 }
-.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.tbl th, .tbl td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #141c2c; color: #d1d5db; }
-.tbl code { color: #93c5fd; }
-.row-item {
+.nav {
+  width: 208px;
+  flex: none;
+  overflow-y: auto;
+  padding: 14px 10px 20px;
+  border-right: 1px solid var(--pd-border-soft);
+  background: var(--pd-bg-panel);
+}
+.nav-sec { margin-bottom: 14px; }
+.nav-sec-title {
+  font-size: 11px;
+  color: var(--pd-text-4);
+  padding: 0 10px 6px;
+}
+.nav-item {
   display: flex;
   align-items: center;
+  gap: 9px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: var(--pd-text-2);
+  font-size: 13px;
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.nav-item:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+.nav-item.on {
+  background: var(--pd-bg-active);
+  color: var(--pd-text);
+  font-weight: 600;
+}
+.nav-item svg { color: var(--pd-text-3); flex: none; }
+.nav-item.on svg { color: var(--pd-accent); }
+.nav-label { flex: 1; min-width: 0; }
+.nav-count {
+  font-size: 11px;
+  color: var(--pd-text-4);
+  background: var(--pd-bg-card);
+  border-radius: 999px;
+  padding: 0 7px;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 26px 34px 48px;
+}
+/* 内嵌完整管理页（插件/MCP/技能/供应商）时：交给子页面自己滚动与留白 */
+.content.embed {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+/* 表单/偏好页：内容列限宽居中，宽窗口下不贴左散开 */
+.content:not(.embed) > * {
+  max-width: 860px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.content > h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--pd-text);
+}
+.pane-sub {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--pd-text-3);
+  line-height: 1.6;
+}
+.pane-head {
+  display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px;
-  border: 1px solid #1f2937;
-  border-radius: 8px;
-  margin-bottom: 6px;
-  background: #0b1220;
 }
-.switch { display: flex; align-items: center; gap: 6px; color: #9ca3af; font-size: 12px; white-space: nowrap; }
-.json {
-  width: 100%;
-  background: #0b1220;
-  color: #d1d5db;
-  border: 1px solid #1f2937;
-  border-radius: 8px;
-  font-family: Consolas, monospace;
+.grp-title {
+  margin: 26px 0 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--pd-text-2);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.group {
+  margin-top: 14px;
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-border-soft);
+  border-radius: 12px;
+  padding: 4px 16px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+.row + .row { border-top: 1px solid var(--pd-border-soft); }
+.row.col { flex-wrap: wrap; }
+.row.dim { opacity: 0.55; }
+.row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.row-text b {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--pd-text);
+}
+.row-text span {
   font-size: 12px;
-  padding: 10px;
+  color: var(--pd-text-3);
+  line-height: 1.5;
 }
-.pane-actions { margin-top: 10px; }
-.empty { color: #4b5563; font-size: 12.5px; padding: 20px 0; }
-.loading { position: absolute; bottom: 12px; right: 16px; color: #4b5563; font-size: 12px; }
-select {
-  background: #111827;
-  color: #e5e7eb;
-  border: 1px solid #1f2937;
-  border-radius: 6px;
-  padding: 6px 10px;
+.row-text span.mono { font-family: Consolas, monospace; font-size: 11.5px; word-break: break-all; }
+.clamp {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mono { font-family: Consolas, monospace; }
+
+.sel {
+  background: var(--pd-bg-raised);
+  border: 1px solid var(--pd-border);
+  border-radius: 8px;
+  color: var(--pd-text);
   font-size: 12.5px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.sel:focus { outline: none; border-color: var(--pd-accent); }
+.sel option { background: var(--pd-bg-raised); }
+
+.ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px solid var(--pd-border);
+  border-radius: 8px;
+  color: var(--pd-text-2);
+  font-size: 12.5px;
+  padding: 6px 12px;
+  cursor: pointer;
+  flex: none;
+}
+.ghost-btn:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
+.dark-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--pd-text);
+  color: var(--pd-bg);
+  border: none;
+  border-radius: 9px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: none;
+}
+.dark-btn:hover { background: var(--pd-accent); color: #1a1a1a; }
+.dark-btn:disabled { opacity: 0.6; cursor: default; }
+
+.badge {
+  font-size: 10.5px;
+  border-radius: 5px;
+  padding: 1.5px 7px;
+  flex: none;
+  color: var(--pd-text-3);
+  background: var(--pd-bg-hover);
+}
+.badge.acc { color: var(--pd-accent-text); background: var(--pd-accent-soft); }
+.badge.ok2 { color: var(--pd-green-text); background: var(--pd-green-soft); }
+.badge.warn { color: var(--pd-yellow-text); background: var(--pd-yellow-soft); }
+.type-badge {
+  font-size: 10px;
+  color: var(--pd-text-3);
+  background: var(--pd-bg-hover);
+  border-radius: 5px;
+  padding: 1.5px 7px;
+  flex: none;
+  font-family: Consolas, monospace;
+}
+
+/* 开关（与 ToolsView 一致） */
+.switch {
+  position: relative;
+  flex: none;
+  width: 42px;
+  height: 23px;
+  cursor: pointer;
+}
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.slider {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--pd-bg-hover);
+  border: 1px solid var(--pd-border);
+  transition: background 0.15s, border-color 0.15s;
+}
+.slider::before {
+  content: "";
+  position: absolute;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  background: var(--pd-text-3);
+  transition: transform 0.15s, background 0.15s;
+}
+.switch input:checked + .slider {
+  background: var(--pd-green);
+  border-color: var(--pd-green);
+}
+.switch input:checked + .slider::before {
+  transform: translateX(19px);
+  background: #fff;
+}
+
+/* 外观主题卡片 */
+.theme-cards { display: flex; gap: 10px; width: 100%; }
+.theme-card {
+  flex: 1;
+  max-width: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: var(--pd-bg-raised);
+  border: 1.5px solid var(--pd-border);
+  border-radius: 12px;
+  color: var(--pd-text-2);
+  font-size: 13px;
+  padding: 18px 0 14px;
+  cursor: pointer;
+}
+.theme-card:hover { border-color: var(--pd-text-4); }
+.theme-card.on { border-color: var(--pd-accent); color: var(--pd-accent-text); background: var(--pd-accent-soft); }
+
+/* 模型页 */
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  color: var(--pd-text-4);
+}
+.search-row:focus-within { border-color: var(--pd-accent); }
+.search-row input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--pd-text);
+  font-size: 13px;
+}
+.search-row input::placeholder { color: var(--pd-text-4); }
+.model-list {
+  margin-top: 10px;
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-border-soft);
+  border-radius: 12px;
+  padding: 4px 8px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.model-row:hover { background: var(--pd-bg-hover); }
+.model-row.on { background: var(--pd-bg-active); }
+.model-row .ok { color: var(--pd-green); flex: none; }
+.model-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.model-name b {
+  font-size: 13px;
+  color: var(--pd-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-name span { font-size: 11.5px; color: var(--pd-text-4); flex: none; }
+
+/* 快捷键 */
+.kbd-row { display: inline-flex; gap: 6px; }
+kbd {
+  font-family: Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--pd-text-2);
+  background: var(--pd-bg-raised);
+  border: 1px solid var(--pd-border);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
+/* 记忆编辑器 */
+.memory-editor {
+  /* 全局样式把 textarea 设为 inline-block，会导致 margin:auto 失效 → 显式块级化 */
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 14px;
+  min-height: 380px;
+  resize: vertical;
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-border);
+  border-radius: 12px;
+  color: var(--pd-text);
+  font-family: Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  padding: 14px 16px;
+}
+.memory-editor:focus { outline: none; border-color: var(--pd-accent); }
+.memory-editor::placeholder { color: var(--pd-text-4); }
+
+/* 统计 */
+.stat-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+.stat-card {
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-border-soft);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stat-num { font-size: 20px; font-weight: 700; color: var(--pd-text); }
+.stat-label { font-size: 11.5px; color: var(--pd-text-3); }
+.chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  margin-top: 12px;
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-border-soft);
+  border-radius: 12px;
+  padding: 14px 14px 8px;
+  min-height: 110px;
+}
+.bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.bar {
+  width: 100%;
+  max-width: 22px;
+  border-radius: 3px 3px 0 0;
+  background: var(--pd-accent);
+  opacity: 0.75;
+}
+.bar-col:hover .bar { opacity: 1; }
+.bar-day { font-size: 9px; color: var(--pd-text-4); }
+.tok {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--pd-text-2);
+  font-family: Consolas, monospace;
+  flex: none;
+}
+
+/* 引导 */
+.steps { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+.step {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-border-soft);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.step.done { border-color: var(--pd-green-soft); }
+.step-dot {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--pd-bg-hover);
+  color: var(--pd-text-3);
+}
+.step.done .step-dot { background: var(--pd-green-soft); color: var(--pd-green-text); }
+.step-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.step-text b { font-size: 13.5px; color: var(--pd-text); }
+.step-text span { font-size: 12px; color: var(--pd-text-3); line-height: 1.5; }
+
+.state {
+  color: var(--pd-text-4);
+  font-size: 13px;
+  padding: 18px 4px;
+  line-height: 1.7;
+}
+.notice {
+  margin-bottom: 14px;
+  font-size: 12.5px;
+  color: var(--pd-accent-text);
+  background: var(--pd-accent-soft);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+code {
+  font-family: Consolas, monospace;
+  font-size: 11.5px;
+  background: var(--pd-bg-hover);
+  border-radius: 5px;
+  padding: 1px 5px;
 }
 </style>
