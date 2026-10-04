@@ -679,7 +679,12 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
             <span v-if="m.image" class="type-badge">视觉</span>
             <span v-if="m.reasoning" class="type-badge">推理</span>
             <span v-if="isDefaultModel(m)" class="badge">默认</span>
-            <button v-else class="ghost-btn wide" @click.stop="setDefault(m)">设为默认</button>
+            <template v-else>
+              <button class="edit-btn" title="编辑模型配置" @click.stop="openModelOverrideEditor(m)">
+                <Icon name="edit-2-line" :size="13" />编辑
+              </button>
+              <button class="ghost-btn wide" @click.stop="setDefault(m)">设为默认</button>
+            </template>
           </div>
           <div v-if="!providerModels.length" class="state small">该供应商暂无可用模型（可能缺少密钥）</div>
         </div>
@@ -1123,6 +1128,20 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
 }
 
 /* ---- 模型能力徽标与编辑弹窗 ---- */
+.edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--pd-border);
+  background: none;
+  color: var(--pd-text-2);
+  font-size: 12px;
+  cursor: pointer;
+  flex: none;
+}
+.edit-btn:hover { background: var(--pd-bg-hover); color: var(--pd-text); border-color: var(--pd-accent); }
 .mr-badge {
   flex: none;
   font-size: 10.5px;
