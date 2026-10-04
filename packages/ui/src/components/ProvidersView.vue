@@ -72,6 +72,13 @@ interface ModelRow {
 }
 
 const formModelRows = ref<Array<ModelRow>>([]);
+/** 模型能力行的筛选关键字 */
+const rowFilter = ref("");
+const filteredModelRows = computed(() => {
+  const q = rowFilter.value.trim().toLowerCase();
+  if (!q) return formModelRows.value;
+  return formModelRows.value.filter((r) => r.id.toLowerCase().includes(q));
+});
 
 // ---- 模型编辑弹窗 ----
 const editingModel = ref<{
@@ -79,7 +86,8 @@ const editingModel = ref<{
   mode: "row" | "override";
   providerId?: string;
   origId?: string;
-  index?: number;
+  /** row 模式：被编辑的响应式行对象 */
+  row?: ModelRow;
   id: string;
   contextWindow: string;
   maxTokens: string;
@@ -93,12 +101,11 @@ const advOpen = ref(false);
 /** 弹窗保存同步候选文本时，抑制行重建（否则改 id 会丢能力标记） */
 let suppressRowsSync = false;
 
-function openModelEditor(i: number): void {
-  const r = formModelRows.value[i];
+function openModelEditor(r: ModelRow): void {
   if (!r) return;
   editingModel.value = {
     mode: "row",
-    index: i,
+    row: r,
     id: r.id,
     contextWindow: r.contextWindow != null ? String(r.contextWindow) : "",
     maxTokens: r.maxTokens != null ? String(r.maxTokens) : "",
@@ -174,7 +181,7 @@ async function saveModelEditor(): Promise<void> {
     }
     return;
   }
-  const r = formModelRows.value[e.index!];
+  const r = e.row;
   if (r) {
     r.id = e.id.trim() || r.id;
     r.image = e.image;
@@ -207,10 +214,10 @@ function loadModelRows(): void {
 }
 
 /** 从能力行中移除模型（同时同步候选 ID 文本） */
-function removeModelRow(i: number): void {
-  const row = formModelRows.value[i];
-  if (!row) return;
-  formModelRows.value.splice(i, 1);
+function removeModelRow(row: ModelRow): void {
+  const idx = formModelRows.value.indexOf(row);
+  if (idx < 0) return;
+  formModelRows.value.splice(idx, 1);
   const ids = formModelRows.value.map((r) => r.id);
   formModelsText.value = ids.join(", ");
 }
@@ -298,11 +305,14 @@ const filtered = computed(() => {
 const selectedRow = computed(() => providers.value.find((p) => p.id === selected.value) ?? null);
 const isCustom = computed(() => selectedRow.value?.source === "custom");
 
+/** 内置供应商模型列表的筛选关键字 */
+const builtinFilter = ref("");
 const providerModels = computed(() => {
   if (!selected.value) return [];
+  const q = builtinFilter.value.trim().toLowerCase();
   return allModels.value
     .filter((m) => m.provider === selected.value)
-    .slice(0, 200)
+    .filter((m) => !q || m.id.toLowerCase().includes(q))
     .map((m) => ({ ...m, image: m.input?.includes("image") ?? false }));
 });
 const isDefaultModel = (m: { provider: string; id: string }): boolean =>
@@ -535,20 +545,24 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
             <textarea v-model="formModelsText" rows="3" placeholder="model-a, model-b"></textarea>
           </div>
           <div class="field">
-            <label>模型能力 · {{ formModelRows.length }} 个模型（视觉 = 支持图片输入，推理 = 支持思维链）</label>
+            <label>
+              模型能力 · {{ formModelRows.length }} 个模型{{ rowFilter ? `（筛出 ${filteredModelRows.length} 个）` : "" }}
+              （视觉 = 支持图片输入，推理 = 支持思维链）
+            </label>
+            <input v-model="rowFilter" class="mr-filter" placeholder="筛选模型，如 vision / 4k / 250428…" />
             <div class="model-rows">
-              <div v-for="(r, i) in formModelRows" :key="r.id" class="model-row" title="点击编辑模型配置" @click="openModelEditor(i)">
+              <div v-for="r in filteredModelRows" :key="r.id" class="model-row" title="点击编辑模型配置" @click="openModelEditor(r)">
                 <span class="mr-id">{{ r.id }}</span>
                 <span v-if="r.image" class="mr-badge">视觉</span>
                 <span v-if="r.reasoning" class="mr-badge">推理</span>
                 <span v-if="r.video" class="mr-badge">视频</span>
                 <span v-if="r.pdf" class="mr-badge">PDF</span>
                 <span v-if="r.contextWindow" class="mr-badge">{{ fmtInt(r.contextWindow) }}</span>
-                <button class="mr-del" title="移除该模型" @click.stop="removeModelRow(i)">
+                <button class="mr-del" title="移除该模型" @click.stop="removeModelRow(r)">
                   <Icon name="close-line" :size="12" />
                 </button>
               </div>
-              <div v-if="!formModelRows.length" class="mr-empty">填写或获取候选模型 ID 后自动生成</div>
+              <div v-if="!filteredModelRows.length" class="mr-empty">{{ rowFilter ? "没有匹配的模型" : "填写或获取候选模型 ID 后自动生成" }}</div>
             </div>
           </div>
           <div class="form-actions">
@@ -604,20 +618,24 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
             <textarea v-model="formModelsText" rows="3"></textarea>
           </div>
           <div class="field">
-            <label>模型能力 · {{ formModelRows.length }} 个模型（视觉 = 支持图片输入，推理 = 支持思维链）</label>
+            <label>
+              模型能力 · {{ formModelRows.length }} 个模型{{ rowFilter ? `（筛出 ${filteredModelRows.length} 个）` : "" }}
+              （视觉 = 支持图片输入，推理 = 支持思维链）
+            </label>
+            <input v-model="rowFilter" class="mr-filter" placeholder="筛选模型，如 vision / 4k / 250428…" />
             <div class="model-rows">
-              <div v-for="(r, i) in formModelRows" :key="r.id" class="model-row" title="点击编辑模型配置" @click="openModelEditor(i)">
+              <div v-for="r in filteredModelRows" :key="r.id" class="model-row" title="点击编辑模型配置" @click="openModelEditor(r)">
                 <span class="mr-id">{{ r.id }}</span>
                 <span v-if="r.image" class="mr-badge">视觉</span>
                 <span v-if="r.reasoning" class="mr-badge">推理</span>
                 <span v-if="r.video" class="mr-badge">视频</span>
                 <span v-if="r.pdf" class="mr-badge">PDF</span>
                 <span v-if="r.contextWindow" class="mr-badge">{{ fmtInt(r.contextWindow) }}</span>
-                <button class="mr-del" title="移除该模型" @click.stop="removeModelRow(i)">
+                <button class="mr-del" title="移除该模型" @click.stop="removeModelRow(r)">
                   <Icon name="close-line" :size="12" />
                 </button>
               </div>
-              <div v-if="!formModelRows.length" class="mr-empty">填写或获取候选模型 ID 后自动生成</div>
+              <div v-if="!filteredModelRows.length" class="mr-empty">{{ rowFilter ? "没有匹配的模型" : "填写或获取候选模型 ID 后自动生成" }}</div>
             </div>
           </div>
           <div class="form-actions">
@@ -666,6 +684,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
 
         <div class="models-head">
           <h2>模型 <span class="count">{{ providerModels.length }}</span></h2>
+          <input v-model="builtinFilter" class="mr-filter" placeholder="筛选模型…" />
         </div>
         <div class="model-list">
           <div
@@ -979,9 +998,19 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 220px;
-  overflow-y: auto;
 }
+.mr-filter {
+  margin-top: 4px;
+  padding: 6px 10px;
+  background: var(--pd-bg);
+  border: 1px solid var(--pd-border);
+  border-radius: 8px;
+  color: var(--pd-text);
+  font-size: 12.5px;
+}
+.mr-filter:focus { outline: none; border-color: var(--pd-accent); }
+.mr-filter::placeholder { color: var(--pd-text-4); }
+.models-head .mr-filter { width: 180px; }
 .model-row {
   display: flex;
   align-items: center;
