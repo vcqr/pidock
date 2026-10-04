@@ -98,7 +98,10 @@ pub struct ScheduledJob {
     pub ends_at: Option<i64>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// 由后端管理；前端保存请求可不带（反序列化缺省 0）
+    #[serde(default)]
     pub created_at: i64,
+    #[serde(default)]
     pub updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<RunRecord>,
@@ -788,6 +791,28 @@ mod tests {
         assert_eq!(runs.len(), KEEP_RUNS);
         assert_eq!(runs[0].run_id, "5");
         assert_eq!(runs.last().unwrap().run_id, (KEEP_RUNS + 4).to_string());
+    }
+
+    #[test]
+    fn frontend_save_payload_deserializes() {
+        // 前端 applyDraft 的保存载荷：不含 created_at/updated_at（后端管理）
+        let payload = r#"{
+            "id": "",
+            "name": "问候",
+            "prompt": "你是谁?",
+            "cron": "0 */5 * * * *",
+            "workspace": null,
+            "model": null,
+            "thinking_level": null,
+            "images": null,
+            "permission_mode": "plan",
+            "starts_at": null,
+            "ends_at": null,
+            "enabled": true
+        }"#;
+        let job: ScheduledJob = serde_json::from_str(payload).expect("前端保存载荷必须能反序列化");
+        assert_eq!(job.name, "问候");
+        assert_eq!(job.created_at, 0);
     }
 
     #[test]

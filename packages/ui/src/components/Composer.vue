@@ -540,7 +540,8 @@ function onKeydown(e: KeyboardEvent): void {
       return;
     }
   }
-  if (e.key === "Enter" && !e.shiftKey) {
+  // 输入法组词中的 Enter 是"确认候选词"，不是发送/保存
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     submit();
   }
@@ -794,7 +795,7 @@ function onKeydown(e: KeyboardEvent): void {
       <button v-if="busy" class="abort" title="停止" @click="emit('abort')">
         <Icon :name="I.stop" :size="14" />
       </button>
-      <button v-else class="send" :disabled="disabled || !text.trim()" @click="submit">
+      <button v-else class="send" :disabled="disabled || !text.trim()" :title="draft ? '保存任务' : undefined" @click="submit">
         <Icon :name="I.up" :size="15" />
       </button>
     </div>
