@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { darkTheme, NConfigProvider } from "naive-ui";
 import {
   ChatView,
+  Icon,
   SessionSidebar,
   StatePill,
   ATTACHMENT_LOADER,
@@ -191,7 +192,7 @@ const sessionsEmpty = computed(() => {
         <span class="brand-sm">π</span>
         <b>机器</b>
         <button class="ghost" :title="themeMode === 'dark' ? '切换亮色' : '切换暗色'" @click="toggleTheme()">
-          {{ themeMode === "dark" ? "☀" : "☾" }}
+          <Icon :name="themeMode === 'dark' ? 'sun-line' : 'moon-line'" :size="15" />
         </button>
         <button class="ghost" @click="logout">退出</button>
       </div>

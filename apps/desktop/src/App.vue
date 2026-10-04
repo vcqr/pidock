@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AutomationView,
   ChatView,
+  Icon,
   SessionSidebar,
   SettingsView,
   StatePill,
@@ -245,7 +246,9 @@ onMounted(async () => {
             class="tbtn"
             :title="themeMode === 'dark' ? '切换亮色' : '切换暗色'"
             @click="toggleTheme()"
-          >{{ themeMode === "dark" ? "☀" : "☾" }}</button>
+          >
+            <Icon :name="themeMode === 'dark' ? 'sun-line' : 'moon-line'" :size="15" />
+          </button>
           <span class="win-sep"></span>
           <button class="tbtn" title="最小化" @click="minimize">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14" /></svg>

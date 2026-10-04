@@ -7,6 +7,7 @@ export { default as ChatView } from "./components/ChatView.vue";
 export { default as AutomationView } from "./components/AutomationView.vue";
 export { default as Composer } from "./components/Composer.vue";
 export { default as FileIcon } from "./components/FileIcon.vue";
+export { default as Icon } from "./components/Icon.vue";
 export { fileIconName, FILE_ICON_SVGS } from "./fileIcons.js";
 export { default as MessageItem } from "./components/MessageItem.vue";
 export { default as SessionSidebar } from "./components/SessionSidebar.vue";
