@@ -4,6 +4,7 @@ export type { DataBus, ReplayEvent } from "./databus.js";
 export { ATTACHMENT_LOADER, FOLDER_PICKER, FILE_PICKER, REVEAL_PATH, WINDOW_CONTROLS, type WindowControls } from "./databus.js";
 export { initTheme, toggleTheme, applyTheme, themeMode, themePref, type ThemeMode, type ThemePref } from "./theme.js";
 export { default as ChatView } from "./components/ChatView.vue";
+export { default as AutomationView } from "./components/AutomationView.vue";
 export { default as Composer } from "./components/Composer.vue";
 export { default as FileIcon } from "./components/FileIcon.vue";
 export { fileIconName, FILE_ICON_SVGS } from "./fileIcons.js";

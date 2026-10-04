@@ -12,6 +12,10 @@ export function createTauriBus(): DataBus {
     transport: "本地 pi-host",
 
     async request(method: string, params?: unknown): Promise<any> {
+      // 自动化（定时任务）由 Rust 调度器处理，不经过 pi-host
+      if (method.startsWith("automation.")) {
+        return await invoke("automation_request", { method, params: params ?? {} });
+      }
       return await invoke("host_request", { method, params: params ?? {} });
     },
 

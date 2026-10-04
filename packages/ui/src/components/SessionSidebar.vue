@@ -12,6 +12,8 @@ const props = defineProps<{
   homeDir?: string | null;
   /** show the 插件/技能/MCP tool nav (desktop only) */
   showToolNav?: boolean;
+  /** 启用「自动化」入口（桌面端有 Rust 调度器；web 无后端保持禁用占位） */
+  showAutomation?: boolean;
   /** web has no settings center — hide the entry */
   showSettingsBtn?: boolean;
   /** currently open main-area tool view, for nav highlight */
@@ -28,6 +30,8 @@ const emit = defineEmits<{
   rename: [sessionId: string, name: string];
   "open-settings": [tab?: string];
   "open-tools": [tool: "plugins" | "skills" | "providers" | "mcp"];
+  /** 打开自动化（定时任务）全屏页（桌面端） */
+  "open-automation": [];
 }>();
 
 const search = ref("");
@@ -264,7 +268,12 @@ onBeforeUnmount(() => {
       <div class="nav-item" @click="openSearch">
         <Icon name="search-line" :size="16" />搜索<span class="kbd">Ctrl+K</span>
       </div>
-      <div class="nav-item disabled" title="开发中">
+      <div
+        class="nav-item"
+        :class="{ disabled: !showAutomation }"
+        :title="showAutomation ? undefined : '开发中'"
+        @click="showAutomation && emit('open-automation')"
+      >
         <Icon name="time-line" :size="16" />自动化
       </div>
       <div v-if="showToolNav" class="nav-item" :class="{ active: activeTool === 'plugins' }" @click="emit('open-tools', 'plugins')">

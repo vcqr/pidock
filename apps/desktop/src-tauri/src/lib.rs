@@ -1,4 +1,5 @@
 mod host;
+mod scheduler;
 mod sync;
 
 use host::Supervisor;
@@ -90,8 +91,10 @@ pub fn run() {
         .manage(supervisor)
         .manage(event_tx.clone())
         .manage(sync::SyncManager::new(default_sync_cfg_path(), sync_tx))
+        .manage(scheduler::SchedulerManager::new(scheduler::SchedulerManager::default_jobs_path()))
         .invoke_handler(tauri::generate_handler![
             host::host_request,
+            scheduler::automation_request,
             sync::sync_configure,
             sync::sync_status,
             sync::sync_disable,
@@ -101,6 +104,14 @@ pub fn run() {
         ])
         .setup(move |app| {
             sync::spawn(app.handle().clone(), event_rx, sync_rx);
+            scheduler::SchedulerManager::spawn_event_watcher(app.handle().clone());
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mgr = handle.state::<scheduler::SchedulerManager>();
+                if let Err(e) = mgr.ensure_started(&handle).await {
+                    eprintln!("[scheduler] 启动失败: {e}");
+                }
+            });
             Ok(())
         })
         .build(tauri::generate_context!())

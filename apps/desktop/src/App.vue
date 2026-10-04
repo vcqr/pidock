@@ -4,6 +4,7 @@ import { darkTheme, NConfigProvider, NSplit } from "naive-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  AutomationView,
   ChatView,
   SessionSidebar,
   SettingsView,
@@ -30,6 +31,8 @@ const bootError = ref<string | null>(null);
 const showSettings = ref(false);
 /** 设置中心打开时定位的页面（接受新 pane id 与旧 tab 名） */
 const settingsPane = ref("general");
+/** 自动化（定时任务）全屏页 */
+const showAutomation = ref(false);
 /** 新建任务模式：右侧显示默认对话页，发送首条消息后自动创建会话并退出该模式 */
 const newTaskMode = ref(false);
 /** 新建任务预选的项目目录（侧栏项目分组点击）；seq 自增让重复点击同一目录也能重新应用选中 */
@@ -218,12 +221,14 @@ onMounted(async () => {
         :active-id="store.activeId"
         :home-dir="store.homeDir"
         :show-settings-btn="true"
+        :show-automation="true"
         :width="sidebarWidth ?? undefined"
         @select="(id) => store?.openSession(id)"
         @new-task="() => startNewTask()"
         @open-project="(cwd) => startNewTask(cwd)"
         @rename="(id, name) => store?.renameSession(id, name)"
         @open-settings="(tab) => openSettings(tab)"
+        @open-automation="showAutomation = true"
       >
       </SessionSidebar>
       </template>
@@ -260,6 +265,7 @@ onMounted(async () => {
           @open-settings="(tab) => openSettings(tab)"
           @open-providers="() => openSettings('providers')"
         />
+        <AutomationView v-if="showAutomation" :bus="bus" @close="showAutomation = false" />
         <SettingsView
           v-if="showSettings"
           :bus="bus"
