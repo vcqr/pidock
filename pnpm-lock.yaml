@@ -78,6 +78,9 @@ importers:
       '@pidock/protocol':
         specifier: workspace:*
         version: link:../packages/protocol
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
       unpdf:
         specifier: ^1.8.1
         version: 1.8.1

@@ -17,12 +17,14 @@ import {
 import { emitEvent } from "./emit.js";
 import { entryToPayload, metaPayloadFromSession } from "./map.js";
 import { parseAttachments, type IncomingAttachment } from "./attachments.js";
+import { createTodoWriteTool, sanitizeTodos } from "./todo.js";
 import {
   ATTACHMENT_THRESHOLD_BYTES,
   Event,
   INLINE_PREVIEW_BYTES,
   type AgentState,
   type Block,
+  type TodoItem,
 } from "@pidock/protocol";
 
 export const HOST_VERSION = "0.1.0";
@@ -62,6 +64,8 @@ interface TrackedSession {
   pendingTurnId: string | null;
   unsubscribe: () => void;
   drain: () => void;
+  /** LLM 最近一次 TodoWrite 提交的任务清单（UI 进度卡数据源；重开时从 JSONL 恢复） */
+  todos: TodoItem[];
   snapshot: {
     messageId: string | null;
     text: string;
@@ -193,6 +197,7 @@ export class SessionPool {
     // 新会话默认计划模式：修改类工具（bash/write/edit）先被拦下，用户可在输入卡切换
     const permission = { mode: "plan" as PermissionMode };
     const sessionIdRef = { id: "" };
+    const trackedRef: { current: TrackedSession | null } = { current: null };
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: getAgentDir(),
@@ -219,6 +224,15 @@ export class SessionPool {
       modelRuntime: await this.modelRuntime(),
       sessionManager,
       resourceLoader: loader,
+      // TodoWrite：LLM 更新任务清单 → 存进 TrackedSession 并推送 todo_updated
+      customTools: [
+        createTodoWriteTool((todos) => {
+          if (trackedRef.current) trackedRef.current.todos = todos;
+          if (sessionIdRef.id) {
+            emitEvent(sessionIdRef.id, Event.TODO_UPDATED, { todos }, { persist: false });
+          }
+        }),
+      ],
     });
     const sessionId = session.sessionId;
     sessionIdRef.id = sessionId;
@@ -233,8 +247,10 @@ export class SessionPool {
       pendingTurnId: null,
       unsubscribe: () => {},
       drain: () => {},
+      todos: [],
       snapshot: { messageId: null, text: "", thinking: "", dirty: false, lastEmit: 0 },
     };
+    trackedRef.current = tracked;
     tracked.unsubscribe = this.wire(sessionId, tracked);
     this.sessions.set(sessionId, tracked);
 
@@ -259,6 +275,7 @@ export class SessionPool {
     // 与 createSession 一致：权限模式不持久化，重开回到默认计划模式
     const permission = { mode: "plan" as PermissionMode };
     const sessionIdRef = { id: "" };
+    const trackedRef: { current: TrackedSession | null } = { current: null };
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: getAgentDir(),
@@ -281,6 +298,15 @@ export class SessionPool {
       modelRuntime: await this.modelRuntime(),
       sessionManager,
       resourceLoader: loader,
+      // 与 createSession 一致：TodoWrite 推送任务清单（重开场景由 restoreTodos 补发历史状态）
+      customTools: [
+        createTodoWriteTool((todos) => {
+          if (trackedRef.current) trackedRef.current.todos = todos;
+          if (sessionIdRef.id) {
+            emitEvent(sessionIdRef.id, Event.TODO_UPDATED, { todos }, { persist: false });
+          }
+        }),
+      ],
     });
     const sessionId = session.sessionId;
     sessionIdRef.id = sessionId;
@@ -293,10 +319,17 @@ export class SessionPool {
       pendingTurnId: null,
       unsubscribe: () => {},
       drain: () => {},
+      todos: this.restoreTodos(sessionManager),
       snapshot: { messageId: null, text: "", thinking: "", dirty: false, lastEmit: 0 },
     };
+    trackedRef.current = tracked;
     tracked.unsubscribe = this.wire(sessionId, tracked);
     this.sessions.set(sessionId, tracked);
+
+    // 重开会话后立即把恢复出的任务清单推给 UI（web 端经 cloud mirror 同样收到）
+    if (tracked.todos.length) {
+      emitEvent(sessionId, Event.TODO_UPDATED, { todos: tracked.todos }, { persist: false });
+    }
 
     emitEvent(sessionId, Event.SESSION_META, metaPayloadFromSession({ cwd }), { persist: false });
     return { session_id: sessionId, file: params.file, cwd };
@@ -313,6 +346,26 @@ export class SessionPool {
     tracked.session.dispose();
     this.sessions.delete(params.session_id);
     return { closed: true };
+  }
+
+  /**
+   * 扫描会话 JSONL 条目里最后一个 TodoWrite 工具调用，恢复任务清单。
+   * 自定义工具调用随 assistant 消息块持久化，无需额外落盘；压缩重写后
+   * 旧条目消失 → 清单为空，可接受（仅重开时扫描，live 状态在内存里）。
+   */
+  private restoreTodos(sessionManager: SessionManager): TodoItem[] {
+    let todos: TodoItem[] = [];
+    for (const entry of sessionManager.getEntries() as unknown as Record<string, any>[]) {
+      if (entry?.type !== "message") continue;
+      const msg = entry.message;
+      if (msg?.role !== "assistant" || !Array.isArray(msg.content)) continue;
+      for (const part of msg.content) {
+        if (part?.type === "toolCall" && part?.name === "TodoWrite") {
+          todos = sanitizeTodos(part.arguments?.todos);
+        }
+      }
+    }
+    return todos;
   }
 
   // ------------------------------------------------------------- querying

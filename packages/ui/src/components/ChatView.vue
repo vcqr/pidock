@@ -8,6 +8,7 @@ import MdContent from "./MdContent.vue";
 import ReviewPanel from "./ReviewPanel.vue";
 import Composer from "./Composer.vue";
 import Icon from "./Icon.vue";
+import ProgressCard from "./ProgressCard.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -535,6 +536,7 @@ watch(
 
     <!-- conversation -->
     <template v-else>
+      <div class="conv-row">
       <n-split
         direction="horizontal"
         class="chat-split"
@@ -663,6 +665,9 @@ watch(
         </template>
         <template #resize-trigger><div class="rz-line" /></template>
       </n-split>
+      <!-- 任务进度第三栏（TodoWrite 推送时停靠展开；收起为悬浮小圆标） -->
+      <ProgressCard :store="store" />
+      </div>
     </template>
   </div>
 </template>
@@ -704,6 +709,14 @@ export default { components: { ToolCard, MessageItem } };
 .rz-line:hover::after {
   background: var(--pd-accent);
   opacity: 0.55;
+}
+/* 对话行：聊天/审查 n-split 与任务进度第三栏的水平容器（收起态小圆标相对它定位） */
+.conv-row {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
 }
 .chat-main {
   flex: 1;

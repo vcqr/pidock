@@ -10,6 +10,7 @@ export { default as FileIcon } from "./components/FileIcon.vue";
 export { default as Icon } from "./components/Icon.vue";
 export { fileIconName, FILE_ICON_SVGS } from "./fileIcons.js";
 export { default as MessageItem } from "./components/MessageItem.vue";
+export { default as ProgressCard } from "./components/ProgressCard.vue";
 export { default as SessionSidebar } from "./components/SessionSidebar.vue";
 export { default as SettingsView } from "./components/SettingsView.vue";
 export { default as StatePill } from "./components/StatePill.vue";

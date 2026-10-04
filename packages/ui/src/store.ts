@@ -1,5 +1,6 @@
 import { reactive, ref, watch } from "vue";
 import type { DataBus } from "./databus.js";
+import type { TodoItem } from "@pidock/protocol";
 
 /**
  * Reactive agent store consuming DataBus events.
@@ -128,6 +129,12 @@ export function createAgentStore(bus: DataBus) {
   const turnFileChanges = ref<Array<{ turnId: string; files: Array<{ path: string; added: number; removed: number; isNew: boolean }> }>>([]);
   /** 全量可用模型（已配置供应商，config.models.list），供模型下拉选择 */
   const allModels = ref<ModelInfo[]>([]);
+  /**
+   * 每会话任务清单（TodoWrite 工具推送，全量快照）。
+   * 按 session_id 存、不走 activeId 过滤：openSession 时 host 补发的恢复
+   * 事件可能先于 activeId 赋值到达，按活动会话过滤会把它丢掉。
+   */
+  const todosBySession = ref<Record<string, TodoItem[]>>({});
 
   let liveTools = new Map<string, UiToolItem>();
   let streaming: UiMessageItem | null = null;
@@ -238,6 +245,11 @@ export function createAgentStore(bus: DataBus) {
   }
 
   function applyEnvelope(e: { session_id: string; kind: string; payload: any }): void {
+    if (e.kind === "todo_updated") {
+      const todos = Array.isArray(e.payload?.todos) ? (e.payload.todos as TodoItem[]) : [];
+      todosBySession.value = { ...todosBySession.value, [e.session_id]: todos };
+      return;
+    }
     if (e.session_id !== activeId.value) return;
     switch (e.kind) {
       case "message_delta": {
@@ -401,6 +413,8 @@ export function createAgentStore(bus: DataBus) {
     streaming = null;
     agentState.value = "idle";
     lastError.value = null;
+    // 清掉旧清单，等 host 重开补发（老 host 无此事件 → 面板隐藏）
+    delete todosBySession.value[sessionId];
     loadingHistory.value = true;
     try {
       const history = await bus.loadHistory(sessionId);
@@ -631,6 +645,7 @@ export function createAgentStore(bus: DataBus) {
     turnEndedAt,
     turnFileChanges,
     allModels,
+    todosBySession,
     // actions
     start,
     refreshSessions,

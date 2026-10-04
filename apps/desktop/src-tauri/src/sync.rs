@@ -140,6 +140,7 @@ fn cloud_worthy(kind: &str) -> bool {
             | "approval_request"
             | "auto_retry"
             | "compaction_lifecycle"
+            | "todo_updated"
             | "command_result"
             | "error"
     )

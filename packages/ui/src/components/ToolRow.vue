@@ -95,6 +95,11 @@ const info = computed<Info>(() => {
       const p = String(a.path ?? "");
       return { verb: "列目录", icon: "folder-line", target: base(p) || "/" };
     }
+    case "TodoWrite": {
+      const todos = Array.isArray(a.todos) ? (a.todos as Array<{ status?: string }>) : [];
+      const done = todos.filter((t) => t?.status === "completed").length;
+      return { verb: "任务清单", icon: "check-double-line", target: `更新 ${todos.length} 项 · ${done} 已完成` };
+    }
     default:
       return { verb: props.toolName, icon: "tools-line", target: props.args.replace(/\s+/g, " ").slice(0, 120) };
   }

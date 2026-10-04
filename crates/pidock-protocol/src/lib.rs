@@ -116,6 +116,7 @@ pub mod ephemeral {
     pub const QUEUE_CHANGED: &str = "queue_changed";
     pub const AUTO_RETRY: &str = "auto_retry";
     pub const COMPACTION_LIFECYCLE: &str = "compaction_lifecycle";
+    pub const TODO_UPDATED: &str = "todo_updated";
     pub const APPROVAL_REQUEST: &str = "approval_request";
     pub const COMMAND_RESULT: &str = "command_result";
     pub const ERROR: &str = "error";

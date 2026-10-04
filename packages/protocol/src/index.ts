@@ -194,6 +194,18 @@ export interface CompactionLifecyclePayload {
   error?: string;
 }
 
+/** TodoWrite 工具提交的单条任务（LLM 参数 activeForm 归一为 snake_case） */
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  active_form?: string;
+}
+
+/** 会话当前任务清单快照（全量替换，非增量） */
+export interface TodoUpdatedPayload {
+  todos: TodoItem[];
+}
+
 export interface ErrorPayload {
   message: string;
   fatal?: boolean;
@@ -219,6 +231,7 @@ export const Event = {
   QUEUE_CHANGED: "queue_changed",
   AUTO_RETRY: "auto_retry",
   COMPACTION_LIFECYCLE: "compaction_lifecycle",
+  TODO_UPDATED: "todo_updated",
   TOOL_APPROVAL: "tool_approval",
   ERROR: "error",
 } as const;
