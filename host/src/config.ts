@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { getAgentDir, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { RpcError, type SessionPool } from "./pool.js";
@@ -301,6 +303,172 @@ export class ConfigService {
     if (!params.path) throw new RpcError("bad_request", "path is required");
     toggleExclusion("skills", params.path, !params.enabled);
     return { ok: true };
+  }
+
+  // ------------------------------------------------------------- 安装（网址/本地）
+  // 技能 = 含 SKILL.md 的目录（zip/tgz 压缩包）；插件 = 单个 .ts/.js 文件。
+  // 安装来源：url（host 下载）或 srcPath（本地导入，经文件选择器取得绝对路径）。
+
+  /** 下载远端内容，50MB 上限 + 60s 超时 */
+  private async download(url: string): Promise<Buffer> {
+    if (!/^https?:\/\//i.test(url)) {
+      throw new RpcError("bad_request", "url must be an http(s) URL");
+    }
+    let res: Response;
+    try {
+      res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(60_000) });
+    } catch (err) {
+      throw new RpcError("download_failed", `下载失败: ${String(err instanceof Error ? err.message : err)}`);
+    }
+    if (!res.ok) {
+      throw new RpcError("download_failed", `下载失败: HTTP ${res.status} ${res.statusText}`);
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > 50 * 1024 * 1024) {
+      throw new RpcError("too_large", "下载内容超过 50MB 上限");
+    }
+    return buf;
+  }
+
+  /** 名称仅允许字母数字与 . _ -，防路径穿越/隐蔽后缀 */
+  private static sanitizeName(raw: string): string {
+    const cleaned = (raw || "")
+      .replace(/\\/g, "/")
+      .split("/")
+      .pop()!
+      .replace(/[^A-Za-z0-9._-]+/g, "-")
+      .replace(/^[-.]+/, "");
+    if (!cleaned) throw new RpcError("bad_request", "无法从来源推导出合法名称，请手动指定");
+    return cleaned;
+  }
+
+  /**
+   * Windows 的 PATH 上 Git 自带的 GNU tar 常排在 System32 bsdtar 之前，
+   * 而 GNU tar 会把 `C:\...` 归档名当远程主机（rsh 语法）——优先用系统自带 bsdtar。
+   */
+  private static tarProgram(): string {
+    if (process.platform === "win32") {
+      const sysTar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+      if (existsSync(sysTar)) return sysTar;
+    }
+    return "tar";
+  }
+
+  /** 用系统 bsdtar（Win10+ 自带，zip/tgz 通吃）解压到 destDir */
+  private extractArchive(archivePath: string, destDir: string): Promise<void> {
+    return new Promise((resolvePromise, reject) => {
+      const child = spawn(ConfigService.tarProgram(), ["-xf", archivePath, "-C", destDir], {
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      let stderr = "";
+      child.stderr?.on("data", (d) => (stderr += String(d)));
+      child.on("error", (err) => reject(new RpcError("extract_failed", `tar 启动失败（Win10+ 自带 tar.exe）: ${err.message}`)));
+      child.on("close", (code) => {
+        if (code === 0) resolvePromise();
+        else reject(new RpcError("extract_failed", `解压失败 (exit ${code}): ${stderr.slice(-400)}`));
+      });
+    });
+  }
+
+  /** 在解压结果中定位技能目录：根目录、单层或双层包裹目录里找 SKILL.md */
+  private findSkillDir(dir: string, depth = 0): string | null {
+    if (existsSync(join(dir, "SKILL.md"))) return dir;
+    if (depth >= 2) return null;
+    const dirs = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory());
+    const first = dirs[0];
+    if (dirs.length === 1 && first) return this.findSkillDir(join(dir, first.name), depth + 1);
+    return null;
+  }
+
+  async skillsInstall(params: { url?: string; srcPath?: string; name?: string }): Promise<{ ok: true; name: string; path: string }> {
+    let buf: Buffer;
+    let baseName: string;
+    if (params.srcPath) {
+      const src = params.srcPath.trim();
+      if (!src || !existsSync(src) || !statSync(src).isFile()) {
+        throw new RpcError("bad_request", "srcPath 文件不存在");
+      }
+      buf = readFileSync(src);
+      baseName = src.slice(src.lastIndexOf(sep) + 1) || "skill";
+    } else if (params.url) {
+      buf = await this.download(params.url.trim());
+      baseName = new URL(params.url).pathname.split("/").filter(Boolean).pop() || "skill";
+    } else {
+      throw new RpcError("bad_request", "url 与 srcPath 至少提供一个");
+    }
+    if (buf.length === 0) throw new RpcError("bad_request", "压缩包内容为空");
+
+    const tmp = mkdtempSync(join(tmpdir(), "pidock-skill-"));
+    try {
+      const archivePath = join(tmp, "pkg" + (/\.(zip|tgz|tar\.gz|gz)$/i.test(baseName) ? baseName.slice(baseName.lastIndexOf(".")) : ".zip"));
+      writeFileSync(archivePath, buf);
+      const extractDir = join(tmp, "x");
+      mkdirSync(extractDir);
+      await this.extractArchive(archivePath, extractDir);
+      const skillDir = this.findSkillDir(extractDir);
+      if (!skillDir) {
+        throw new RpcError("no_skill", "压缩包中未找到 SKILL.md（技能包须含 SKILL.md）");
+      }
+      // zip-slip 防护：真实路径必须仍在临时目录内
+      const realSkill = realpathSync(skillDir);
+      const realTmp = realpathSync(tmp);
+      if (!realSkill.startsWith(realTmp + sep) && realSkill !== realTmp) {
+        throw new RpcError("bad_request", "压缩包路径越界，已拒绝安装");
+      }
+      // 包根就是技能 → 用压缩包名；有包裹目录 → 用内层目录名；显式 name 优先
+      const derived =
+        skillDir === extractDir
+          ? baseName.replace(/\.(zip|tgz|tar\.gz|gz)$/i, "")
+          : skillDir.slice(skillDir.lastIndexOf(sep) + 1);
+      const name = ConfigService.sanitizeName(params.name || derived);
+      const target = join(getAgentDir(), "skills", name);
+      if (existsSync(target)) {
+        throw new RpcError("already_exists", `技能「${name}」已存在，请先删除或更换名称`);
+      }
+      mkdirSync(join(getAgentDir(), "skills"), { recursive: true });
+      cpSync(realSkill, target, { recursive: true });
+      return { ok: true, name, path: target };
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  async extensionsInstall(params: { url?: string; srcPath?: string; filename?: string }): Promise<{ ok: true; file: string }> {
+    let text: string;
+    let baseName: string;
+    if (params.srcPath) {
+      const src = params.srcPath.trim();
+      if (!src || !existsSync(src) || !statSync(src).isFile()) {
+        throw new RpcError("bad_request", "srcPath 文件不存在");
+      }
+      const raw = readFileSync(src);
+      if (looksBinary(raw)) throw new RpcError("bad_request", "插件必须是文本文件（.ts/.js）");
+      text = raw.toString("utf8");
+      baseName = src.slice(src.lastIndexOf(sep) + 1) || "plugin.ts";
+    } else if (params.url) {
+      const buf = await this.download(params.url.trim());
+      if (looksBinary(buf)) throw new RpcError("bad_request", "下载内容不是文本文件（.ts/.js）");
+      text = buf.toString("utf8");
+      baseName = new URL(params.url).pathname.split("/").filter(Boolean).pop() || "plugin.ts";
+    } else {
+      throw new RpcError("bad_request", "url 与 srcPath 至少提供一个");
+    }
+    const filename = ConfigService.sanitizeName(params.filename || baseName);
+    if (!/\.(ts|js)$/i.test(filename)) {
+      throw new RpcError("bad_request", "插件文件必须是 .ts 或 .js");
+    }
+    if (text.length > 2 * 1024 * 1024) {
+      throw new RpcError("too_large", "插件超过 2MB 上限");
+    }
+    const dir = join(getAgentDir(), "extensions");
+    mkdirSync(dir, { recursive: true });
+    const target = join(dir, filename);
+    if (existsSync(target)) {
+      throw new RpcError("already_exists", `插件「${filename.replace(/\.(ts|js)$/i, "")}」已存在，请先删除或更换文件名`);
+    }
+    writeFileSync(target, text);
+    return { ok: true, file: target };
   }
 
   /**

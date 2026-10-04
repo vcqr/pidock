@@ -37,6 +37,22 @@ if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-O
     .map_err(|e| e.to_string())?
 }
 
+/// 打开系统原生文件选择器（单选；用于导入技能压缩包/插件源文件）。取消返回 None。
+#[tauri::command]
+async fn pick_file() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| -> Result<Option<String>, String> {
+        const SCRIPT: &str = "Add-Type -AssemblyName System.Windows.Forms; $owner = New-Object System.Windows.Forms.Form; $owner.TopMost = $true; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = '技能包/插件 (*.zip;*.tgz;*.tar.gz;*.gz;*.ts;*.js)|*.zip;*.tgz;*.tar.gz;*.gz;*.ts;*.js|所有文件 (*.*)|*.*'; $d.Title = '选择要安装的技能包或插件'; if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.FileName }";
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-STA", "-Command", SCRIPT])
+            .output()
+            .map_err(|e| format!("failed to launch file picker: {e}"))?;
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(if text.is_empty() { None } else { Some(text) })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 在系统文件管理器中打开目录（Windows: explorer，macOS: Finder，Linux: xdg-open）。
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
@@ -80,6 +96,7 @@ pub fn run() {
             sync::sync_status,
             sync::sync_disable,
             pick_folder,
+            pick_file,
             reveal_path
         ])
         .setup(move |app| {

@@ -279,6 +279,47 @@ async function main(): Promise<number> {
         appDirect.settings?.proxy?.url === undefined,
     );
 
+    // ---- 安装：本地导入（插件单文件 + 技能压缩包） ----
+    const importDir = mkdtempSync(join(tmpdir(), "pidock-import-"));
+    const pluginSrc = join(importDir, "smoke-plug.ts");
+    writeFileSync(pluginSrc, "export default function () {};\n");
+    const extInstall = await request("config.extensions.install", { srcPath: pluginSrc });
+    check(
+      "extensions.install local copy",
+      extInstall.file?.endsWith("smoke-plug.ts") &&
+        readFileSync(join(agentDir, "extensions", "smoke-plug.ts"), "utf8").includes("export default"),
+    );
+    try {
+      await request("config.extensions.install", { srcPath: pluginSrc });
+      check("extensions.install rejects duplicate", false);
+    } catch (e) {
+      check("extensions.install rejects duplicate", String(e).includes("already_exists"));
+    }
+
+    // 打一个 tgz：smoke-skill/SKILL.md（系统自带 bsdtar）
+    const skillRoot = join(importDir, "smoke-skill");
+    mkdirSync(skillRoot, { recursive: true });
+    writeFileSync(
+      join(skillRoot, "SKILL.md"),
+      "---\nname: smoke-skill\ndescription: installed by config smoke\n---\n\nHi.\n",
+    );
+    const tgzPath = join(importDir, "smoke-skill.tgz");
+    const { execFileSync } = await import("node:child_process");
+    // cwd 相对路径：PATH 上的 GNU tar 会把含盘符的 -f 参数当远程主机
+    execFileSync("tar", ["-czf", "smoke-skill.tgz", "smoke-skill"], { cwd: importDir });
+    const skillInstall = await request("config.skills.install", { srcPath: tgzPath });
+    check(
+      "skills.install local tgz",
+      skillInstall.name === "smoke-skill" &&
+        readFileSync(join(agentDir, "skills", "smoke-skill", "SKILL.md"), "utf8").includes("installed by config smoke"),
+    );
+    const skillsAfter = await request("config.skills.list", { cwd: workDir });
+    check(
+      "skills.install visible in skills.list",
+      skillsAfter.skills.some((s: any) => s.name === "smoke-skill" && s.enabled === true),
+    );
+    rmSync(importDir, { recursive: true, force: true });
+
     clearTimeout(timeout);
     child.stdin.end();
     child.kill();

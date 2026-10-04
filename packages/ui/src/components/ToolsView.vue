@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
-import type { DataBus } from "../databus.js";
+import { computed, inject, onMounted, ref, watch } from "vue";
+import { FILE_PICKER, type DataBus } from "../databus.js";
 import Icon from "./Icon.vue";
 import MdContent from "./MdContent.vue";
 
@@ -86,6 +86,53 @@ function scopeBadge(scope: unknown): string | undefined {
   if (scope === "global") return "全局";
   if (scope === "project") return "项目";
   return scope ? String(scope) : undefined;
+}
+
+// ---- 安装（技能 / 插件）：从网址下载 或 本地文件导入 ----
+const pickFile = inject(FILE_PICKER, null);
+const installOpen = ref(false);
+const installMode = ref<"url" | "local">("url");
+const installUrl = ref("");
+const installSrcPath = ref("");
+const installName = ref("");
+const installBusy = ref(false);
+
+function openInstall(): void {
+  installMode.value = "url";
+  installUrl.value = "";
+  installSrcPath.value = "";
+  installName.value = "";
+  installOpen.value = true;
+}
+
+async function pickInstallFile(): Promise<void> {
+  const p = await pickFile?.();
+  if (p) installSrcPath.value = p;
+}
+
+async function submitInstall(): Promise<void> {
+  const kind = props.kind;
+  const url = installUrl.value.trim();
+  const srcPath = installSrcPath.value.trim();
+  const name = installName.value.trim() || undefined;
+  if (installMode.value === "url" && !url) return flash("请填写下载网址");
+  if (installMode.value === "local" && !srcPath) return flash("请选择文件");
+  installBusy.value = true;
+  try {
+    if (kind === "plugins") {
+      const r = await props.bus.request("config.extensions.install", installMode.value === "url" ? { url, filename: name } : { srcPath });
+      flash(`已安装「${String(r.file).split(/[\\/]/).pop()}」，对新会话生效`);
+    } else {
+      const r = await props.bus.request("config.skills.install", installMode.value === "url" ? { url, name } : { srcPath, name });
+      flash(`已安装技能「${r.name}」，对新会话生效`);
+    }
+    installOpen.value = false;
+    await load();
+  } catch (err) {
+    flash(String(err));
+  } finally {
+    installBusy.value = false;
+  }
 }
 
 function parseMcp(config: any): Row[] {
@@ -467,6 +514,9 @@ async function removeServer(it: Row): Promise<void> {
           <button v-if="kind === 'mcp'" class="dark-btn" @click="openAdd">
             <Icon name="add-line" :size="14" />添加
           </button>
+          <button v-if="kind === 'plugins' || kind === 'skills'" class="dark-btn" @click="openInstall">
+            <Icon name="download-cloud-2-line" :size="14" />安装
+          </button>
         </div>
       </header>
 
@@ -668,6 +718,65 @@ async function removeServer(it: Row): Promise<void> {
         <footer class="d-foot">
           <button class="cancel" @click="showForm = false">取消</button>
           <button class="dark-btn" @click="saveForm">{{ formMode === "add" ? "添加" : "保存" }}</button>
+        </footer>
+      </div>
+    </div>
+    <!-- install dialog (skills / plugins) -->
+    <div v-if="installOpen" class="dialog-mask" @click.self="installOpen = false">
+      <div class="dialog">
+        <header class="d-head">
+          <h2>安装{{ kind === "skills" ? "技能" : "插件" }}</h2>
+          <button class="d-close" title="关闭" @click="installOpen = false">
+            <Icon name="close-line" :size="15" />
+          </button>
+        </header>
+        <p class="d-sub">
+          {{
+            kind === "skills"
+              ? "支持 zip / .tgz 压缩包（须含 SKILL.md），安装到 ~/.pi/agent/skills。"
+              : "支持单个 .ts / .js 源文件，安装到 ~/.pi/agent/extensions。"
+          }}
+          技能与插件会被加载执行，请只安装可信来源。
+        </p>
+
+        <div class="seg">
+          <button :class="{ on: installMode === 'url' }" @click="installMode = 'url'">从网址下载</button>
+          <button :class="{ on: installMode === 'local' }" @click="installMode = 'local'">从本地导入</button>
+        </div>
+
+        <template v-if="installMode === 'url'">
+          <div class="field">
+            <label>下载网址 <i>*</i></label>
+            <input
+              v-model="installUrl"
+              :placeholder="kind === 'skills' ? 'https://example.com/my-skill.zip' : 'https://example.com/my-plugin.ts'"
+              @keydown.enter="submitInstall"
+            />
+          </div>
+          <div class="field">
+            <label>{{ kind === "skills" ? "安装名称（可选，默认取包名）" : "保存文件名（可选，默认取网址末段）" }}</label>
+            <input v-model="installName" :placeholder="kind === 'skills' ? 'my-skill' : 'my-plugin.ts'" @keydown.enter="submitInstall" />
+          </div>
+        </template>
+        <template v-else>
+          <div class="field">
+            <label>本地文件 <i>*</i></label>
+            <div class="pick-row">
+              <input :value="installSrcPath" class="pick-display" placeholder="点击右侧按钮选择" disabled />
+              <button class="ghost-btn" @click="pickInstallFile">选择文件</button>
+            </div>
+          </div>
+          <div v-if="kind === 'skills'" class="field">
+            <label>安装名称（可选，默认取包名）</label>
+            <input v-model="installName" placeholder="my-skill" @keydown.enter="submitInstall" />
+          </div>
+        </template>
+
+        <footer class="d-foot">
+          <button class="cancel" @click="installOpen = false">取消</button>
+          <button class="dark-btn" :disabled="installBusy" @click="submitInstall">
+            {{ installBusy ? "安装中…" : "安装" }}
+          </button>
         </footer>
       </div>
     </div>
@@ -1063,6 +1172,50 @@ h1 {
 }
 
 /* ---- dialog ---- */
+/* 安装来源分段选择器 */
+.seg {
+  display: inline-flex;
+  background: var(--pd-bg-raised);
+  border: 1px solid var(--pd-border);
+  border-radius: 9px;
+  padding: 2px;
+  gap: 2px;
+  margin-top: 14px;
+}
+.seg button {
+  background: none;
+  border: none;
+  border-radius: 7px;
+  color: var(--pd-text-3);
+  font-size: 12.5px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.seg button:hover { color: var(--pd-text); }
+.seg button.on { background: var(--pd-bg-active); color: var(--pd-text); font-weight: 600; }
+.pick-row { display: flex; gap: 8px; }
+.pick-row .pick-display {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-border);
+  border-radius: 9px;
+  color: var(--pd-text-2);
+  font-size: 12.5px;
+  font-family: Consolas, monospace;
+  padding: 9px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* head-actions 的 ghost-btn 是 30×30 图标钮；此处需要常规文字按钮 */
+.pick-row .ghost-btn {
+  width: auto;
+  height: auto;
+  white-space: nowrap;
+  padding: 8px 14px;
+}
 .dialog-mask {
   position: fixed;
   inset: 0;

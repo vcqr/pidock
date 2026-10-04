@@ -262,6 +262,8 @@ export const Method = {
   CONFIG_SKILLS_TOGGLE: "config.skills.toggle",
   CONFIG_SKILL_FILES: "config.skills.files",
   CONFIG_SKILL_READ: "config.skills.read",
+  CONFIG_SKILLS_INSTALL: "config.skills.install",
+  CONFIG_EXTENSIONS_INSTALL: "config.extensions.install",
   CONFIG_PROVIDERS_CUSTOM_GET: "config.providers.custom.get",
   CONFIG_PROVIDERS_CUSTOM_SET: "config.providers.custom.set",
   CONFIG_PROVIDERS_CUSTOM_REMOVE: "config.providers.custom.remove",

@@ -10,6 +10,7 @@ import {
   StatePill,
   ATTACHMENT_LOADER,
   FOLDER_PICKER,
+  FILE_PICKER,
   REVEAL_PATH,
   WINDOW_CONTROLS,
   createAgentStore,
@@ -88,6 +89,15 @@ provide(ATTACHMENT_LOADER, (id: string) => bus.loadAttachment(id));
 provide(FOLDER_PICKER, async () => {
   try {
     return await invoke<string | null>("pick_folder");
+  } catch {
+    return null;
+  }
+});
+
+// 系统原生文件选择器（技能/插件安装对话框的本地导入）
+provide(FILE_PICKER, async () => {
+  try {
+    return await invoke<string | null>("pick_file");
   } catch {
     return null;
   }
