@@ -1,20 +1,20 @@
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { DataBus } from "../databus.js";
-import { FOLDER_PICKER, WINDOW_CONTROLS } from "../databus.js";
 import { basename } from "../utils/time.js";
+import Composer from "./Composer.vue";
 import Icon from "./Icon.vue";
 
 /**
- * 自动化（定时任务）全屏页：列表 + 新建/编辑弹窗 + 运行记录。
- * 数据走 DataBus 的 automation.* 方法（桌面端由 Rust 调度器处理）；
- * 运行生命周期事件（automation.run_started/finished）到达时刷新列表。
+ * 自动化（定时任务）：主区右栏页面（侧栏保留，左右分栏）。
+ * 列表 + 新建/编辑弹窗 + 运行记录；提示词编辑复用主界面的 Composer
+ * （draft 模式：工作空间 chip / 权限 / 模型 / 思考级别 / @ 文件 / / 技能 / 图片
+ * 全部与主界面一致，send 上报给表单保存而不是发消息）。
+ * 数据走 DataBus 的 automation.* 方法（桌面端由 Rust 调度器处理）。
  */
 
 const props = defineProps<{ bus: DataBus }>();
-const emit = defineEmits<{ close: [] }>();
-const win = inject(WINDOW_CONTROLS, null);
-const folderPicker = inject(FOLDER_PICKER, null);
+const emit = defineEmits<{ close: []; "open-providers": [] }>();
 
 interface RunRecord {
   run_id: string;
@@ -32,6 +32,8 @@ interface Job {
   cron: string;
   workspace?: string | null;
   model?: string | null;
+  thinking_level?: string | null;
+  images?: Array<{ data: string; mime_type: string }> | null;
   permission_mode: string;
   starts_at?: number | null;
   ends_at?: number | null;
@@ -198,8 +200,7 @@ function wsLabel(j: Job): string {
 }
 function jobDesc(j: Job): string {
   const next = j.next_run_at ? `下次 ${fmtShort(j.next_run_at)}` : jobState(j).label;
-  const perm = j.permission_mode === "full" ? "" : ` · ${PERM_OPTIONS.find((o) => o.value === j.permission_mode)?.label ?? j.permission_mode}`;
-  return `${describeCron(j.cron)} · ${wsLabel(j)}${perm} · ${next}`;
+  return `${describeCron(j.cron)} · ${wsLabel(j)} · ${next}`;
 }
 
 async function toggle(j: Job): Promise<void> {
@@ -232,17 +233,63 @@ async function removeJob(j: Job): Promise<void> {
   }
 }
 
-// ---- 新建 / 编辑弹窗 ----
-const PERM_OPTIONS = [
-  { value: "full", label: "完全访问", hint: "允许全部工具，无人值守推荐" },
-  { value: "edit-auto", label: "自动编辑", hint: "自动应用文件编辑，bash 需审批（无人值守会挂起）" },
-  { value: "confirm", label: "每步确认", hint: "修改类工具都需审批，无人值守会挂起" },
-  { value: "plan", label: "计划模式", hint: "只读，不执行修改类工具" },
-];
+// ---- Composer 上下文（工作空间 / 模型 / @ 文件 / 技能） ----
+const projects = ref<string[]>([]);
+const homeDir = ref<string | null>(null);
+const modelOptions = ref<string[]>([]);
+async function loadComposerContext(): Promise<void> {
+  try {
+    const r = await props.bus.request("session.list");
+    const home: string = r?.home ?? "";
+    homeDir.value = home || null;
+    const seen = new Set<string>();
+    const list: string[] = [];
+    for (const s of r?.sessions ?? []) {
+      const cwd: string | undefined = s?.cwd;
+      if (!cwd || cwd === home || seen.has(cwd)) continue;
+      seen.add(cwd);
+      list.push(cwd);
+    }
+    projects.value = list;
+  } catch {
+    projects.value = [];
+  }
+  try {
+    const r = await props.bus.request("config.models.list");
+    modelOptions.value = (r?.models ?? [])
+      .map((m: unknown) =>
+        typeof m === "string" ? m : `${(m as any)?.provider}/${(m as any)?.id}`,
+      )
+      .filter((x: string) => x && x !== "undefined/undefined");
+  } catch {
+    modelOptions.value = [];
+  }
+}
+async function mentionLoader(cwd: string): Promise<Array<{ path: string; name: string; dir: boolean }>> {
+  try {
+    const r = await props.bus.request("workspace.files", { cwd });
+    return r?.files ?? [];
+  } catch {
+    return [];
+  }
+}
+async function skillsLoader(): Promise<Array<{ name: string; description: string }>> {
+  try {
+    const r = await props.bus.request("config.skills.list", {});
+    return (r?.skills ?? [])
+      .filter((s: any) => s.enabled !== false)
+      .map((s: any) => ({ name: String(s.name ?? ""), description: String(s.description ?? "") }));
+  } catch {
+    return [];
+  }
+}
 
+// ---- 新建 / 编辑弹窗 ----
 const showForm = ref(false);
 const formMode = ref<"add" | "edit">("add");
 const editingId = ref<string | null>(null);
+/** 每次打开弹窗自增，作为 Composer 的 key 强制重挂载以应用 preset */
+const dialogSeq = ref(0);
 const saving = ref(false);
 const fName = ref("");
 const fPrompt = ref("");
@@ -255,60 +302,13 @@ const fCronExpr = ref("");
 const effMode = ref<"forever" | "range">("forever");
 const fStart = ref("");
 const fEnd = ref("");
-const fWorkspace = ref("");
-const fModel = ref("");
+/** 由 Composer 的工作空间 chip / 权限 / 模型 / 思考级别菜单回写 */
 const fPerm = ref("full");
-const fEnabled = ref(true);
+const fModel = ref("");
+const fThink = ref("");
 
-const wsOptions = ref<Array<{ cwd: string; label: string }>>([]);
-const modelOptions = ref<Array<{ value: string; label: string }>>([]);
 const peekTimes = ref<number[]>([]);
 const peekErr = ref("");
-
-async function loadWorkspaces(): Promise<void> {
-  try {
-    const r = await props.bus.request("session.list");
-    const home = r?.home ?? "";
-    const seen = new Set<string>();
-    const list: Array<{ cwd: string; label: string }> = [];
-    for (const s of r?.sessions ?? []) {
-      const cwd: string | undefined = s?.cwd;
-      if (!cwd || cwd === home || seen.has(cwd)) continue;
-      seen.add(cwd);
-      list.push({ cwd, label: basename(cwd) });
-    }
-    list.sort((a, b) => a.label.localeCompare(b.label));
-    wsOptions.value = list;
-  } catch {
-    wsOptions.value = [];
-  }
-}
-async function loadModels(): Promise<void> {
-  try {
-    const r = await props.bus.request("config.models.list");
-    const arr = r?.models ?? [];
-    modelOptions.value = arr
-      .map((m: unknown) =>
-        typeof m === "string"
-          ? { value: m, label: m }
-          : typeof m === "object" && m !== null
-            ? { value: `${(m as any).provider}/${(m as any).id}`, label: `${(m as any).provider}/${(m as any).id}` }
-            : null,
-      )
-      .filter((x: { value: string; label: string } | null): x is { value: string; label: string } => !!x);
-  } catch {
-    modelOptions.value = [];
-  }
-}
-async function browseWorkspace(): Promise<void> {
-  if (!folderPicker) return;
-  const p = await folderPicker();
-  if (!p) return;
-  fWorkspace.value = p;
-  if (!wsOptions.value.some((o) => o.cwd === p)) {
-    wsOptions.value = [...wsOptions.value, { cwd: p, label: basename(p) }];
-  }
-}
 
 const dialogCron = computed(() => (showForm.value ? buildCron() : ""));
 let peekTimer: ReturnType<typeof setTimeout> | null = null;
@@ -343,15 +343,14 @@ function openAdd(): void {
   effMode.value = "forever";
   fStart.value = "";
   fEnd.value = "";
-  fWorkspace.value = "";
-  fModel.value = "";
   fPerm.value = "full";
-  fEnabled.value = true;
+  fModel.value = "";
+  fThink.value = "";
   peekTimes.value = [];
   peekErr.value = "";
+  dialogSeq.value += 1;
   showForm.value = true;
-  void loadWorkspaces();
-  void loadModels();
+  void loadComposerContext();
 }
 function openEdit(j: Job): void {
   editingId.value = j.id;
@@ -362,19 +361,23 @@ function openEdit(j: Job): void {
   effMode.value = j.starts_at || j.ends_at ? "range" : "forever";
   fStart.value = toLocalInput(j.starts_at);
   fEnd.value = toLocalInput(j.ends_at);
-  fWorkspace.value = j.workspace ?? "";
-  fModel.value = j.model ?? "";
   fPerm.value = j.permission_mode || "full";
-  fEnabled.value = j.enabled;
+  fModel.value = j.model ?? "";
+  fThink.value = j.thinking_level ?? "";
   peekTimes.value = [];
   peekErr.value = "";
+  dialogSeq.value += 1;
   showForm.value = true;
-  void loadWorkspaces();
-  void loadModels();
+  void loadComposerContext();
 }
-async function saveForm(): Promise<void> {
-  if (!fName.value.trim()) return flash("任务名称不能为空");
-  if (!fPrompt.value.trim()) return flash("提示词不能为空");
+
+/** Composer 的 send（Enter / ↑ 按钮）= 保存任务 */
+async function applyDraft(
+  text: string,
+  cwd?: string | null,
+  images?: Array<{ data: string; mime_type: string }>,
+): Promise<void> {
+  if (!fName.value.trim()) return flash("请先填写任务名称");
   if (!buildCron()) return flash("cron 表达式不能为空");
   if (effMode.value === "range") {
     if (!fStart.value || !fEnd.value) return flash("请填写开始和结束时间");
@@ -385,14 +388,16 @@ async function saveForm(): Promise<void> {
     await props.bus.request("automation.save", {
       id: editingId.value ?? "",
       name: fName.value,
-      prompt: fPrompt.value,
+      prompt: text,
       cron: buildCron(),
-      workspace: fWorkspace.value || null,
+      workspace: cwd ?? null,
       model: fModel.value || null,
+      thinking_level: fThink.value || null,
+      images: images?.length ? images : null,
       permission_mode: fPerm.value,
       starts_at: effMode.value === "range" && fStart.value ? new Date(fStart.value).getTime() : null,
       ends_at: effMode.value === "range" && fEnd.value ? new Date(fEnd.value).getTime() : null,
-      enabled: fEnabled.value,
+      enabled: editingId.value ? (jobs.value.find((j) => j.id === editingId.value)?.enabled ?? true) : true,
     });
     showForm.value = false;
     flash(formMode.value === "add" ? "已创建定时任务" : "已保存修改");
@@ -432,34 +437,12 @@ function copyRunId(sid: string): void {
 
 <template>
   <div class="auto-page">
-    <header class="page-head" data-tauri-drag-region>
-      <button class="back-btn" title="返回工作区" @click="emit('close')">
-        <Icon name="arrow-left-line" :size="16" />
-        <span>返回工作区</span>
-      </button>
-      <h1>自动化</h1>
-      <span class="flex-sp"></span>
-      <template v-if="win">
-        <span class="win-sep"></span>
-        <button class="wbtn" title="最小化" @click="win.minimize()">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14" /></svg>
-        </button>
-        <button class="wbtn" :title="win.isMax.value ? '还原' : '最大化'" @click="win.toggleMaximize()">
-          <svg v-if="win.isMax.value" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 9h10v10H9z" /><path d="M5 15V5h10" /></svg>
-          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 6h12v12H6z" /></svg>
-        </button>
-        <button class="wbtn close" title="关闭" @click="win.close()">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
-        </button>
-      </template>
-    </header>
-
     <div class="page-body">
       <div class="wrap">
         <header class="head">
           <div class="title-block">
             <h2>
-              定时任务
+              自动化
               <span v-if="!loading" class="count">{{ jobs.length }}</span>
             </h2>
             <p class="sub">按计划自动创建新会话并执行提示词；应用运行期间调度，错过的时点不补跑。</p>
@@ -467,6 +450,9 @@ function copyRunId(sid: string): void {
           <div class="head-actions">
             <button class="ghost-btn" title="刷新" @click="load">
               <Icon name="refresh-line" :size="15" />
+            </button>
+            <button class="ghost-btn" title="返回会话" @click="emit('close')">
+              <Icon name="close-line" :size="15" />
             </button>
             <button class="dark-btn" @click="openAdd">
               <Icon name="add-line" :size="14" />新建任务
@@ -517,7 +503,7 @@ function copyRunId(sid: string): void {
       </div>
     </div>
 
-    <!-- 新建 / 编辑弹窗 -->
+    <!-- 新建 / 编辑弹窗：名称 + 频率/时效 + 主界面同款 Composer -->
     <div v-if="showForm" class="dialog-mask" @click.self="showForm = false">
       <div class="dialog">
         <header class="d-head">
@@ -526,16 +512,11 @@ function copyRunId(sid: string): void {
             <Icon name="close-line" :size="15" />
           </button>
         </header>
-        <p class="d-sub">到点后自动创建新会话执行提示词，会话与普通会话一样出现在左侧列表。</p>
+        <p class="d-sub">到点后自动创建新会话执行这里的提示词，会话与普通会话一样出现在左侧列表。</p>
 
         <div class="field">
           <label>名称 <i>*</i></label>
-          <input v-model="fName" placeholder="例如：每日站会摘要" @keydown.enter="saveForm" />
-        </div>
-
-        <div class="field">
-          <label>提示词 <i>*</i></label>
-          <textarea v-model="fPrompt" rows="5" placeholder="要执行的任务指令，支持多行…" spellcheck="false"></textarea>
+          <input v-model="fName" placeholder="例如：每日站会摘要" />
         </div>
 
         <div class="field">
@@ -572,7 +553,7 @@ function copyRunId(sid: string): void {
             <span class="lbl">分钟</span>
           </template>
           <template v-else>
-            <input v-model="fCronExpr" class="cron-input" placeholder="0 30 9 * * *（秒 分 时 日 月 周）" spellcheck="false" @keydown.enter="saveForm" />
+            <input v-model="fCronExpr" class="cron-input" placeholder="0 30 9 * * *（秒 分 时 日 月 周）" spellcheck="false" />
           </template>
         </div>
 
@@ -599,49 +580,45 @@ function copyRunId(sid: string): void {
           </div>
         </div>
 
-        <div class="field">
-          <label>工作空间</label>
-          <div class="pick-row">
-            <select v-model="fWorkspace">
-              <option value="">主目录（不指定项目）</option>
-              <option v-if="fWorkspace && !wsOptions.some((o) => o.cwd === fWorkspace)" :value="fWorkspace">
-                {{ basename(fWorkspace) }}
-              </option>
-              <option v-for="o in wsOptions" :key="o.cwd" :value="o.cwd" :title="o.cwd">{{ o.label }}</option>
-            </select>
-            <button v-if="folderPicker" class="ghost-btn pick-btn" title="选择文件夹" @click="browseWorkspace">
-              <Icon name="folder-open-line" :size="15" />
-            </button>
-          </div>
+        <div class="composer-slot">
+          <Composer
+            :key="dialogSeq"
+            draft
+            centered
+            :busy="false"
+            :model="fModel || undefined"
+            :models="modelOptions"
+            :permission-mode="fPerm"
+            :thinking-level="fThink || undefined"
+            :mention-cwd="homeDir ?? undefined"
+            :mention-loader="mentionLoader"
+            :skills-loader="skillsLoader"
+            :projects="projects"
+            placeholder="添加提示词，Enter 保存"
+            :preset="fPrompt"
+            @send="applyDraft"
+            @set-permission-mode="(m: string) => (fPerm = m)"
+            @set-thinking-level="(l: string) => (fThink = l)"
+            @set-model="(m: string) => (fModel = m)"
+            @open-providers="emit('open-providers')"
+          />
+          <p v-if="fPerm !== 'full'" class="field-hint">
+            无人值守运行建议在下方权限菜单选「完全访问」，否则修改类工具会挂起等待审批。
+          </p>
         </div>
 
-        <div class="field">
-          <label>模型</label>
-          <select v-model="fModel">
-            <option value="">跟随默认模型</option>
-            <option v-if="fModel && !modelOptions.some((o) => o.value === fModel)" :value="fModel">{{ fModel }}</option>
-            <option v-for="o in modelOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </select>
-        </div>
-
-        <div class="field">
-          <label>权限模式</label>
-          <select v-model="fPerm">
-            <option v-for="o in PERM_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </select>
-          <p v-if="fPerm !== 'full'" class="field-hint">{{ PERM_OPTIONS.find((o) => o.value === fPerm)?.hint }}</p>
-        </div>
+        <div v-if="notice" class="notice">{{ notice }}</div>
 
         <footer class="d-foot">
+          <span class="foot-hint">Enter 或 ↑ 保存任务</span>
           <button class="cancel" @click="showForm = false">取消</button>
-          <button class="dark-btn" :disabled="saving" @click="saveForm">{{ saving ? "保存中…" : "保存" }}</button>
         </footer>
       </div>
     </div>
 
     <!-- 运行记录弹窗 -->
     <div v-if="histJob" class="dialog-mask" @click.self="histJob = null">
-      <div class="dialog">
+      <div class="dialog dialog-hist">
         <header class="d-head">
           <h2>运行记录 · {{ histJob.name }}</h2>
           <button class="d-close" title="关闭" @click="histJob = null">
@@ -670,73 +647,22 @@ function copyRunId(sid: string): void {
 
 <style scoped>
 .auto-page {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--pd-bg);
 }
-.page-head {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  height: 46px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--pd-border-soft);
-  background: var(--pd-bg-panel);
-  flex: none;
-  user-select: none;
-}
-.back-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: none;
-  border: none;
-  color: var(--pd-text-3);
-  font-size: 13px;
-  cursor: pointer;
-  padding: 6px 8px;
-  border-radius: 8px;
-}
-.back-btn:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
-.page-head h1 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--pd-text);
-}
-.flex-sp { flex: 1; }
-.win-sep {
-  width: 1px;
-  height: 16px;
-  background: var(--pd-border);
-  margin: 0 2px;
-}
-.wbtn {
-  width: 30px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  color: var(--pd-text-3);
-  cursor: pointer;
-}
-.wbtn:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
-.wbtn.close:hover { background: var(--pd-red-soft); color: var(--pd-red-text); }
-
 .page-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
 .wrap {
-  max-width: 900px;
+  max-width: 860px;
   margin: 0 auto;
-  padding: 30px 36px 48px;
+  padding: 24px 32px 48px;
 }
 .head {
   display: flex;
@@ -746,7 +672,7 @@ function copyRunId(sid: string): void {
 .title-block { flex: 1; min-width: 0; }
 h2 {
   margin: 0;
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 700;
   color: var(--pd-text);
   display: flex;
@@ -763,7 +689,7 @@ h2 {
   padding: 1px 9px;
 }
 .sub {
-  margin: 6px 0 0;
+  margin: 5px 0 0;
   font-size: 12.5px;
   color: var(--pd-text-3);
   line-height: 1.5;
@@ -795,9 +721,8 @@ h2 {
   cursor: pointer;
 }
 .dark-btn:hover { background: var(--pd-accent); color: #1a1a1a; }
-.dark-btn:disabled { opacity: 0.55; cursor: default; }
 
-.list { margin-top: 16px; }
+.list { margin-top: 14px; }
 .row {
   display: flex;
   align-items: center;
@@ -805,7 +730,7 @@ h2 {
   background: var(--pd-bg-card);
   border: 1px solid var(--pd-border-soft);
   border-radius: 12px;
-  padding: 14px 16px;
+  padding: 13px 16px;
   margin-bottom: 10px;
   transition: border-color 0.15s;
 }
@@ -951,7 +876,7 @@ h2 {
   z-index: 120;
 }
 .dialog {
-  width: min(520px, calc(100vw - 48px));
+  width: min(640px, calc(100vw - 48px));
   max-height: calc(100vh - 80px);
   overflow-y: auto;
   background: var(--pd-bg-raised);
@@ -971,7 +896,6 @@ h2 {
   font-weight: 700;
   color: var(--pd-text);
   flex: 1;
-  display: block;
 }
 .d-close {
   width: 28px;
@@ -1003,8 +927,7 @@ h2 {
   font-style: normal;
 }
 .field input,
-.field select,
-.field textarea {
+.field select {
   width: 100%;
   box-sizing: border-box;
   background: var(--pd-bg-card);
@@ -1015,21 +938,13 @@ h2 {
   font-family: inherit;
   padding: 9px 12px;
 }
-.field textarea {
-  resize: vertical;
-  line-height: 1.6;
-  font-family: Consolas, monospace;
-  font-size: 12.5px;
-}
 .field select option { background: var(--pd-bg-raised); }
 .field input:focus,
-.field select:focus,
-.field textarea:focus {
+.field select:focus {
   outline: none;
   border-color: var(--pd-accent);
 }
-.field input::placeholder,
-.field textarea::placeholder { color: var(--pd-text-4); }
+.field input::placeholder { color: var(--pd-text-4); }
 :global([data-theme="dark"]) .field input[type="time"],
 :global([data-theme="dark"]) .field input[type="datetime-local"],
 :global([data-theme="dark"]) .field input[type="number"] {
@@ -1087,17 +1002,7 @@ h2 {
 .range-row { display: flex; gap: 12px; }
 .range-row .half { flex: 1; min-width: 0; }
 
-.pick-row { display: flex; gap: 8px; }
-.pick-row select {
-  flex: 1;
-  min-width: 0;
-}
-.pick-btn {
-  width: auto;
-  height: auto;
-  padding: 8px 12px;
-  flex: none;
-}
+.composer-slot { margin-top: 16px; }
 .field-hint {
   margin: 7px 0 0;
   font-size: 12px;
@@ -1108,8 +1013,14 @@ h2 {
 .d-foot {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   gap: 10px;
-  margin-top: 22px;
+  margin-top: 18px;
+}
+.foot-hint {
+  flex: 1;
+  font-size: 12px;
+  color: var(--pd-text-4);
 }
 .cancel {
   background: none;
@@ -1123,6 +1034,7 @@ h2 {
 .cancel:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 
 /* ---- 运行记录 ---- */
+.dialog-hist { width: min(560px, calc(100vw - 48px)); }
 .hist-list {
   margin-top: 14px;
   max-height: 50vh;

@@ -64,6 +64,13 @@ pub struct RunRecord {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct JobImage {
+    /// base64，不带 data: 前缀
+    pub data: String,
+    pub mime_type: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ScheduledJob {
     pub id: String,
     pub name: String,
@@ -76,6 +83,12 @@ pub struct ScheduledJob {
     /// 模型；空 = 默认模型
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 思考级别（off/minimal/low/medium/high）；空 = 默认
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    /// 随提示词发送的图片附件（≤6 张）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<JobImage>>,
     #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
     /// 时效窗口（epoch ms）；都为空 = 长期
@@ -628,7 +641,11 @@ async fn execute_run(app: &AppHandle, job: ScheduledJob, mut run: RunRecord) {
             .request(
                 app.clone(),
                 "session.create".into(),
-                json!({ "cwd": job.workspace.clone().unwrap_or_default(), "model": job.model }),
+                json!({
+                    "cwd": job.workspace.clone().unwrap_or_default(),
+                    "model": job.model,
+                    "thinking_level": job.thinking_level,
+                }),
             )
             .await?;
         let sid = created
@@ -651,8 +668,16 @@ async fn execute_run(app: &AppHandle, job: ScheduledJob, mut run: RunRecord) {
         supervisor
             .request(app.clone(), "session.rename".into(), json!({ "session_id": sid, "name": format!("⏰ {}", job.name) }))
             .await?;
+        let mut prompt_params = json!({ "session_id": sid, "text": job.prompt });
+        if let Some(imgs) = &job.images {
+            if !imgs.is_empty() {
+                if let Ok(v) = serde_json::to_value(imgs) {
+                    prompt_params["images"] = v;
+                }
+            }
+        }
         supervisor
-            .request(app.clone(), "agent.prompt".into(), json!({ "session_id": sid, "text": job.prompt }))
+            .request(app.clone(), "agent.prompt".into(), prompt_params)
             .await?;
         Ok(sid)
     }
@@ -774,6 +799,8 @@ mod tests {
             cron: "0 30 9 * * *".into(),
             workspace: Some("D:\\work".into()),
             model: None,
+            thinking_level: Some("medium".into()),
+            images: Some(vec![JobImage { data: "aGk=".into(), mime_type: "image/png".into() }]),
             permission_mode: default_permission_mode(),
             starts_at: None,
             ends_at: Some(1798761600000),

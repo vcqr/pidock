@@ -222,13 +222,14 @@ onMounted(async () => {
         :home-dir="store.homeDir"
         :show-settings-btn="true"
         :show-automation="true"
+        :active-tool="showAutomation ? 'automation' : undefined"
         :width="sidebarWidth ?? undefined"
-        @select="(id) => store?.openSession(id)"
-        @new-task="() => startNewTask()"
-        @open-project="(cwd) => startNewTask(cwd)"
+        @select="(id) => { showAutomation = false; store?.openSession(id); }"
+        @new-task="() => { showAutomation = false; startNewTask(); }"
+        @open-project="(cwd) => { showAutomation = false; startNewTask(cwd); }"
         @rename="(id, name) => store?.renameSession(id, name)"
         @open-settings="(tab) => openSettings(tab)"
-        @open-automation="showAutomation = true"
+        @open-automation="showAutomation = !showAutomation"
       >
       </SessionSidebar>
       </template>
@@ -257,7 +258,9 @@ onMounted(async () => {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
           </button>
         </header>
+        <!-- 自动化（定时任务）与聊天共用主区：侧栏保留，左右分栏；ChatView 用 v-show 保活，切回来不丢草稿 -->
         <ChatView
+          v-show="!showAutomation"
           :store="store"
           :new-task="newTaskMode"
           :new-task-cwd="newTaskCwd"
@@ -265,7 +268,12 @@ onMounted(async () => {
           @open-settings="(tab) => openSettings(tab)"
           @open-providers="() => openSettings('providers')"
         />
-        <AutomationView v-if="showAutomation" :bus="bus" @close="showAutomation = false" />
+        <AutomationView
+          v-if="showAutomation"
+          :bus="bus"
+          @close="showAutomation = false"
+          @open-providers="() => openSettings('providers')"
+        />
         <SettingsView
           v-if="showSettings"
           :bus="bus"

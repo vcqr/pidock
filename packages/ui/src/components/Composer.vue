@@ -32,6 +32,8 @@ const props = withDefaults(
     skillsLoader?: () => Promise<Array<{ name: string; description: string }>>;
     /** 当前模型是否支持图片输入（false = 显示预警；undefined = 未知不预警） */
     modelImagesOk?: boolean | null;
+    /** 草稿模式（表单内嵌）：send 只上报不清空，Enter/发送由父级决定语义（如保存） */
+    draft?: boolean;
   }>(),
   { placeholder: "输入消息，Enter 发送，Shift+Enter 换行" },
 );
@@ -403,6 +405,7 @@ watch(
   (v) => {
     if (v) text.value = v;
   },
+  { immediate: true },
 );
 // 外部预选项目目录（immediate：进入首页重新挂载时也要应用）
 watch(
@@ -482,6 +485,7 @@ function submit(): void {
   const cwd = props.centered ? selected.value : undefined;
   const images = pendingImages.value.map((p) => ({ data: p.data, mime_type: p.mime_type }));
   emit("send", value, cwd === null ? null : cwd || undefined, images.length ? images : undefined);
+  if (props.draft) return; // 草稿模式：内容归父级表单所有，成功与否由父级决定
   text.value = "";
   pendingImages.value = [];
   slash.value = null;

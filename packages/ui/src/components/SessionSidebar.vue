@@ -270,7 +270,7 @@ onBeforeUnmount(() => {
       </div>
       <div
         class="nav-item"
-        :class="{ disabled: !showAutomation }"
+        :class="{ disabled: !showAutomation, active: activeTool === 'automation' }"
         :title="showAutomation ? undefined : '开发中'"
         @click="showAutomation && emit('open-automation')"
       >
