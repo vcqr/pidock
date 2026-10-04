@@ -63,6 +63,9 @@ interface ModelRow {
   id: string;
   image: boolean;
   reasoning: boolean;
+  /** 扩展输入能力（pi schema 暂只认 text/image，video/pdf 存 extInput 透传） */
+  video: boolean;
+  pdf: boolean;
   contextWindow?: number;
   maxTokens?: number;
   thinkingLevelMap?: unknown;
@@ -78,6 +81,8 @@ const editingModel = ref<{
   maxTokens: string;
   image: boolean;
   reasoning: boolean;
+  video: boolean;
+  pdf: boolean;
   tlmText: string;
 } | null>(null);
 const advOpen = ref(false);
@@ -94,6 +99,8 @@ function openModelEditor(i: number): void {
     maxTokens: r.maxTokens != null ? String(r.maxTokens) : "",
     image: r.image,
     reasoning: r.reasoning,
+    video: r.video,
+    pdf: r.pdf,
     tlmText: r.thinkingLevelMap ? JSON.stringify(r.thinkingLevelMap, null, 2) : "",
   };
   advOpen.value = false;
@@ -116,6 +123,8 @@ function saveModelEditor(): void {
     r.id = e.id.trim() || r.id;
     r.image = e.image;
     r.reasoning = e.reasoning;
+    r.video = e.video;
+    r.pdf = e.pdf;
     r.contextWindow = Number(e.contextWindow) || undefined;
     r.maxTokens = Number(e.maxTokens) || undefined;
     r.thinkingLevelMap = tlm;
@@ -133,7 +142,7 @@ watch(formModelsText, (v) => {
     .map((s) => s.trim())
     .filter(Boolean);
   const prev = new Map(formModelRows.value.map((r) => [r.id, r]));
-  formModelRows.value = ids.map((id) => prev.get(id) ?? { id, image: false, reasoning: false });
+  formModelRows.value = ids.map((id) => prev.get(id) ?? { id, image: false, reasoning: false, video: false, pdf: false });
 });
 
 function loadModelRows(): void {
@@ -192,6 +201,8 @@ async function load(): Promise<void> {
               id: String(m.id ?? m),
               image: Array.isArray(m.input) && m.input.includes("image"),
               reasoning: Boolean(m.reasoning),
+              video: Array.isArray(m.extInput) && m.extInput.includes("video"),
+              pdf: Array.isArray(m.extInput) && m.extInput.includes("pdf"),
               contextWindow: typeof m.contextWindow === "number" ? m.contextWindow : undefined,
               maxTokens: typeof m.maxTokens === "number" ? m.maxTokens : undefined,
             }))
@@ -270,7 +281,7 @@ async function saveCustom(): Promise<void> {
         .split(/[,\n]/)
         .map((s) => s.trim())
         .filter(Boolean)
-        .map((mid) => ({ id: mid, image: false, reasoning: false }));
+        .map((mid) => ({ id: mid, image: false, reasoning: false, video: false, pdf: false }));
   if (!rows.length) return flash("至少填写一个候选模型 ID");
   formBusy.value = true;
   try {
@@ -279,14 +290,18 @@ async function saveCustom(): Promise<void> {
       entry: {
         baseUrl: formBaseUrl.value.trim(),
         api: formApi.value,
-        models: rows.map((r) => ({
-          id: r.id,
-          input: r.image ? ["text", "image"] : ["text"],
-          ...(r.reasoning ? { reasoning: true } : {}),
-          ...(r.contextWindow ? { contextWindow: Number(r.contextWindow) } : {}),
-          ...(r.maxTokens ? { maxTokens: Number(r.maxTokens) } : {}),
-          ...(r.thinkingLevelMap ? { thinkingLevelMap: r.thinkingLevelMap } : {}),
-        })),
+        models: rows.map((r) => {
+          const extInput = [r.video && "video", r.pdf && "pdf"].filter(Boolean);
+          return {
+            id: r.id,
+            input: r.image ? ["text", "image"] : ["text"],
+            ...(r.reasoning ? { reasoning: true } : {}),
+            ...(extInput.length ? { extInput } : {}),
+            ...(r.contextWindow ? { contextWindow: Number(r.contextWindow) } : {}),
+            ...(r.maxTokens ? { maxTokens: Number(r.maxTokens) } : {}),
+            ...(r.thinkingLevelMap ? { thinkingLevelMap: r.thinkingLevelMap } : {}),
+          };
+        }),
       },
     });
     if (formApiKey.value.trim()) {
@@ -456,6 +471,8 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
                 <span class="mr-id">{{ r.id }}</span>
                 <span v-if="r.image" class="mr-badge">视觉</span>
                 <span v-if="r.reasoning" class="mr-badge">推理</span>
+                <span v-if="r.video" class="mr-badge">视频</span>
+                <span v-if="r.pdf" class="mr-badge">PDF</span>
                 <span v-if="r.contextWindow" class="mr-badge">{{ fmtInt(r.contextWindow) }}</span>
                 <button class="mr-del" title="移除该模型" @click.stop="removeModelRow(i)">
                   <Icon name="close-line" :size="12" />
@@ -523,6 +540,8 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
                 <span class="mr-id">{{ r.id }}</span>
                 <span v-if="r.image" class="mr-badge">视觉</span>
                 <span v-if="r.reasoning" class="mr-badge">推理</span>
+                <span v-if="r.video" class="mr-badge">视频</span>
+                <span v-if="r.pdf" class="mr-badge">PDF</span>
                 <span v-if="r.contextWindow" class="mr-badge">{{ fmtInt(r.contextWindow) }}</span>
                 <button class="mr-del" title="移除该模型" @click.stop="removeModelRow(i)">
                   <Icon name="close-line" :size="12" />
@@ -626,6 +645,12 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
                   <span class="cap-chip locked"><Icon name="check-line" :size="12" />文本</span>
                   <label class="cap-chip" :class="{ on: editingModel.image }">
                     <input v-model="editingModel.image" type="checkbox" />图片
+                  </label>
+                  <label class="cap-chip" :class="{ on: editingModel.video }">
+                    <input v-model="editingModel.video" type="checkbox" />视频
+                  </label>
+                  <label class="cap-chip" :class="{ on: editingModel.pdf }">
+                    <input v-model="editingModel.pdf" type="checkbox" />PDF
                   </label>
                 </div>
               </div>
