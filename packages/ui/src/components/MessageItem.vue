@@ -145,7 +145,7 @@ const toolEntries = computed(
     </template>
     <span v-if="item.streaming && !item.text" class="cursor">▍</span>
     <div v-if="item.errorMessage" class="msg-error">
-      <Icon name="error-warning-line" :size="13" />
+      <Icon name="error-warning-line" :size="14" />
       <span>{{ item.errorMessage }}</span>
     </div>
     <button v-if="!item.streaming && item.text" class="copy" :title="copied ? '已复制' : '复制'" @click="copyMessage">

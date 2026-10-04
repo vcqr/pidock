@@ -482,7 +482,7 @@ function onKeydown(e: KeyboardEvent): void {
       <!-- 项目菜单：搜索 / 项目列表 / 打开文件夹 / 不在项目中工作 -->
       <div v-if="menuOpen" class="c-menu" @click.stop>
         <div class="c-search">
-          <Icon :name="I.search" :size="13" />
+          <Icon :name="I.search" :size="14" />
           <input v-model="menuQuery" placeholder="搜索工作区" @keydown.enter="filteredProjects[0] && pick(filteredProjects[0]!)" />
         </div>
         <div class="c-list">
@@ -554,7 +554,7 @@ function onKeydown(e: KeyboardEvent): void {
         </button>
       </div>
       <div v-if="modelImagesOk === false" class="img-warn">
-        <Icon name="error-warning-line" :size="13" />
+        <Icon name="error-warning-line" :size="14" />
         <span>当前模型可能不支持图片输入，图片可能不会被读取</span>
       </div>
     </div>
@@ -605,7 +605,7 @@ function onKeydown(e: KeyboardEvent): void {
           :class="{ active: permissionMode != null && permissionMode !== 'full' }"
           @click="permOpen = !permOpen; thinkOpen = false; modelOpen = false; mention = null"
         >
-          <Icon class="mode-ico" :name="permIcon" :size="13" />
+          <Icon class="mode-ico" :name="permIcon" :size="14" />
           <span>{{ permLabel }}</span>
           <span class="c-chev" :class="{ open: permOpen }"><Icon :name="I.chevD" :size="11" /></span>
         </button>
@@ -638,7 +638,7 @@ function onKeydown(e: KeyboardEvent): void {
         </button>
         <div v-if="modelOpen" class="dd-menu up right">
           <div class="c-search">
-            <Icon :name="I.search" :size="13" />
+            <Icon :name="I.search" :size="14" />
             <input v-model="modelQuery" placeholder="搜索模型" @keydown.enter="selectFirstModel" />
           </div>
           <div class="m-list">
@@ -671,7 +671,7 @@ function onKeydown(e: KeyboardEvent): void {
       <!-- 思考级别 -->
       <div class="dd">
         <button class="dd-btn" @click="thinkOpen = !thinkOpen; permOpen = false; modelOpen = false; mention = null">
-          <Icon :name="I.gauge" :size="13" />
+          <Icon :name="I.gauge" :size="14" />
           <span>{{ thinkLabel }}</span>
           <span class="c-chev" :class="{ open: thinkOpen }"><Icon :name="I.chevD" :size="11" /></span>
         </button>
@@ -690,7 +690,7 @@ function onKeydown(e: KeyboardEvent): void {
       </div>
 
       <button v-if="busy" class="abort" title="停止" @click="emit('abort')">
-        <Icon :name="I.stop" :size="13" />
+        <Icon :name="I.stop" :size="14" />
       </button>
       <button v-else class="send" :disabled="disabled || !text.trim()" @click="submit">
         <Icon :name="I.up" :size="15" />

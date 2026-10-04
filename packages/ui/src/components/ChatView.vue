@@ -588,7 +588,7 @@ watch(
               <span v-if="tfDel(turnFilesAt(index)!.files)" class="t-del">−{{ tfDel(turnFilesAt(index)!.files) }}</span>
               <span class="flex-sp"></span>
               <span class="revert" @click.stop="revertAll(groupAt(index)!.key, turnFilesAt(index)!.files.length)">
-                <Icon name="history-line" :size="13" />撤销
+                <Icon name="history-line" :size="14" />撤销
               </span>
             </button>
             <div v-if="!filesCollapsed.has(groupAt(index)!.key)" class="files-list">

@@ -288,7 +288,7 @@ onBeforeUnmount(() => {
     <div class="sb-tools">
       <button class="seg-btn" :class="{ active: !grouped }" @click="grouped = false"># 分组</button>
       <button class="seg-btn" :class="{ active: grouped }" @click="grouped = true">
-        <Icon name="folder-line" :size="13" />项目
+        <Icon name="folder-line" :size="14" />项目
       </button>
       <span class="flex-sp"></span>
     </div>

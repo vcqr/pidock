@@ -479,7 +479,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
     <!-- 左：供应商列表 -->
     <aside class="list-pane">
       <div class="search-box">
-        <Icon name="search-line" :size="14" />
+        <Icon name="search-line" :size="15" />
         <input v-model="query" placeholder="搜索模型平台…" />
       </div>
       <div class="provider-list">
@@ -498,7 +498,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
         <div v-if="!filtered.length && !loading" class="state small">没有匹配的供应商</div>
       </div>
       <button class="add-btn" @click="startAdd">
-        <Icon name="add-line" :size="14" />添加供应商
+        <Icon name="add-line" :size="15" />添加供应商
       </button>
     </aside>
 
@@ -538,7 +538,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
             </div>
           </div>
           <button class="fetch-btn" :disabled="formBusy" @click="fetchModels">
-            <Icon name="download-cloud-2-line" :size="14" />获取模型列表
+            <Icon name="download-cloud-2-line" :size="15" />获取模型列表
           </button>
           <div class="field">
             <label>候选模型 ID（逗号分隔，可点击上方「获取模型列表」自动填充）</label>
@@ -559,7 +559,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
                 <span v-if="r.pdf" class="mr-badge">PDF</span>
                 <span v-if="r.contextWindow" class="mr-badge">{{ fmtInt(r.contextWindow) }}</span>
                 <button class="mr-del" title="移除该模型" @click.stop="removeModelRow(r)">
-                  <Icon name="close-line" :size="12" />
+                  <Icon name="close-line" :size="13" />
                 </button>
               </div>
               <div v-if="!filteredModelRows.length" class="mr-empty">{{ rowFilter ? "没有匹配的模型" : "填写或获取候选模型 ID 后自动生成" }}</div>
@@ -578,7 +578,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
           <span class="badge">自定义</span>
           <span class="flex-sp"></span>
           <button class="danger-btn" @click="removeCustom">
-            <Icon name="delete-bin-line" :size="14" />删除
+            <Icon name="delete-bin-line" :size="15" />删除
           </button>
         </header>
         <p class="models-json-path" :title="modelsJsonPath">models.json · {{ selectedRow.baseUrl }}</p>
@@ -611,7 +611,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
             </div>
           </div>
           <button class="fetch-btn" :disabled="formBusy" @click="fetchModels">
-            <Icon name="download-cloud-2-line" :size="14" />获取模型列表
+            <Icon name="download-cloud-2-line" :size="15" />获取模型列表
           </button>
           <div class="field">
             <label>候选模型 ID（逗号分隔，可点击上方「获取模型列表」自动填充）</label>
@@ -632,7 +632,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
                 <span v-if="r.pdf" class="mr-badge">PDF</span>
                 <span v-if="r.contextWindow" class="mr-badge">{{ fmtInt(r.contextWindow) }}</span>
                 <button class="mr-del" title="移除该模型" @click.stop="removeModelRow(r)">
-                  <Icon name="close-line" :size="12" />
+                  <Icon name="close-line" :size="13" />
                 </button>
               </div>
               <div v-if="!filteredModelRows.length" class="mr-empty">{{ rowFilter ? "没有匹配的模型" : "填写或获取候选模型 ID 后自动生成" }}</div>
@@ -677,7 +677,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
               <button class="ghost-btn wide" @click="keyEditing = false; keyDraft = ''">取消</button>
             </template>
             <button v-if="selectedRow.auth !== 'missing' && !keyEditing" class="ghost-btn wide danger" @click="removeKey">
-              <Icon name="delete-bin-line" :size="13" />删除密钥
+              <Icon name="delete-bin-line" :size="14" />删除密钥
             </button>
           </div>
         </div>
@@ -700,7 +700,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
             <span v-if="isDefaultModel(m)" class="badge">默认</span>
             <template v-else>
               <button class="edit-btn" title="编辑模型配置" @click.stop="openModelOverrideEditor(m)">
-                <Icon name="edit-2-line" :size="13" />编辑
+                <Icon name="edit-2-line" :size="14" />编辑
               </button>
               <button class="ghost-btn wide" @click.stop="setDefault(m)">设为默认</button>
             </template>
@@ -743,7 +743,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
               <div class="field">
                 <label>输入类型（文本默认开启）</label>
                 <div class="cap-chips">
-                  <span class="cap-chip locked"><Icon name="check-line" :size="12" />文本</span>
+                  <span class="cap-chip locked"><Icon name="check-line" :size="13" />文本</span>
                   <label class="cap-chip" :class="{ on: editingModel.image }">
                     <input v-model="editingModel.image" type="checkbox" />图片
                   </label>
