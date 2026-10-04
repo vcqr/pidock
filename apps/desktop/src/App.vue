@@ -5,14 +5,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ChatView,
-  ProvidersView,
   SessionSidebar,
   SettingsView,
   StatePill,
-  ToolsView,
   ATTACHMENT_LOADER,
   FOLDER_PICKER,
   REVEAL_PATH,
+  WINDOW_CONTROLS,
   createAgentStore,
   initTheme,
   themeMode,
@@ -20,7 +19,7 @@ import {
   type AgentStore,
 } from "@pidock/ui";
 import { createTauriBus } from "./bus";
-import SyncPanel from "./SyncPanel.vue";
+import SyncSettings from "./SyncSettings.vue";
 
 initTheme();
 const naiveTheme = computed(() => (themeMode.value === "dark" ? darkTheme : undefined));
@@ -28,9 +27,8 @@ const naiveTheme = computed(() => (themeMode.value === "dark" ? darkTheme : unde
 const store = ref<AgentStore | null>(null);
 const bootError = ref<string | null>(null);
 const showSettings = ref(false);
-const settingsTab = ref<"models" | "extensions" | "skills" | "mcp">("models");
-/** main-area view: chat by default, tool managers when the sidebar nav is clicked */
-const mainView = ref<"chat" | "plugins" | "skills" | "providers" | "mcp">("chat");
+/** 设置中心打开时定位的页面（接受新 pane id 与旧 tab 名） */
+const settingsPane = ref("general");
 /** 新建任务模式：右侧显示默认对话页，发送首条消息后自动创建会话并退出该模式 */
 const newTaskMode = ref(false);
 /** 新建任务预选的项目目录（侧栏项目分组点击）；seq 自增让重复点击同一目录也能重新应用选中 */
@@ -38,9 +36,21 @@ const newTaskCwd = ref<{ cwd: string; seq: number } | null>(null);
 const bus = createTauriBus();
 
 function startNewTask(cwd?: string): void {
-  mainView.value = "chat";
   newTaskMode.value = true;
   newTaskCwd.value = cwd ? { cwd, seq: (newTaskCwd.value?.seq ?? 0) + 1 } : null;
+}
+
+function openSettings(tab?: string): void {
+  settingsPane.value = tab ?? "general";
+  showSettings.value = true;
+}
+
+// Ctrl/Cmd+N 新建任务（设置中心快捷键页展示的绑定之一）
+function onGlobalKey(e: KeyboardEvent): void {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+    e.preventDefault();
+    startNewTask();
+  }
 }
 
 // ---- 左栏（会话侧栏）拖拽调宽（NSplit），宽度记忆在 localStorage ----
@@ -60,6 +70,15 @@ function saveSidebar(): void {
     if (sidebarWidth.value != null) localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth.value));
   } catch {
     // localStorage 不可用时忽略
+  }
+}
+/** 设置中心「恢复默认布局」：清掉宽度记忆，回到 260px */
+function resetLayout(): void {
+  sidebarWidth.value = null;
+  try {
+    localStorage.removeItem(SIDEBAR_KEY);
+  } catch {
+    // ignore
   }
 }
 
@@ -110,7 +129,18 @@ function closeWindow(): void {
   void appWin?.close();
 }
 
+// 无边框窗口控制：设置中心等全屏页面盖住标题栏时，用它补齐窗口按钮
+if (appWin) {
+  provide(WINDOW_CONTROLS, {
+    minimize,
+    toggleMaximize,
+    close: closeWindow,
+    isMax,
+  });
+}
+
 onMounted(async () => {
+  window.addEventListener("keydown", onGlobalKey);
   // 会话打开（新建/点选）后退出新建任务模式
   watch(
     () => store.value?.activeId,
@@ -177,18 +207,14 @@ onMounted(async () => {
         :sessions="store.sessions"
         :active-id="store.activeId"
         :home-dir="store.homeDir"
-        :show-tool-nav="true"
         :show-settings-btn="true"
-        :active-tool="mainView === 'chat' ? undefined : mainView"
         :width="sidebarWidth ?? undefined"
-        @select="(id) => { mainView = 'chat'; store?.openSession(id); }"
+        @select="(id) => store?.openSession(id)"
         @new-task="() => startNewTask()"
         @open-project="(cwd) => startNewTask(cwd)"
         @rename="(id, name) => store?.renameSession(id, name)"
-        @open-tools="(t) => (mainView = t)"
-        @open-settings="(tab) => { settingsTab = (tab as any) ?? 'models'; showSettings = true; }"
+        @open-settings="(tab) => openSettings(tab)"
       >
-        <template #bottom><SyncPanel /></template>
       </SessionSidebar>
       </template>
         <template #resize-trigger><div class="rz-line" /></template>
@@ -217,22 +243,22 @@ onMounted(async () => {
           </button>
         </header>
         <ChatView
-          v-if="mainView === 'chat'"
           :store="store"
           :new-task="newTaskMode"
           :new-task-cwd="newTaskCwd"
           :model="store.sessions.find((s) => s.session_id === store?.activeId)?.model"
-          @open-settings="(tab) => { settingsTab = (tab as any) ?? 'models'; showSettings = true; }"
-          @open-providers="() => { mainView = 'providers'; }"
+          @open-settings="(tab) => openSettings(tab)"
+          @open-providers="() => openSettings('providers')"
         />
-        <ProvidersView v-else-if="mainView === 'providers'" :bus="bus" />
-        <ToolsView v-else :kind="mainView" :bus="bus" />
         <SettingsView
           v-if="showSettings"
           :bus="bus"
-          :initial-tab="settingsTab"
+          :initial-pane="settingsPane"
           @close="showSettings = false"
-        />
+          @reset-layout="resetLayout"
+        >
+          <template #sync><SyncSettings /></template>
+        </SettingsView>
       </main>
         </template>
       </n-split>
