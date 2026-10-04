@@ -539,11 +539,30 @@ export function createAgentStore(bus: DataBus) {
     await refreshModels();
   }
 
-  /** 技能列表（$ 选择技能用），仅返回启用的 */
+  /** 常规设置里「技能斜杠命令」开关（pi 端展开 /skill: 的前提）；缓存 60s */
+  let skillsCommandsCache: { value: boolean; at: number } | null = null;
+  async function skillsCommandsEnabled(): Promise<boolean> {
+    if (skillsCommandsCache && Date.now() - skillsCommandsCache.at < 60_000) {
+      return skillsCommandsCache.value;
+    }
+    let enabled = true;
+    try {
+      const r = await bus.request("config.get");
+      const v = r?.settings?.enableSkillCommands;
+      enabled = typeof v === "boolean" ? v : true;
+    } catch {
+      enabled = true; // 读不到设置时按可用处理
+    }
+    skillsCommandsCache = { value: enabled, at: Date.now() };
+    return enabled;
+  }
+
+  /** 技能列表（$ 选择技能与 / 弹窗共用），仅返回启用的；全局开关关闭时为空 */
   async function listSkills(
     cwd?: string,
   ): Promise<Array<{ name: string; description: string }>> {
     try {
+      if (!(await skillsCommandsEnabled())) return [];
       const r = await bus.request("config.skills.list", cwd ? { cwd } : {});
       return (r?.skills ?? [])
         .filter((s: any) => s.enabled !== false)

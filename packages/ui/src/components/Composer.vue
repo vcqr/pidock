@@ -95,13 +95,8 @@ const skillsLoading = ref(false);
 const MAX_IMAGES = 6;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
-function togglePlus(): void {
-  plusOpen.value = !plusOpen.value;
-  permOpen.value = false;
-  thinkOpen.value = false;
-  modelOpen.value = false;
-  mention.value = null; // + 菜单与提及弹层互斥
-  if (plusOpen.value && !skillsLoading.value && skills.value.length === 0 && props.skillsLoader) {
+function ensureSkills(): void {
+  if (!skillsLoading.value && skills.value.length === 0 && props.skillsLoader) {
     skillsLoading.value = true;
     props
       .skillsLoader()
@@ -109,6 +104,16 @@ function togglePlus(): void {
       .catch(() => (skills.value = []))
       .finally(() => (skillsLoading.value = false));
   }
+}
+
+function togglePlus(): void {
+  plusOpen.value = !plusOpen.value;
+  permOpen.value = false;
+  thinkOpen.value = false;
+  modelOpen.value = false;
+  mention.value = null; // + 菜单与提及弹层互斥
+  slash.value = null; // 与 / 技能弹层互斥
+  if (plusOpen.value) ensureSkills();
 }
 
 function pickImages(): void {
@@ -156,6 +161,7 @@ function insertAtCaret(s: string): void {
 /** 插入 @ 并打开文件提及弹层 */
 function addFileMention(): void {
   plusOpen.value = false;
+  slash.value = null;
   if (!mentionBase.value) return;
   const el = ta.value;
   const caret = el ? (el.selectionStart ?? text.value.length) : text.value.length;
@@ -279,16 +285,28 @@ async function ensureMentionFiles(): Promise<void> {
   }
 }
 
-/** 检测光标前的 @ 触发式样：行首或空白后的 @query */
+/** 检测光标前的 @ 触发式样：行首或空白后的 @query；同时识别 / 技能命令触发 */
 function onTextInput(e: Event): void {
   const el = e.target as HTMLTextAreaElement;
   const caret = el.selectionStart ?? 0;
-  const m = text.value.slice(0, caret).match(/(^|\s)@([^\s@]*)$/);
+  const before = text.value.slice(0, caret);
+  const m = before.match(/(^|\s)@([^\s@]*)$/);
   if (m && mentionBase.value) {
     mention.value = { start: caret - m[2]!.length - 1, query: m[2]!, active: 0 };
+    slash.value = null;
     void ensureMentionFiles();
-  } else if (mention.value) {
+    return;
+  }
+  if (mention.value) {
     mention.value = null;
+  }
+  // / 技能命令：/ 与 /skill: 两种写法都触发，过滤时忽略 skill: 前缀
+  const sm = before.match(/(^|\s)\/([^\s/]*)$/);
+  if (sm && props.skillsLoader) {
+    slash.value = { start: caret - sm[2]!.length - 1, raw: sm[2]!, active: 0 };
+    ensureSkills();
+  } else if (slash.value) {
+    slash.value = null;
   }
 }
 
@@ -313,6 +331,43 @@ function applyMention(f: MentionFile): void {
 /** 键盘导航时保持活动项可见 */
 watch(
   () => mention.value?.active,
+  async () => {
+    await nextTick();
+    document.querySelector(".mention-item.active")?.scrollIntoView({ block: "nearest" });
+  },
+);
+
+// ---- / 技能命令弹层（与 @ 提及同款交互） ----
+const slash = ref<{ start: number; raw: string; active: number } | null>(null);
+const slashQuery = computed(() => (slash.value?.raw ?? "").replace(/^skill:/i, ""));
+const slashMatches = computed(() => {
+  if (!slash.value) return [];
+  const q = slashQuery.value.toLowerCase();
+  return skills.value
+    .filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q))
+    .slice(0, 20);
+});
+
+/** 把 /query 段替换为完整的技能命令，光标落在其后 */
+function applySlash(s: { name: string }): void {
+  if (!slash.value) return;
+  const start = slash.value.start;
+  const end = start + 1 + slash.value.raw.length;
+  const token = `/skill:${s.name} `;
+  text.value = text.value.slice(0, start) + token + text.value.slice(end);
+  slash.value = null;
+  void nextTick(() => {
+    const el = ta.value;
+    if (el) {
+      el.focus();
+      const pos = start + token.length;
+      el.setSelectionRange(pos, pos);
+    }
+  });
+}
+
+watch(
+  () => slash.value?.active,
   async () => {
     await nextTick();
     document.querySelector(".mention-item.active")?.scrollIntoView({ block: "nearest" });
@@ -429,6 +484,7 @@ function submit(): void {
   emit("send", value, cwd === null ? null : cwd || undefined, images.length ? images : undefined);
   text.value = "";
   pendingImages.value = [];
+  slash.value = null;
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -453,6 +509,30 @@ function onKeydown(e: KeyboardEvent): void {
     if (e.key === "Escape") {
       e.preventDefault();
       mention.value = null;
+      return;
+    }
+  }
+  // / 技能命令弹层：同款键盘交互
+  if (slash.value && slashMatches.value.length) {
+    const n = slashMatches.value.length;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      slash.value.active = (slash.value.active + 1) % n;
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      slash.value.active = (slash.value.active - 1 + n) % n;
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      applySlash(slashMatches.value[slash.value.active] ?? slashMatches.value[0]!);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      slash.value = null;
       return;
     }
   }
@@ -542,6 +622,24 @@ function onKeydown(e: KeyboardEvent): void {
         <span class="m-icon"><FileIcon :path="f.path" :dir="f.dir" :size="16" /></span>
         <span class="m-name">{{ f.name }}</span>
         <span class="m-dir">{{ f.path }}</span>
+      </button>
+    </div>
+
+    <!-- / 技能命令弹层 -->
+    <div v-if="slash && slashMatches.length" class="mention-menu">
+      <button
+        v-for="(s, i) in slashMatches"
+        :key="s.name"
+        class="mention-item"
+        :class="{ active: i === slash.active }"
+        :title="s.description"
+        @mousedown.prevent
+        @mouseenter="slash.active = i"
+        @click="applySlash(s)"
+      >
+        <span class="m-icon"><Icon :name="I.magic" :size="16" /></span>
+        <span class="m-name">/skill:{{ s.name }}</span>
+        <span class="m-dir">{{ s.description }}</span>
       </button>
     </div>
 
@@ -701,6 +799,8 @@ function onKeydown(e: KeyboardEvent): void {
 
 <style scoped>
 .composer {
+  /* @ 提及与 / 技能弹层的定位锚点 */
+  position: relative;
   border: 1px solid var(--pd-border);
   border-radius: var(--pd-radius-lg);
   background: var(--pd-bg-card);
