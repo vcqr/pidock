@@ -310,6 +310,13 @@ const fThink = ref("");
 const peekTimes = ref<number[]>([]);
 const peekErr = ref("");
 
+const composerRef = ref<InstanceType<typeof Composer> | null>(null);
+/** 底部「创建/保存」按钮：经由 Composer 汇总提示词/工作空间/图片后走同一保存链路 */
+function saveFromFooter(): void {
+  const ok = composerRef.value?.submit();
+  if (!ok) flash("请先填写提示词");
+}
+
 const dialogCron = computed(() => (showForm.value ? buildCron() : ""));
 let peekTimer: ReturnType<typeof setTimeout> | null = null;
 watch(dialogCron, (cron) => {
@@ -371,12 +378,13 @@ function openEdit(j: Job): void {
   void loadComposerContext();
 }
 
-/** Composer 的 send（Enter / ↑ 按钮）= 保存任务 */
+/** Composer 的 send（Enter / 底部「创建/保存」按钮）= 保存任务 */
 async function applyDraft(
   text: string,
   cwd?: string | null,
   images?: Array<{ data: string; mime_type: string }>,
 ): Promise<void> {
+  if (saving.value) return;
   if (!fName.value.trim()) return flash("请先填写任务名称");
   if (!buildCron()) return flash("cron 表达式不能为空");
   if (effMode.value === "range") {
@@ -410,8 +418,7 @@ async function applyDraft(
 }
 
 // ---- 运行记录弹窗 ----
-const histJob = ref<Job | null>(null);
-function statusIcon(s: string): string {
+const histJob = ref<Job | null>(null);function statusIcon(s: string): string {
   if (s === "ok") return "✓";
   if (s === "failed") return "✗";
   if (s === "running") return "⟳";
@@ -503,8 +510,8 @@ function copyRunId(sid: string): void {
       </div>
     </div>
 
-    <!-- 新建 / 编辑弹窗：名称 + 频率/时效 + 主界面同款 Composer -->
-    <div v-if="showForm" class="dialog-mask" @click.self="showForm = false">
+    <!-- 新建 / 编辑弹窗：名称 + 频率/时效 + 主界面同款 Composer；蒙版点击不关闭（防误触） -->
+    <div v-if="showForm" class="dialog-mask">
       <div class="dialog">
         <header class="d-head">
           <h2>{{ formMode === "add" ? "新建定时任务" : "编辑定时任务" }}</h2>
@@ -516,7 +523,7 @@ function copyRunId(sid: string): void {
 
         <div class="field">
           <label>名称 <i>*</i></label>
-          <input v-model="fName" placeholder="例如：每日站会摘要" />
+          <input v-model="fName" placeholder="例如：每日站会摘要" @keydown.enter="saveFromFooter" />
         </div>
 
         <div class="field">
@@ -582,6 +589,7 @@ function copyRunId(sid: string): void {
 
         <div class="composer-slot">
           <Composer
+            ref="composerRef"
             :key="dialogSeq"
             draft
             centered
@@ -610,14 +618,17 @@ function copyRunId(sid: string): void {
         <div v-if="notice" class="notice">{{ notice }}</div>
 
         <footer class="d-foot">
-          <span class="foot-hint">Enter 或 ↑ 保存任务</span>
+          <span class="foot-hint">Enter 保存任务</span>
           <button class="cancel" @click="showForm = false">取消</button>
+          <button class="dark-btn" :disabled="saving" @click="saveFromFooter">
+            {{ formMode === "add" ? "创建" : "保存" }}
+          </button>
         </footer>
       </div>
     </div>
 
-    <!-- 运行记录弹窗 -->
-    <div v-if="histJob" class="dialog-mask" @click.self="histJob = null">
+    <!-- 运行记录弹窗（蒙版点击同样不关闭） -->
+    <div v-if="histJob" class="dialog-mask">
       <div class="dialog dialog-hist">
         <header class="d-head">
           <h2>运行记录 · {{ histJob.name }}</h2>

@@ -479,16 +479,20 @@ function onDocClick(e: MouseEvent): void {
 onMounted(() => document.addEventListener("click", onDocClick));
 onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
 
-function submit(): void {
+/** 供表单父级（如定时任务弹窗的「创建」按钮）触发草稿提交 */
+defineExpose({ submit });
+
+function submit(): boolean {
   const value = text.value.trim();
-  if (!value || props.busy || props.disabled) return;
+  if (!value || props.busy || props.disabled) return false;
   const cwd = props.centered ? selected.value : undefined;
   const images = pendingImages.value.map((p) => ({ data: p.data, mime_type: p.mime_type }));
   emit("send", value, cwd === null ? null : cwd || undefined, images.length ? images : undefined);
-  if (props.draft) return; // 草稿模式：内容归父级表单所有，成功与否由父级决定
+  if (props.draft) return true; // 草稿模式：内容归父级表单所有，成功与否由父级决定
   text.value = "";
   pendingImages.value = [];
   slash.value = null;
+  return true;
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -795,7 +799,8 @@ function onKeydown(e: KeyboardEvent): void {
       <button v-if="busy" class="abort" title="停止" @click="emit('abort')">
         <Icon :name="I.stop" :size="14" />
       </button>
-      <button v-else class="send" :disabled="disabled || !text.trim()" :title="draft ? '保存任务' : undefined" @click="submit">
+      <!-- 草稿模式：保存动作由父级表单底部的按钮承担，这里不再显示发送键 -->
+      <button v-else-if="!draft" class="send" :disabled="disabled || !text.trim()" @click="submit">
         <Icon :name="I.up" :size="15" />
       </button>
     </div>
