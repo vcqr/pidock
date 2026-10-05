@@ -122,8 +122,8 @@ export function createAgentStore(bus: DataBus) {
   const thinkingLevels = ref<Record<string, string>>({});
   /** 待用户审批的工具调用（仅活动会话展示） */
   const pendingApproval = ref<{ approvalId: string; toolName: string; args: string } | null>(null);
-  /** 待用户回答的 AskUserQuestion 问题卡（仅活动会话展示） */
-  const pendingAsk = ref<{ askId: string; question: AskQuestion } | null>(null);
+  /** 待用户回答的 AskUserQuestion 问题卡（仅活动会话展示；timeoutSec=倒计时秒数，0/缺省不限时） */
+  const pendingAsk = ref<{ askId: string; question: AskQuestion; timeoutSec?: number } | null>(null);
   /** 当前回合开始时间；结束后保留并写入 turnEndedAt（「已工作 · 耗时」折叠行用） */
   const turnStartedAt = ref<number | null>(null);
   const turnEndedAt = ref<number | null>(null);
@@ -337,7 +337,13 @@ export function createAgentStore(bus: DataBus) {
         const q = e.payload?.question;
         pendingAsk.value =
           e.payload?.ask_id && q && Array.isArray(q.options) && q.options.length
-            ? { askId: e.payload.ask_id, question: q as AskQuestion }
+            ? {
+                askId: e.payload.ask_id,
+                question: q as AskQuestion,
+                ...(Number(e.payload.timeout_sec) > 0
+                  ? { timeoutSec: Number(e.payload.timeout_sec) }
+                  : {}),
+              }
             : null;
         break;
       }

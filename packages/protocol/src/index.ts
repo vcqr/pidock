@@ -224,6 +224,8 @@ export interface AskQuestion {
 export interface AskUserQuestionPayload {
   ask_id: string;
   question: AskQuestion;
+  /** 等待超时（秒），UI 据此显示倒计时；0/缺省 = 不限时 */
+  timeout_sec?: number;
 }
 
 export interface ErrorPayload {

@@ -632,9 +632,14 @@ export class SessionPool {
     const pending = new Promise<AskAnswer | "timeout" | null>((resolve) => {
       this.pendingAsks.set(askId, { sessionId, resolve });
     });
-    emitEvent(sessionId, Event.ASK_USER_QUESTION, { ask_id: askId, question }, { persist: false });
-    emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "waiting_ask" }, { persist: false });
     const timeoutMs = this.askTimeoutMs();
+    emitEvent(
+      sessionId,
+      Event.ASK_USER_QUESTION,
+      { ask_id: askId, question, timeout_sec: Math.round(timeoutMs / 1000) },
+      { persist: false },
+    );
+    emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "waiting_ask" }, { persist: false });
     const timer =
       timeoutMs > 0
         ? setTimeout(() => this.resolveAsk({ ask_id: askId, timeout: true }), timeoutMs)

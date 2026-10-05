@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import type { AskQuestion } from "@pidock/protocol";
 import Icon from "./Icon.vue";
 
 /**
  * AskUserQuestion 问题卡：输入区上方内联（与工具审批横幅同位）。
  * 单选点击选项立即作答；多选打勾后提交；两种模式都可用「其他」自由输入。
+ * 带 timeoutSec 时头部显示倒计时；到点由 host 超时取消（toolResult 到达自动清卡），
+ * 本地秒表仅作展示，与 host 计时允许 ±1s 级偏差。
  */
-const props = defineProps<{ ask: { askId: string; question: AskQuestion } }>();
+const props = defineProps<{
+  ask: { askId: string; question: AskQuestion; timeoutSec?: number };
+}>();
 const emit = defineEmits<{
   resolve: [answer: { labels?: string[]; text?: string; interrupted?: boolean }];
 }>();
@@ -19,6 +23,28 @@ const multi = computed(() => props.ask.question.multiSelect === true);
 const canSubmit = computed(
   () => selected.value.length > 0 || !!custom.value.trim(),
 );
+
+/** 倒计时（host 下发 timeout_sec；本地递减只做展示，到点清卡由 host 的 toolResult 驱动） */
+const remainSec = ref(props.ask.timeoutSec ?? 0);
+let ticker: ReturnType<typeof setInterval> | null = null;
+if (remainSec.value > 0) {
+  ticker = setInterval(() => {
+    remainSec.value = Math.max(0, remainSec.value - 1);
+    if (remainSec.value === 0 && ticker) {
+      clearInterval(ticker);
+      ticker = null;
+    }
+  }, 1000);
+}
+onBeforeUnmount(() => {
+  if (ticker) clearInterval(ticker);
+});
+const remainText = computed(() => {
+  if ((props.ask.timeoutSec ?? 0) <= 0) return "";
+  const m = Math.floor(remainSec.value / 60);
+  const s = remainSec.value % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")} 后自动取消`;
+});
 
 function toggle(label: string): void {
   if (!multi.value) {
@@ -44,6 +70,7 @@ function submit(): void {
       <Icon name="questionnaire-line" :size="15" />
       <b class="ask-header">{{ ask.question.header }}</b>
       <span class="ask-q">{{ ask.question.question }}</span>
+      <span v-if="remainText" class="ask-timer">{{ remainText }}</span>
       <span v-if="multi" class="ask-multi">可多选</span>
     </div>
     <div class="ask-opts">
@@ -100,6 +127,14 @@ function submit(): void {
   border-radius: 999px;
   padding: 1px 8px;
 }
+.ask-timer {
+  flex: none;
+  margin-left: auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--pd-text-3);
+}
+.ask-timer + .ask-multi { margin-left: 0; }
 .ask-opts {
   display: flex;
   flex-direction: column;
