@@ -48,23 +48,14 @@ function submit(): void {
     </div>
     <div class="ask-opts">
       <button
-        v-for="opt in ask.question.options"
+        v-for="(opt, i) in ask.question.options"
         :key="opt.label"
         class="ask-opt"
         :class="{ on: selected.includes(opt.label) }"
         :title="opt.description"
         @click="toggle(opt.label)"
       >
-        <Icon
-          :size="14"
-          :name="
-            multi
-              ? selected.includes(opt.label)
-                ? 'checkbox-multiple-line'
-                : 'checkbox-multiple-blank-line'
-              : 'radio-button-line'
-          "
-        />
+        <span class="opt-num">{{ i + 1 }}</span>
         <span class="opt-label">{{ opt.label }}</span>
         <span v-if="opt.description" class="opt-desc">{{ opt.description }}</span>
       </button>
@@ -128,16 +119,27 @@ function submit(): void {
   cursor: pointer;
   color: var(--pd-text);
 }
-.ask-opt svg {
-  flex: none;
-  color: var(--pd-text-3);
-  align-self: center;
-  transition: color 0.15s;
-}
 .ask-opt:hover { border-color: var(--pd-accent); background: var(--pd-bg-hover); }
-.ask-opt:hover svg { color: var(--pd-accent); }
 .ask-opt.on { border-color: var(--pd-accent); background: var(--pd-bg-hover); }
-.ask-opt.on svg { color: var(--pd-accent); }
+/* 序号圆徽：兼做单选/多选的选中状态指示（选中时填充主题色） */
+.opt-num {
+  flex: none;
+  align-self: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--pd-border);
+  color: var(--pd-text-3);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background-color 0.15s, border-color 0.15s;
+}
+.ask-opt:hover .opt-num { border-color: var(--pd-accent); color: var(--pd-accent); }
+.ask-opt.on .opt-num { background: var(--pd-accent); border-color: var(--pd-accent); color: #1a1a1a; }
 .opt-label { font-weight: 600; flex: none; }
 .opt-desc { color: var(--pd-text-3); font-size: 11.5px; min-width: 0; }
 .ask-foot {
