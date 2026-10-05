@@ -626,19 +626,14 @@ export class SessionPool {
    * 超时（pidock/settings.json ask.timeoutSec，默认 180 秒，0 = 不限时）按取消
    * 处理但回传 "timeout" 哨兵，模型据此自行决策继续而非视为拒绝。
    */
+  /**
+   * AskUserQuestion 的等待端：发 ask_user_question 事件（UI 弹出问题卡 + 倒计时）
+   * 并挂起，直到 session.resolve_ask 回传答案；超时（pidock/settings.json
+   * ask.timeoutSec，默认 180 秒，0 = 不限时）交由 onAskTimeout 处理——full 模式
+   * 自动采用模型推荐项，其余模式按取消处理；abort/关闭会话由 denyAsks 兜底为取消。
+   */
   private askUser(sessionId: string, question: AskQuestion): Promise<AskAnswer | "timeout" | null> {
     if (!sessionId || !this.sessions.has(sessionId)) return Promise.resolve(null);
-    // 完全访问（full）模式：不打扰用户，直接采用模型声明的推荐项作答；
-    // 未提供有效推荐项则回一句"请自行决策"，模型在后续回复里说明选择
-    if (this.permissionStates.get(sessionId)?.mode === "full") {
-      const rec = question.recommended;
-      const label = typeof rec === "number" ? question.options[rec]?.label : undefined;
-      return Promise.resolve(
-        label
-          ? { labels: [label], auto: true }
-          : { labels: [], text: "无推荐选项，请自行决策并继续", auto: true },
-      );
-    }
     const askId = randomUUID();
     const pending = new Promise<AskAnswer | "timeout" | null>((resolve) => {
       this.pendingAsks.set(askId, { sessionId, resolve });
@@ -653,7 +648,7 @@ export class SessionPool {
     emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "waiting_ask" }, { persist: false });
     const timer =
       timeoutMs > 0
-        ? setTimeout(() => this.resolveAsk({ ask_id: askId, timeout: true }), timeoutMs)
+        ? setTimeout(() => this.onAskTimeout(sessionId, askId, question), timeoutMs)
         : null;
     return pending.finally(() => {
       if (timer) clearTimeout(timer);
@@ -761,17 +756,8 @@ export class SessionPool {
     interrupted?: boolean;
     timeout?: boolean;
   }): { ok: boolean } {
-    const pending = this.pendingAsks.get(params.ask_id);
-    if (!pending) return { ok: false };
-    this.pendingAsks.delete(params.ask_id);
-    if (params.interrupted) {
-      pending.resolve(null);
-      return { ok: true };
-    }
-    if (params.timeout) {
-      pending.resolve("timeout");
-      return { ok: true };
-    }
+    if (params.interrupted) return { ok: this.settleAsk(params.ask_id, null) };
+    if (params.timeout) return { ok: this.settleAsk(params.ask_id, "timeout") };
     const labels = (Array.isArray(params.labels) ? params.labels : []).filter(
       (s): s is string => typeof s === "string" && !!s.trim(),
     );
@@ -779,12 +765,30 @@ export class SessionPool {
       typeof params.text === "string" && params.text.trim()
         ? params.text.trim().slice(0, 2000)
         : undefined;
-    if (!labels.length && !text) {
-      pending.resolve(null);
-      return { ok: true };
+    if (!labels.length && !text) return { ok: this.settleAsk(params.ask_id, null) };
+    return { ok: this.settleAsk(params.ask_id, { labels, ...(text ? { text } : {}) }) };
+  }
+
+  /** 兑现挂起提问（ask_id 不存在时幂等返回 false） */
+  private settleAsk(askId: string, answer: AskAnswer | "timeout" | null): boolean {
+    const pending = this.pendingAsks.get(askId);
+    if (!pending) return false;
+    this.pendingAsks.delete(askId);
+    pending.resolve(answer);
+    return true;
+  }
+
+  /**
+   * 提问超时：full 模式下自动采用模型声明的推荐项作答（无人值守也不停摆，
+   * 答案带 auto 标注回给模型）；无有效推荐项或非 full 模式按等待超时处理。
+   */
+  private onAskTimeout(sessionId: string, askId: string, question: AskQuestion): void {
+    if (this.permissionStates.get(sessionId)?.mode === "full") {
+      const rec = question.recommended;
+      const label = typeof rec === "number" ? question.options[rec]?.label : undefined;
+      if (label && this.settleAsk(askId, { labels: [label], auto: true })) return;
     }
-    pending.resolve({ labels, ...(text ? { text } : {}) });
-    return { ok: true };
+    this.settleAsk(askId, "timeout");
   }
 
   private denyApprovals(sessionId: string): void {
