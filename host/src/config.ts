@@ -606,39 +606,55 @@ export class ConfigService {
     return { settings: readJson(path) ?? {}, path };
   }
 
-  appSettingsSet(params: { proxy: Json }): { ok: true; path: string } {
-    const proxy = params.proxy;
-    if (!proxy || typeof proxy !== "object" || Array.isArray(proxy)) {
-      throw new RpcError("bad_request", "proxy must be an object");
-    }
-    const mode = proxy.mode;
-    if (mode !== "direct" && mode !== "http" && mode !== "system") {
-      throw new RpcError("bad_request", "proxy.mode must be direct | http | system");
-    }
-    if (mode === "http") {
-      const url = typeof proxy.url === "string" ? proxy.url.trim() : "";
-      if (!/^https?:\/\/[^\s]+$/i.test(url)) {
-        throw new RpcError("bad_request", "proxy.url must be an http(s) URL when mode is http");
-      }
-    }
-    for (const key of ["url", "noProxy", "caPath"] as const) {
-      const v = proxy[key];
-      if (v !== undefined && v !== null && typeof v !== "string") {
-        throw new RpcError("bad_request", `proxy.${key} must be a string`);
-      }
-      if (typeof v === "string" && v.length > 4096) {
-        throw new RpcError("bad_request", `proxy.${key} too long`);
-      }
+  appSettingsSet(params: { proxy?: Json; ask?: Json }): { ok: true; path: string } {
+    if (params.proxy === undefined && params.ask === undefined) {
+      throw new RpcError("bad_request", "nothing to set (expect proxy and/or ask)");
     }
     const path = ConfigService.pidockSettingsPath();
     mkdirSync(dirname(path), { recursive: true });
     const settings = readJson(path) ?? {};
-    settings.proxy = {
-      mode,
-      ...(proxy.url ? { url: proxy.url.trim() } : {}),
-      ...(proxy.noProxy ? { noProxy: proxy.noProxy } : {}),
-      ...(proxy.caPath ? { caPath: proxy.caPath } : {}),
-    };
+    if (params.proxy !== undefined) {
+      const proxy = params.proxy;
+      if (!proxy || typeof proxy !== "object" || Array.isArray(proxy)) {
+        throw new RpcError("bad_request", "proxy must be an object");
+      }
+      const mode = proxy.mode;
+      if (mode !== "direct" && mode !== "http" && mode !== "system") {
+        throw new RpcError("bad_request", "proxy.mode must be direct | http | system");
+      }
+      if (mode === "http") {
+        const url = typeof proxy.url === "string" ? proxy.url.trim() : "";
+        if (!/^https?:\/\/[^\s]+$/i.test(url)) {
+          throw new RpcError("bad_request", "proxy.url must be an http(s) URL when mode is http");
+        }
+      }
+      for (const key of ["url", "noProxy", "caPath"] as const) {
+        const v = proxy[key];
+        if (v !== undefined && v !== null && typeof v !== "string") {
+          throw new RpcError("bad_request", `proxy.${key} must be a string`);
+        }
+        if (typeof v === "string" && v.length > 4096) {
+          throw new RpcError("bad_request", `proxy.${key} too long`);
+        }
+      }
+      settings.proxy = {
+        mode,
+        ...(proxy.url ? { url: proxy.url.trim() } : {}),
+        ...(proxy.noProxy ? { noProxy: proxy.noProxy } : {}),
+        ...(proxy.caPath ? { caPath: proxy.caPath } : {}),
+      };
+    }
+    if (params.ask !== undefined) {
+      const ask = params.ask;
+      if (!ask || typeof ask !== "object" || Array.isArray(ask)) {
+        throw new RpcError("bad_request", "ask must be an object");
+      }
+      const sec = (ask as Record<string, unknown>).timeoutSec;
+      if (typeof sec !== "number" || !Number.isFinite(sec) || sec < 0 || sec > 3600) {
+        throw new RpcError("bad_request", "ask.timeoutSec must be a number in [0, 3600] (0 = wait forever)");
+      }
+      settings.ask = { timeoutSec: Math.round(sec) };
+    }
     writeJson(path, settings);
     return { ok: true, path };
   }

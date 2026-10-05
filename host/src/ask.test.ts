@@ -78,7 +78,25 @@ describe("AskUserQuestion 工具", () => {
     });
     expect(calls).toBe(2);
     expect(result.details.interrupted).toBe(true);
+    expect(result.details.timeout).toBeUndefined();
     expect(result.content[0].text).toContain("用户取消");
+    expect(result.content[0].text).toContain("Alpha");
+  });
+
+  test("超时哨兵按 interrupted 处理并提示模型自行继续", async () => {
+    let calls = 0;
+    const tool = createAskUserQuestionTool(() => {
+      calls++;
+      return Promise.resolve(calls === 1 ? { labels: ["Alpha"] } : "timeout");
+    });
+    const result = await runExecute(tool, {
+      questions: [q1, { header: "H", question: "Q2", options: [{ label: "X" }] }],
+    });
+    expect(calls).toBe(2);
+    expect(result.details.interrupted).toBe(true);
+    expect(result.details.timeout).toBe(true);
+    expect(result.content[0].text).toContain("超时");
+    expect(result.content[0].text).toContain("自行决策");
     expect(result.content[0].text).toContain("Alpha");
   });
 

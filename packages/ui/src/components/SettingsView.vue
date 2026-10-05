@@ -201,6 +201,9 @@ async function ensureProxy(force = false): Promise<void> {
       noProxy: p.noProxy ?? "",
       caPath: p.caPath ?? "",
     };
+    // AskUserQuestion 等待超时（settings.json ask.timeoutSec，秒 → 分钟展示）
+    const sec = Number(r.settings?.ask?.timeoutSec);
+    askTimeoutMin.value = Number.isFinite(sec) && sec >= 0 ? sec / 60 : 3;
     proxyLoaded.value = true;
   } catch (err) {
     flash(String(err));
@@ -220,6 +223,29 @@ async function saveProxy(): Promise<void> {
     flash(String(err));
   } finally {
     proxySaving.value = false;
+  }
+}
+
+// --------------------------------------------------------- AskUserQuestion 超时
+
+/** 提问等待超时（分钟，0 = 一直等待）；settings.json ask.timeoutSec 以秒存储 */
+const askTimeoutMin = ref<number>(3);
+const askTimeoutSaving = ref(false);
+
+async function saveAskTimeout(): Promise<void> {
+  const min = Number(askTimeoutMin.value);
+  if (!Number.isFinite(min) || min < 0 || min > 60) {
+    flash("等待超时需在 0–60 分钟之间（0 = 一直等待）");
+    return;
+  }
+  askTimeoutSaving.value = true;
+  try {
+    await props.bus.request("pidock.settings.set", { ask: { timeoutSec: Math.round(min * 60) } });
+    flash("提问等待超时已保存，下一次提问生效");
+  } catch (err) {
+    flash(String(err));
+  } finally {
+    askTimeoutSaving.value = false;
   }
 }
 
@@ -563,6 +589,31 @@ function openFolder(): void {
                 <option value="always">总是信任</option>
                 <option value="never">从不信任</option>
               </select>
+            </div>
+          </div>
+
+          <h3 class="grp-title">对话交互</h3>
+          <div class="group">
+            <div class="row col">
+              <div class="row-text">
+                <b>提问等待超时（分钟）</b>
+                <span>AskUserQuestion 提问无人回答时的等待时限，超时按取消处理、模型自行继续；0 = 一直等待。全局生效，下一次提问起启用</span>
+              </div>
+              <input
+                v-model.number="askTimeoutMin"
+                class="txt"
+                type="number"
+                min="0"
+                max="60"
+                step="1"
+                placeholder="3"
+              />
+            </div>
+            <div class="row">
+              <div class="row-text"><span>完全访问（full）权限模式下同样生效</span></div>
+              <button class="dark-btn" :disabled="askTimeoutSaving" @click="saveAskTimeout">
+                {{ askTimeoutSaving ? "保存中…" : "保存" }}
+              </button>
             </div>
           </div>
 

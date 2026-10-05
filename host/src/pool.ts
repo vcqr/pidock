@@ -119,10 +119,10 @@ export class SessionPool {
     string,
     { sessionId: string; resolve: (approved: boolean) => void }
   >();
-  /** 等待用户回答的 AskUserQuestion 提问 */
+  /** 等待用户回答的 AskUserQuestion 提问（"timeout" 哨兵 = 等待超时） */
   private pendingAsks = new Map<
     string,
-    { sessionId: string; resolve: (answer: AskAnswer | null) => void }
+    { sessionId: string; resolve: (answer: AskAnswer | "timeout" | null) => void }
   >();
 
   constructor() {
@@ -622,22 +622,44 @@ export class SessionPool {
 
   /**
    * AskUserQuestion 的等待端：发 ask_user_question 事件（UI 弹出问题卡）并挂起，
-   * 直到 session.resolve_ask 回传答案；abort/关闭会话时由 denyAsks 兜底为取消。
+   * 直到 session.resolve_ask 回传答案；abort/关闭会话时由 denyAsks 兜底为取消，
+   * 超时（pidock/settings.json ask.timeoutSec，默认 180 秒，0 = 不限时）按取消
+   * 处理但回传 "timeout" 哨兵，模型据此自行决策继续而非视为拒绝。
    */
-  private askUser(sessionId: string, question: AskQuestion): Promise<AskAnswer | null> {
+  private askUser(sessionId: string, question: AskQuestion): Promise<AskAnswer | "timeout" | null> {
     if (!sessionId || !this.sessions.has(sessionId)) return Promise.resolve(null);
     const askId = randomUUID();
-    const pending = new Promise<AskAnswer | null>((resolve) => {
+    const pending = new Promise<AskAnswer | "timeout" | null>((resolve) => {
       this.pendingAsks.set(askId, { sessionId, resolve });
     });
     emitEvent(sessionId, Event.ASK_USER_QUESTION, { ask_id: askId, question }, { persist: false });
     emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "waiting_ask" }, { persist: false });
+    const timeoutMs = this.askTimeoutMs();
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => this.resolveAsk({ ask_id: askId, timeout: true }), timeoutMs)
+        : null;
     return pending.finally(() => {
+      if (timer) clearTimeout(timer);
       // 会话已关闭时不再推状态（socket 对端已消失，事件无人消费）
       if (this.sessions.has(sessionId)) {
         emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "thinking" }, { persist: false });
       }
     });
+  }
+
+  /** AskUserQuestion 等待超时（毫秒）：settings.json ask.timeoutSec，默认 180s，0/负 = 不限时，上限 1 小时防呆 */
+  private askTimeoutMs(): number {
+    const DEFAULT_MS = 3 * 60 * 1000;
+    try {
+      const raw = readFileSync(join(getAgentDir(), "pidock", "settings.json"), "utf8");
+      const sec = Number(JSON.parse(raw)?.ask?.timeoutSec);
+      if (!Number.isFinite(sec)) return DEFAULT_MS;
+      if (sec <= 0) return 0;
+      return Math.min(sec, 3600) * 1000;
+    } catch {
+      return DEFAULT_MS;
+    }
   }
 
   setPermissionMode(params: { session_id: string; mode: PermissionMode }): { ok: true } {
@@ -713,20 +735,25 @@ export class SessionPool {
   }
 
   /**
-   * 回答挂起的 AskUserQuestion（labels=选中项 / text=自由输入 / interrupted=取消）。
-   * 空答案按取消处理（UI 不会提交，防御 LLM 之外的异常调用方）；unknown ask_id 幂等。
+   * 回答挂起的 AskUserQuestion（labels=选中项 / text=自由输入 / interrupted=取消 /
+   * timeout=等待超时）。空答案按取消处理（UI 不会提交，防御异常调用方）；unknown ask_id 幂等。
    */
   resolveAsk(params: {
     ask_id: string;
     labels?: string[];
     text?: string;
     interrupted?: boolean;
+    timeout?: boolean;
   }): { ok: boolean } {
     const pending = this.pendingAsks.get(params.ask_id);
     if (!pending) return { ok: false };
     this.pendingAsks.delete(params.ask_id);
     if (params.interrupted) {
       pending.resolve(null);
+      return { ok: true };
+    }
+    if (params.timeout) {
+      pending.resolve("timeout");
       return { ok: true };
     }
     const labels = (Array.isArray(params.labels) ? params.labels : []).filter(

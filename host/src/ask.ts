@@ -47,10 +47,11 @@ export function sanitizeQuestion(raw: unknown): AskQuestion | null {
 /**
  * AskUserQuestion 自定义工具：把选择题经 ask 回调交给 pool（发 ask_user_question
  * 事件弹出问题卡 + 等待 session.resolve_ask），逐题作答后把答案文本返回给模型。
- * ask 回调返回 null 表示用户取消/打断（abort/关闭会话时由 pool 兜底触发）。
+ * ask 回调返回 null 表示用户取消/打断（abort/关闭会话时由 pool 兜底触发）；
+ * 返回 "timeout" 表示等待超时（ask.timeoutSec 配置，默认 3 分钟），模型应自行继续。
  */
 export function createAskUserQuestionTool(
-  ask: (question: AskQuestion) => Promise<AskAnswer | null>,
+  ask: (question: AskQuestion) => Promise<AskAnswer | "timeout" | null>,
 ) {
   return defineTool({
     name: "AskUserQuestion",
@@ -90,8 +91,13 @@ export function createAskUserQuestionTool(
         .map(sanitizeQuestion)
         .filter((q): q is AskQuestion => q !== null)
         .slice(0, MAX_QUESTIONS);
-      // 三个 return 分支共用同一 details 形状（SDK 会按 execute 返回值推断泛型）
-      const details: { error?: string; interrupted?: boolean; answers?: Record<string, string> } = {};
+      // 各 return 分支共用同一 details 形状（SDK 会按 execute 返回值推断泛型）
+      const details: {
+        error?: string;
+        interrupted?: boolean;
+        timeout?: boolean;
+        answers?: Record<string, string>;
+      } = {};
       if (!questions.length) {
         details.error = "no_valid_question";
         return {
@@ -104,8 +110,14 @@ export function createAskUserQuestionTool(
 
       const answers: Record<string, string> = {};
       let interrupted = false;
+      let timedOut = false;
       for (const q of questions) {
         const answer = await ask(q);
+        if (answer === "timeout") {
+          interrupted = true;
+          timedOut = true;
+          break;
+        }
         if (answer === null) {
           interrupted = true;
           break;
@@ -122,11 +134,13 @@ export function createAskUserQuestionTool(
       details.answers = answers;
       if (interrupted) {
         details.interrupted = true;
-        const note = Object.keys(answers).length
-          ? `用户取消了剩余问题的回答。已回答：\n${answerText}`
+        if (timedOut) details.timeout = true;
+        const note = timedOut
+          ? "等待回答超时，视为用户暂不在线。请基于已有信息自行决策继续任务，之后不要重复问同一个问题。"
           : "用户取消了回答。";
+        const text = Object.keys(answers).length ? `${note}已回答：\n${answerText}` : note;
         return {
-          content: [{ type: "text" as const, text: note }],
+          content: [{ type: "text" as const, text }],
           details,
         };
       }
