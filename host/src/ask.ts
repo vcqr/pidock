@@ -6,6 +6,8 @@ import type { AskQuestion } from "@pidock/protocol";
 export interface AskAnswer {
   labels: string[];
   text?: string;
+  /** host 自动作答（full 权限模式直接采用模型推荐项），并非用户本人选择 */
+  auto?: boolean;
 }
 
 /** 防呆上限：单题文本长度与选项数（LLM 输出不可信） */
@@ -36,11 +38,19 @@ export function sanitizeQuestion(raw: unknown): AskQuestion | null {
     }
   }
   if (!options.length) return null;
+  const recommended =
+    typeof rec.recommended === "number" &&
+    Number.isInteger(rec.recommended) &&
+    rec.recommended >= 0 &&
+    rec.recommended < options.length
+      ? rec.recommended
+      : undefined;
   return {
     header: header || "提问",
     question,
     options,
     ...(rec.multiSelect === true ? { multiSelect: true } : {}),
+    ...(recommended !== undefined ? { recommended } : {}),
   };
 }
 
@@ -61,7 +71,8 @@ export function createAskUserQuestionTool(
       "Use when you need the user to make a decision or provide missing information to proceed.",
     promptSnippet: "AskUserQuestion: ask the user a question with selectable options",
     promptGuidelines: [
-      "When a decision is genuinely the user's to make (approach, trade-offs, scope), call AskUserQuestion with 2-4 concrete options instead of guessing; do not use it for facts you can look up yourself.",
+      "When a decision is genuinely the user's to make (approach, trade-offs, scope), call AskUserQuestion with 2-4 concrete options instead of guessing; do not use it for facts you can look up yourself. " +
+        "Always set recommended to the option index you would pick yourself — in full-access permission mode it is auto-selected without disturbing the user.",
     ],
     parameters: Type.Object({
       questions: Type.Array(
@@ -76,6 +87,12 @@ export function createAskUserQuestionTool(
               ),
             }),
             { description: "Available options for the user to choose from (2-4 recommended)" },
+          ),
+          recommended: Type.Optional(
+            Type.Number({
+              description:
+                "0-based index of the option you would pick yourself if you had to decide. Shown as a hint in the UI; auto-selected without waiting in full-access permission mode.",
+            }),
           ),
           multiSelect: Type.Optional(
             Type.Boolean({ description: "Allow selecting multiple options" }),
@@ -125,7 +142,10 @@ export function createAskUserQuestionTool(
         const parts: string[] = [];
         if (answer.labels.length) parts.push(answer.labels.join(", "));
         if (answer.text) parts.push(answer.text);
-        answers[`${q.header}: ${q.question}`] = parts.join("；") || "(未回答)";
+        const chosen = parts.join("；") || "(未回答)";
+        answers[`${q.header}: ${q.question}`] = answer.auto
+          ? `${chosen}〔完全访问模式自动选择〕`
+          : chosen;
       }
 
       const answerText = Object.entries(answers)

@@ -218,6 +218,8 @@ export interface AskQuestion {
   question: string;
   options: AskQuestionOption[];
   multiSelect?: boolean;
+  /** 模型自荐的选项下标：卡片标「推荐」；full 权限模式下 host 直接采用它作答 */
+  recommended?: number;
 }
 
 /** AskUserQuestion 提问事件载荷（一次一题，逐题作答） */

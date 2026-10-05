@@ -84,6 +84,7 @@ function submit(): void {
       >
         <span class="opt-num">{{ i + 1 }}</span>
         <span class="opt-label">{{ opt.label }}</span>
+        <span v-if="ask.question.recommended === i" class="opt-rec">推荐</span>
         <span v-if="opt.description" class="opt-desc">{{ opt.description }}</span>
       </button>
     </div>
@@ -176,6 +177,15 @@ function submit(): void {
 .ask-opt:hover .opt-num { border-color: var(--pd-accent); color: var(--pd-accent); }
 .ask-opt.on .opt-num { background: var(--pd-accent); border-color: var(--pd-accent); color: #1a1a1a; }
 .opt-label { font-weight: 600; flex: none; }
+.opt-rec {
+  flex: none;
+  font-size: 10.5px;
+  line-height: 1;
+  color: var(--pd-accent);
+  border: 1px solid var(--pd-accent);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
 .opt-desc { color: var(--pd-text-3); font-size: 11.5px; min-width: 0; }
 .ask-foot {
   display: flex;

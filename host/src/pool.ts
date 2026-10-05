@@ -628,6 +628,17 @@ export class SessionPool {
    */
   private askUser(sessionId: string, question: AskQuestion): Promise<AskAnswer | "timeout" | null> {
     if (!sessionId || !this.sessions.has(sessionId)) return Promise.resolve(null);
+    // 完全访问（full）模式：不打扰用户，直接采用模型声明的推荐项作答；
+    // 未提供有效推荐项则回一句"请自行决策"，模型在后续回复里说明选择
+    if (this.permissionStates.get(sessionId)?.mode === "full") {
+      const rec = question.recommended;
+      const label = typeof rec === "number" ? question.options[rec]?.label : undefined;
+      return Promise.resolve(
+        label
+          ? { labels: [label], auto: true }
+          : { labels: [], text: "无推荐选项，请自行决策并继续", auto: true },
+      );
+    }
     const askId = randomUUID();
     const pending = new Promise<AskAnswer | "timeout" | null>((resolve) => {
       this.pendingAsks.set(askId, { sessionId, resolve });

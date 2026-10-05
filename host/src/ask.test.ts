@@ -42,6 +42,30 @@ describe("sanitizeQuestion", () => {
     expect(q?.options[0]?.label.length).toBe(500);
     expect(q?.multiSelect).toBe(true);
   });
+
+  test("recommended 合法下标保留，越界/非整数丢弃", () => {
+    const ok = sanitizeQuestion({
+      header: "h",
+      question: "q",
+      options: [{ label: "A" }, { label: "B" }],
+      recommended: 1,
+    });
+    expect(ok?.recommended).toBe(1);
+    const bad = sanitizeQuestion({
+      header: "h",
+      question: "q",
+      options: [{ label: "A" }],
+      recommended: 5,
+    });
+    expect(bad?.recommended).toBeUndefined();
+    const frac = sanitizeQuestion({
+      header: "h",
+      question: "q",
+      options: [{ label: "A" }],
+      recommended: 0.5,
+    });
+    expect(frac?.recommended).toBeUndefined();
+  });
 });
 
 describe("AskUserQuestion 工具", () => {
@@ -98,6 +122,15 @@ describe("AskUserQuestion 工具", () => {
     expect(result.content[0].text).toContain("超时");
     expect(result.content[0].text).toContain("自行决策");
     expect(result.content[0].text).toContain("Alpha");
+  });
+
+  test("auto 答案（full 模式自动选择）带标注回给模型", async () => {
+    const tool = createAskUserQuestionTool(() =>
+      Promise.resolve({ labels: ["Beta"], auto: true }),
+    );
+    const result = await runExecute(tool, { questions: [q1] });
+    expect(result.content[0].text).toBe("模式: 选哪个 → Beta〔完全访问模式自动选择〕");
+    expect(result.details.interrupted).toBeUndefined();
   });
 
   test("全部问题无效时返回错误提示", async () => {
