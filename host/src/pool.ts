@@ -18,11 +18,13 @@ import { emitEvent } from "./emit.js";
 import { entryToPayload, metaPayloadFromSession } from "./map.js";
 import { parseAttachments, type IncomingAttachment } from "./attachments.js";
 import { createTodoWriteTool, sanitizeTodos } from "./todo.js";
+import { createAskUserQuestionTool, type AskAnswer } from "./ask.js";
 import {
   ATTACHMENT_THRESHOLD_BYTES,
   Event,
   INLINE_PREVIEW_BYTES,
   type AgentState,
+  type AskQuestion,
   type Block,
   type TodoItem,
 } from "@pidock/protocol";
@@ -116,6 +118,11 @@ export class SessionPool {
   private pendingApprovals = new Map<
     string,
     { sessionId: string; resolve: (approved: boolean) => void }
+  >();
+  /** 等待用户回答的 AskUserQuestion 提问 */
+  private pendingAsks = new Map<
+    string,
+    { sessionId: string; resolve: (answer: AskAnswer | null) => void }
   >();
 
   constructor() {
@@ -225,6 +232,7 @@ export class SessionPool {
       sessionManager,
       resourceLoader: loader,
       // TodoWrite：LLM 更新任务清单 → 存进 TrackedSession 并推送 todo_updated
+      // AskUserQuestion：向用户提问 → 发 ask_user_question 事件并等待 resolve_ask
       customTools: [
         createTodoWriteTool((todos) => {
           if (trackedRef.current) trackedRef.current.todos = todos;
@@ -232,6 +240,7 @@ export class SessionPool {
             emitEvent(sessionIdRef.id, Event.TODO_UPDATED, { todos }, { persist: false });
           }
         }),
+        createAskUserQuestionTool((question) => this.askUser(sessionIdRef.id, question)),
       ],
     });
     const sessionId = session.sessionId;
@@ -306,6 +315,7 @@ export class SessionPool {
             emitEvent(sessionIdRef.id, Event.TODO_UPDATED, { todos }, { persist: false });
           }
         }),
+        createAskUserQuestionTool((question) => this.askUser(sessionIdRef.id, question)),
       ],
     });
     const sessionId = session.sessionId;
@@ -339,6 +349,7 @@ export class SessionPool {
     const tracked = this.sessions.get(params.session_id);
     if (!tracked) return { closed: false };
     this.denyApprovals(params.session_id);
+    this.denyAsks(params.session_id);
     // 只清内存；落盘快照保留，重新打开会话后文件变更/审查/撤销仍可用
     this.fileSnapshots.delete(params.session_id);
     this.bashPreScans.delete(params.session_id);
@@ -609,6 +620,26 @@ export class SessionPool {
     return approved ? undefined : { block: true, reason: "用户拒绝了本次工具调用" };
   }
 
+  /**
+   * AskUserQuestion 的等待端：发 ask_user_question 事件（UI 弹出问题卡）并挂起，
+   * 直到 session.resolve_ask 回传答案；abort/关闭会话时由 denyAsks 兜底为取消。
+   */
+  private askUser(sessionId: string, question: AskQuestion): Promise<AskAnswer | null> {
+    if (!sessionId || !this.sessions.has(sessionId)) return Promise.resolve(null);
+    const askId = randomUUID();
+    const pending = new Promise<AskAnswer | null>((resolve) => {
+      this.pendingAsks.set(askId, { sessionId, resolve });
+    });
+    emitEvent(sessionId, Event.ASK_USER_QUESTION, { ask_id: askId, question }, { persist: false });
+    emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "waiting_ask" }, { persist: false });
+    return pending.finally(() => {
+      // 会话已关闭时不再推状态（socket 对端已消失，事件无人消费）
+      if (this.sessions.has(sessionId)) {
+        emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "thinking" }, { persist: false });
+      }
+    });
+  }
+
   setPermissionMode(params: { session_id: string; mode: PermissionMode }): { ok: true } {
     const state = this.permissionStates.get(params.session_id);
     if (!state) throw new RpcError("session_not_found", `unknown session "${params.session_id}"`);
@@ -681,11 +712,53 @@ export class SessionPool {
     return { ok: true };
   }
 
+  /**
+   * 回答挂起的 AskUserQuestion（labels=选中项 / text=自由输入 / interrupted=取消）。
+   * 空答案按取消处理（UI 不会提交，防御 LLM 之外的异常调用方）；unknown ask_id 幂等。
+   */
+  resolveAsk(params: {
+    ask_id: string;
+    labels?: string[];
+    text?: string;
+    interrupted?: boolean;
+  }): { ok: boolean } {
+    const pending = this.pendingAsks.get(params.ask_id);
+    if (!pending) return { ok: false };
+    this.pendingAsks.delete(params.ask_id);
+    if (params.interrupted) {
+      pending.resolve(null);
+      return { ok: true };
+    }
+    const labels = (Array.isArray(params.labels) ? params.labels : []).filter(
+      (s): s is string => typeof s === "string" && !!s.trim(),
+    );
+    const text =
+      typeof params.text === "string" && params.text.trim()
+        ? params.text.trim().slice(0, 2000)
+        : undefined;
+    if (!labels.length && !text) {
+      pending.resolve(null);
+      return { ok: true };
+    }
+    pending.resolve({ labels, ...(text ? { text } : {}) });
+    return { ok: true };
+  }
+
   private denyApprovals(sessionId: string): void {
     for (const [id, pending] of this.pendingApprovals) {
       if (pending.sessionId === sessionId) {
         this.pendingApprovals.delete(id);
         pending.resolve(false);
+      }
+    }
+  }
+
+  /** 会话中止/关闭时把挂起提问按用户取消处理，避免工具卡死在等待 */
+  private denyAsks(sessionId: string): void {
+    for (const [id, pending] of this.pendingAsks) {
+      if (pending.sessionId === sessionId) {
+        this.pendingAsks.delete(id);
+        pending.resolve(null);
       }
     }
   }
@@ -1070,6 +1143,8 @@ export class SessionPool {
     const tracked = this.require(params.session_id);
     // 中断时挂起的工具审批全部按拒绝处理，避免工具卡在等待状态
     this.denyApprovals(params.session_id);
+    // 挂起的提问按用户取消处理（工具返回 interrupted，模型自行收尾）
+    this.denyAsks(params.session_id);
     await tracked.session.abort();
     return { aborted: true };
   }

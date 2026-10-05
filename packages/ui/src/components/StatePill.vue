@@ -10,6 +10,7 @@ const labels: Record<string, string> = {
   retrying: "重试中",
   running: "运行中",
   waiting_approval: "等待审批",
+  waiting_ask: "等待回答",
   done: "完成",
   error: "出错",
 };
@@ -21,6 +22,7 @@ const colors: Record<string, string> = {
   compacting: "var(--pd-cyan)",
   retrying: "var(--pd-red)",
   waiting_approval: "var(--pd-yellow)",
+  waiting_ask: "var(--pd-yellow)",
   done: "var(--pd-green)",
   error: "var(--pd-red)",
 };

@@ -196,12 +196,12 @@ function toggleMore(project: string): void {
 }
 
 const busyStates = new Set([
-  "responding", "thinking", "executing_tool", "compacting", "retrying", "waiting_approval", "running",
+  "responding", "thinking", "executing_tool", "compacting", "retrying", "waiting_approval", "waiting_ask", "running",
 ]);
 const stateLabel: Record<string, string> = {
   idle: "空闲", thinking: "思考中", responding: "回复中", executing_tool: "执行工具",
   compacting: "压缩上下文", retrying: "重试中", running: "运行中",
-  waiting_approval: "等待审批", error: "出错", done: "完成",
+  waiting_approval: "等待审批", waiting_ask: "等待回答", error: "出错", done: "完成",
 };
 function dotClass(s: SessionSummaryUi): string {
   if (s.state === "error") return "err";

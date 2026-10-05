@@ -194,6 +194,22 @@ export function createWebBus(auth: AuthClient): DataBus & {
           await command(params?.session_id ?? "", "session.rename", { name: params?.name ?? "" });
           return { ok: true };
         }
+        case "session.resolve_approval": {
+          await command(params?.session_id ?? "", "session.resolve_approval", {
+            approval_id: params?.approval_id,
+            approved: params?.approved === true,
+          });
+          return { ok: true };
+        }
+        case "session.resolve_ask": {
+          await command(params?.session_id ?? "", "session.resolve_ask", {
+            ask_id: params?.ask_id,
+            labels: params?.labels,
+            text: params?.text,
+            interrupted: params?.interrupted,
+          });
+          return { ok: true };
+        }
         case "workspace.files": {
           const result = await command(params?.session_id ?? "", "workspace.files", { cwd: params?.cwd });
           return result ?? {};

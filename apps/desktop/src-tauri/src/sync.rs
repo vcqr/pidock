@@ -137,7 +137,8 @@ fn cloud_worthy(kind: &str) -> bool {
             | "agent_state_changed"
             | "tool_execution_start"
             | "tool_execution_end"
-            | "approval_request"
+            | "tool_approval"
+            | "ask_user_question"
             | "auto_retry"
             | "compaction_lifecycle"
             | "todo_updated"
@@ -284,6 +285,24 @@ async fn execute_command(
         "agent.abort" => ("agent.abort", json!({"session_id": session_id})),
         "session.create" => ("session.create", json!({"cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or(""), "model": payload.get("model")})),
         "session.close" => ("session.close", json!({"session_id": session_id})),
+        "session.resolve_approval" => ("session.resolve_approval", json!({
+            "approval_id": payload.get("approval_id").and_then(|v| v.as_str()).unwrap_or(""),
+            "approved": payload.get("approved").and_then(|v| v.as_bool()).unwrap_or(false),
+        })),
+        "session.resolve_ask" => ("session.resolve_ask", {
+            let mut p = json!({
+                "ask_id": payload.get("ask_id").and_then(|v| v.as_str()).unwrap_or(""),
+                "interrupted": payload.get("interrupted").and_then(|v| v.as_bool()).unwrap_or(false),
+            });
+            // labels/text 可选：取消回答时两者皆缺
+            if let Some(v) = payload.get("labels") {
+                if v.is_array() { p["labels"] = v.clone(); }
+            }
+            if let Some(v) = payload.get("text") {
+                if v.is_string() { p["text"] = v.clone(); }
+            }
+            p
+        }),
         other => {
             return Err(format!("command type \"{other}\" not supported by this desktop"));
         }

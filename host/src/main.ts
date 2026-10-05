@@ -22,6 +22,7 @@ const handlers: Record<string, Handler> = {
   [Method.WORKSPACE_FILES]: (p) => pool.listWorkspaceFiles(p),  [Method.SESSION_EVENTS]: (p) => pool.replayEvents(p),
   [Method.SESSION_SET_PERMISSION_MODE]: (p) => pool.setPermissionMode(p),
   [Method.SESSION_RESOLVE_APPROVAL]: (p) => pool.resolveApproval(p),
+  [Method.SESSION_RESOLVE_ASK]: (p) => pool.resolveAsk(p),
   [Method.SESSION_SET_THINKING_LEVEL]: (p) => pool.setThinkingLevel(p),
   [Method.SESSION_SET_MODEL]: (p) => pool.setModel(p),
   [Method.SESSION_FILE_CHANGES]: (p) => pool.fileChanges(p),

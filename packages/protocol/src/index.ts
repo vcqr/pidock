@@ -206,6 +206,26 @@ export interface TodoUpdatedPayload {
   todos: TodoItem[];
 }
 
+/** AskUserQuestion 的单个选项 */
+export interface AskQuestionOption {
+  label: string;
+  description?: string;
+}
+
+/** AskUserQuestion 工具的单道问题（LLM 参数结构，host 归一化后下发） */
+export interface AskQuestion {
+  header: string;
+  question: string;
+  options: AskQuestionOption[];
+  multiSelect?: boolean;
+}
+
+/** AskUserQuestion 提问事件载荷（一次一题，逐题作答） */
+export interface AskUserQuestionPayload {
+  ask_id: string;
+  question: AskQuestion;
+}
+
 export interface ErrorPayload {
   message: string;
   fatal?: boolean;
@@ -233,6 +253,7 @@ export const Event = {
   COMPACTION_LIFECYCLE: "compaction_lifecycle",
   TODO_UPDATED: "todo_updated",
   TOOL_APPROVAL: "tool_approval",
+  ASK_USER_QUESTION: "ask_user_question",
   ERROR: "error",
 } as const;
 
@@ -252,6 +273,7 @@ export const Method = {
   WORKSPACE_FILES: "workspace.files",
   SESSION_SET_PERMISSION_MODE: "session.set_permission_mode",
   SESSION_RESOLVE_APPROVAL: "session.resolve_approval",
+  SESSION_RESOLVE_ASK: "session.resolve_ask",
   SESSION_SET_THINKING_LEVEL: "session.set_thinking_level",
   SESSION_SET_MODEL: "session.set_model",
   SESSION_FILE_CHANGES: "session.file_changes",

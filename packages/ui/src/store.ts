@@ -1,6 +1,6 @@
 import { reactive, ref, watch } from "vue";
 import type { DataBus } from "./databus.js";
-import type { TodoItem } from "@pidock/protocol";
+import type { AskQuestion, TodoItem } from "@pidock/protocol";
 
 /**
  * Reactive agent store consuming DataBus events.
@@ -122,6 +122,8 @@ export function createAgentStore(bus: DataBus) {
   const thinkingLevels = ref<Record<string, string>>({});
   /** 待用户审批的工具调用（仅活动会话展示） */
   const pendingApproval = ref<{ approvalId: string; toolName: string; args: string } | null>(null);
+  /** 待用户回答的 AskUserQuestion 问题卡（仅活动会话展示） */
+  const pendingAsk = ref<{ askId: string; question: AskQuestion } | null>(null);
   /** 当前回合开始时间；结束后保留并写入 turnEndedAt（「已工作 · 耗时」折叠行用） */
   const turnStartedAt = ref<number | null>(null);
   const turnEndedAt = ref<number | null>(null);
@@ -222,6 +224,8 @@ export function createAgentStore(bus: DataBus) {
         const idx = items.value.findIndex((it) => it.kind === "tool" && it.callId === callId);
         if (idx >= 0) items.value.splice(idx, 1);
       }
+      // AskUserQuestion 工具出结果（含取消/打断）→ 问题卡使命完成
+      if (firstBlock(p, "toolResult")?.toolName === "AskUserQuestion") pendingAsk.value = null;
       items.value.push({
         kind: "message",
         key: nextKey(),
@@ -288,6 +292,8 @@ export function createAgentStore(bus: DataBus) {
         applyMessageComplete(e.payload);
         break;
       case "tool_execution_start": {
+        // AskUserQuestion 的交互在输入区上方问题卡里，不在消息流重复出运行卡
+        if (e.payload.tool_name === "AskUserQuestion") break;
         const item: UiToolItem = {
           kind: "tool",
           key: nextKey(),
@@ -327,6 +333,14 @@ export function createAgentStore(bus: DataBus) {
           };
         }
         break;
+      case "ask_user_question": {
+        const q = e.payload?.question;
+        pendingAsk.value =
+          e.payload?.ask_id && q && Array.isArray(q.options) && q.options.length
+            ? { askId: e.payload.ask_id, question: q as AskQuestion }
+            : null;
+        break;
+      }
       case "session_meta": {
         // host 用首条用户消息自动生成标题后实时推送
         const name = e.payload?.name;
@@ -413,6 +427,7 @@ export function createAgentStore(bus: DataBus) {
     streaming = null;
     agentState.value = "idle";
     lastError.value = null;
+    pendingAsk.value = null;
     // 清掉旧清单，等 host 重开补发（老 host 无此事件 → 面板隐藏）
     delete todosBySession.value[sessionId];
     loadingHistory.value = true;
@@ -511,6 +526,26 @@ export function createAgentStore(bus: DataBus) {
     pendingApproval.value = null;
     try {
       await bus.request("session.resolve_approval", { approval_id: p.approvalId, approved });
+    } catch (err) {
+      lastError.value = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  /** 回答 AskUserQuestion 提问（labels=选中项 / text=自由输入 / interrupted=取消） */
+  async function resolveAsk(answer: {
+    labels?: string[];
+    text?: string;
+    interrupted?: boolean;
+  }): Promise<void> {
+    const p = pendingAsk.value;
+    if (!p) return;
+    pendingAsk.value = null;
+    try {
+      await bus.request("session.resolve_ask", {
+        session_id: activeId.value,
+        ask_id: p.askId,
+        ...answer,
+      });
     } catch (err) {
       lastError.value = err instanceof Error ? err.message : String(err);
     }
@@ -641,6 +676,7 @@ export function createAgentStore(bus: DataBus) {
     permissionModes,
     thinkingLevels,
     pendingApproval,
+    pendingAsk,
     turnStartedAt,
     turnEndedAt,
     turnFileChanges,
@@ -661,6 +697,7 @@ export function createAgentStore(bus: DataBus) {
     setModelOverride,
     listWorkspaceFiles,
     resolveApproval,
+    resolveAsk,
     setThinkingLevel,
     setModel,
     fetchFileChanges,

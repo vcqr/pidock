@@ -9,6 +9,7 @@ import ReviewPanel from "./ReviewPanel.vue";
 import Composer from "./Composer.vue";
 import Icon from "./Icon.vue";
 import ProgressCard from "./ProgressCard.vue";
+import AskCard from "./AskCard.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -632,6 +633,11 @@ watch(
         <button class="approval-btn ok" @click="store.resolveApproval(true)">批准</button>
         <button class="approval-btn no" @click="store.resolveApproval(false)">拒绝</button>
       </div>
+      <AskCard
+        v-if="store.pendingAsk"
+        :ask="store.pendingAsk"
+        @resolve="(a) => store.resolveAsk(a)"
+      />
       <div class="dock">
         <Composer
           :busy="store.agentState !== 'idle'"
