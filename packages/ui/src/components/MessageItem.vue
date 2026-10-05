@@ -151,6 +151,26 @@ const skillExpansion = computed<SkillExpansion | null>(() => {
   return { name: m[1]!, location: m[2]!, body: m[3]!, args: m[4]! };
 });
 const skillOpen = ref(false);
+
+// ---- /expert: 注入（host 把用户消息整段替换为 <expert> 块 + 参数 + 知识库清单）→ 折叠 ----
+// host 段序固定：<expert>块 → 参数 → "# 知识库" 清单附录，这里按标记切出纯参数
+const EXPERT_BLOCK_RE = /^<expert name="([^"]*)" location="([^"]*)">\n([\s\S]*?)\n<\/expert>\n\n?([\s\S]*)$/;
+const KB_MARKER = "\n\n# 知识库";
+interface ExpertBlock {
+  name: string;
+  body: string;
+  args: string;
+}
+const expertBlock = computed<ExpertBlock | null>(() => {
+  if (props.item.role !== "user") return null;
+  if (skillExpansion.value) return null; // 技能展开优先
+  const m = cleanText.value.match(EXPERT_BLOCK_RE);
+  if (!m) return null;
+  const after = m[4] ?? "";
+  const kbIdx = after.indexOf(KB_MARKER);
+  return { name: m[1]!, body: m[3]!, args: kbIdx >= 0 ? after.slice(0, kbIdx) : after };
+});
+const expertOpen = ref(false);
 </script>
 
 <template>
@@ -165,6 +185,15 @@ const skillOpen = ref(false);
         </button>
         <pre v-if="skillOpen" class="skill-body">{{ skillExpansion.body }}</pre>
         <span v-if="skillExpansion.args" class="content">{{ skillExpansion.args }}</span>
+      </template>
+      <template v-else-if="expertBlock">
+        <button class="skill-chip" :title="expertOpen ? '收起专家提示词' : '展开专家提示词'" @click="expertOpen = !expertOpen">
+          <Icon name="user-star-line" :size="13" />
+          <span>专家 · {{ expertBlock.name }}</span>
+          <Icon :name="expertOpen ? 'subtract-line' : 'add-line'" :size="12" />
+        </button>
+        <pre v-if="expertOpen" class="skill-body">{{ expertBlock.body }}</pre>
+        <span v-if="expertBlock.args" class="content">{{ expertBlock.args }}</span>
       </template>
       <span v-else-if="cleanText" class="content">{{ cleanText }}</span>
       <div v-if="userAttachments.length" class="att-row">

@@ -1,11 +1,13 @@
 import { createInterface } from "node:readline";
 import { ConfigService } from "./config.js";
 import { emitError, emitResponse } from "./emit.js";
+import { ExpertsService } from "./experts.js";
 import { HOST_VERSION, RpcError, SessionPool } from "./pool.js";
 import { Method } from "@pidock/protocol";
 
 const pool = new SessionPool();
 const config = new ConfigService(pool);
+const experts = new ExpertsService();
 
 type Handler = (params: any) => Promise<unknown> | unknown;
 
@@ -61,6 +63,13 @@ const handlers: Record<string, Handler> = {
   [Method.CONFIG_PROVIDERS_CUSTOM_REMOVE]: (p) => config.customProvidersRemove(p),
   [Method.CONFIG_PROVIDERS_FETCH_MODELS]: (p) => config.fetchProviderModels(p),
   [Method.ATTACHMENT_GET]: (p) => config.attachmentGet(p),
+  [Method.EXPERTS_LIST]: () => experts.list(),
+  [Method.EXPERTS_GET]: (p) => experts.get(p),
+  [Method.EXPERTS_SAVE]: (p) => experts.save(p),
+  [Method.EXPERTS_DELETE]: (p) => experts.delete(p),
+  [Method.EXPERTS_INSTALL_RESOURCE]: (p) => experts.installResource(p),
+  [Method.EXPERTS_PRIVATE_LIST]: (p) => experts.privateList(p),
+  [Method.EXPERTS_REMOVE_RESOURCE]: (p) => experts.removeResource(p),
 };
 
 async function dispatch(line: string): Promise<void> {

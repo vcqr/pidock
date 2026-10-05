@@ -14,6 +14,7 @@
     "smoke:node": "node --experimental-strip-types scripts/smoke.ts",
     "smoke:extension": "bun run scripts/extension-smoke.ts",
     "smoke:config": "bun run scripts/config-smoke.ts",
+    "smoke:experts": "bun run scripts/experts-smoke.ts",
     "e2e:server": "bun run ../server/scripts/fake-desktop.ts"
   },
   "dependencies": {

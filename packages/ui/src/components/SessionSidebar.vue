@@ -14,6 +14,8 @@ const props = defineProps<{
   showToolNav?: boolean;
   /** 启用「自动化」入口（桌面端有 Rust 调度器；web 无后端保持禁用占位） */
   showAutomation?: boolean;
+  /** 启用「专家」入口（桌面端；web 暂缓） */
+  showExperts?: boolean;
   /** web has no settings center — hide the entry */
   showSettingsBtn?: boolean;
   /** currently open main-area tool view, for nav highlight */
@@ -32,6 +34,8 @@ const emit = defineEmits<{
   "open-tools": [tool: "plugins" | "skills" | "providers" | "mcp"];
   /** 打开自动化（定时任务）全屏页（桌面端） */
   "open-automation": [];
+  /** 打开专家管理页（桌面端） */
+  "open-experts": [];
 }>();
 
 const search = ref("");
@@ -275,6 +279,14 @@ onBeforeUnmount(() => {
         @click="showAutomation && emit('open-automation')"
       >
         <Icon name="time-line" :size="16" />自动化
+      </div>
+      <div
+        class="nav-item"
+        :class="{ disabled: !showExperts, active: activeTool === 'experts' }"
+        :title="showExperts ? undefined : '开发中'"
+        @click="showExperts && emit('open-experts')"
+      >
+        <Icon name="user-star-line" :size="16" />专家
       </div>
       <div v-if="showToolNav" class="nav-item" :class="{ active: activeTool === 'plugins' }" @click="emit('open-tools', 'plugins')">
         <Icon name="puzzle-2-line" :size="16" />插件

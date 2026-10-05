@@ -74,6 +74,9 @@ export interface SessionSummaryUi {
   provider?: string;
   model?: string;
   name?: string;
+  /** 创建时雇佣的专家（重开由 host 按注册表重放） */
+  expert_id?: string;
+  expert_name?: string;
   created_at: string;
   updated_at?: string;
   open: boolean;
@@ -405,6 +408,8 @@ export function createAgentStore(bus: DataBus) {
       provider: summary.provider,
       model: summary.model,
       name: summary.name,
+      expert_id: summary.expert_id,
+      expert_name: summary.expert_name,
       created_at: summary.created_at ?? new Date().toISOString(),
       open: summary.open ?? true,
       state: summary.state ?? "idle",
@@ -447,11 +452,12 @@ export function createAgentStore(bus: DataBus) {
     void fetchFileChanges();
   }
 
-  async function newSession(cwd?: string, model?: string): Promise<void> {
+  async function newSession(cwd?: string, model?: string, expertId?: string): Promise<void> {
     // cwd 省略 = 「不在项目中工作」，host 会落到用户主目录
     const created = await bus.request("session.create", {
       ...(cwd ? { cwd } : {}),
       ...(model ? { model } : {}),
+      ...(expertId ? { expert_id: expertId } : {}),
     });
     await refreshSessions();
     await openSession(created.session_id);
@@ -634,6 +640,21 @@ export function createAgentStore(bus: DataBus) {
     }
   }
 
+  /** 专家列表（雇佣 chip 与 / 弹窗专家段共用）；失败静默返回空 */
+  async function listExperts(): Promise<Array<{ id: string; name: string; description?: string; icon?: string }>> {
+    try {
+      const r = await bus.request("experts.list");
+      return (r?.experts ?? []).map((e: any) => ({
+        id: String(e.id ?? ""),
+        name: String(e.name ?? ""),
+        description: e.description ? String(e.description) : undefined,
+        icon: e.icon ? String(e.icon) : undefined,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
   /** 回合结束后拉取各回合文件变更（按轮分组） */
   async function fetchFileChanges(): Promise<void> {
     if (!activeId.value) return;
@@ -700,6 +721,7 @@ export function createAgentStore(bus: DataBus) {
     setPermissionMode,
     renameSession,
     listSkills,
+    listExperts,
     setModelOverride,
     listWorkspaceFiles,
     resolveApproval,

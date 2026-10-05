@@ -30,6 +30,10 @@ const props = withDefaults(
     mentionLoader?: (cwd: string) => Promise<Array<{ path: string; name: string; dir: boolean }>>;
     /** 技能列表加载器（+ 菜单 $ 选择技能用，来自 store） */
     skillsLoader?: () => Promise<Array<{ name: string; description: string }>>;
+    /** 专家列表加载器（/ 弹层专家段用，来自 store） */
+    expertsLoader?: () => Promise<Array<{ id: string; name: string; description?: string; icon?: string }>>;
+    /** 已雇佣的专家（新任务模式绑定到将创建的会话；由父级管理） */
+    hiredExpert?: { id: string; name: string } | null;
     /** 当前模型是否支持图片输入（false = 显示预警；undefined = 未知不预警） */
     modelImagesOk?: boolean | null;
     /** 草稿模式（表单内嵌）：send 只上报不清空，Enter/发送由父级决定语义（如保存） */
@@ -49,6 +53,10 @@ const emit = defineEmits<{
   setThinkingLevel: [level: string];
   setModel: [model: string];
   openProviders: [];
+  /** 雇佣专家（新任务模式下从 / 弹层选定，绑定到将创建的会话） */
+  hire: [expert: { id: string; name: string }];
+  /** 取消雇佣 */
+  unhire: [];
 }>();
 
 const I = {
@@ -358,11 +366,12 @@ function onTextInput(e: Event): void {
   if (mention.value) {
     mention.value = null;
   }
-  // / 技能命令：/ 与 /skill: 两种写法都触发，过滤时忽略 skill: 前缀
+  // / 技能命令：/ 与 /skill:、/expert: 三种写法都触发，过滤时忽略 skill:/expert: 前缀
   const sm = before.match(/(^|\s)\/([^\s/]*)$/);
-  if (sm && props.skillsLoader) {
+  if (sm && (props.skillsLoader || props.expertsLoader)) {
     slash.value = { start: caret - sm[2]!.length - 1, raw: sm[2]!, active: 0 };
     ensureSkills();
+    ensureExperts();
   } else if (slash.value) {
     slash.value = null;
   }
@@ -397,20 +406,67 @@ watch(
 
 // ---- / 技能命令弹层（与 @ 提及同款交互） ----
 const slash = ref<{ start: number; raw: string; active: number } | null>(null);
-const slashQuery = computed(() => (slash.value?.raw ?? "").replace(/^skill:/i, ""));
-const slashMatches = computed(() => {
+const slashQuery = computed(() => (slash.value?.raw ?? "").replace(/^(skill|expert):/i, ""));
+/** 弹层条目：技能插入 /skill: 命令；专家在首页/新任务 hiring，会话中插入 /expert: 咨询命令 */
+type SlashItem =
+  | { kind: "skill"; name: string; description: string }
+  | { kind: "expert"; id: string; name: string; description: string };
+const experts = ref<Array<{ id: string; name: string; description?: string; icon?: string }>>([]);
+const expertsLoading = ref(false);
+
+function ensureExperts(): void {
+  if (!expertsLoading.value && experts.value.length === 0 && props.expertsLoader) {
+    expertsLoading.value = true;
+    props
+      .expertsLoader()
+      .then((list) => (experts.value = list))
+      .catch(() => {})
+      .finally(() => (expertsLoading.value = false));
+  }
+}
+
+const slashMatches = computed<SlashItem[]>(() => {
   if (!slash.value) return [];
   const q = slashQuery.value.toLowerCase();
-  return skills.value
+  const skillHits: SlashItem[] = skills.value
     .filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q))
-    .slice(0, 20);
+    .slice(0, 20)
+    .map((s) => ({ kind: "skill", name: s.name, description: s.description }));
+  const expertHits: SlashItem[] = experts.value
+    .filter((e) => !q || e.name.toLowerCase().includes(q) || (e.description ?? "").toLowerCase().includes(q))
+    .slice(0, 10)
+    .map((e) => ({ kind: "expert", id: e.id, name: e.name, description: e.description ?? "" }));
+  return [...skillHits, ...expertHits];
 });
 
 /** 把 /query 段替换为完整的技能命令，光标落在其后 */
-function applySlash(s: { name: string }): void {
+function applySlash(s: SlashItem): void {
   if (!slash.value) return;
   const start = slash.value.start;
   const end = start + 1 + slash.value.raw.length;
+  if (s.kind === "expert") {
+    // 首页/新任务 = 雇佣（绑定到将创建的会话，token 移除、chip 展示）；
+    // 会话中 = 咨询（插入 /expert:name 命令，host 按需注入角色提示词）。
+    if (props.centered) {
+      text.value = text.value.slice(0, start) + text.value.slice(end);
+      slash.value = null;
+      emit("hire", { id: s.id, name: s.name });
+      void nextTick(() => ta.value?.focus());
+      return;
+    }
+    const token = `/expert:${s.name} `;
+    text.value = text.value.slice(0, start) + token + text.value.slice(end);
+    slash.value = null;
+    void nextTick(() => {
+      const el = ta.value;
+      if (el) {
+        el.focus();
+        const pos = start + token.length;
+        el.setSelectionRange(pos, pos);
+      }
+    });
+    return;
+  }
   const token = `/skill:${s.name} `;
   text.value = text.value.slice(0, start) + token + text.value.slice(end);
   slash.value = null;
@@ -698,22 +754,42 @@ function onKeydown(e: KeyboardEvent): void {
       </button>
     </div>
 
-    <!-- / 技能命令弹层 -->
+    <!-- / 技能命令 + 专家弹层 -->
     <div v-if="slash && slashMatches.length" class="mention-menu">
-      <button
-        v-for="(s, i) in slashMatches"
-        :key="s.name"
-        class="mention-item"
-        :class="{ active: i === slash.active }"
-        :title="s.description"
-        @mousedown.prevent
-        @mouseenter="slash.active = i"
-        @click="applySlash(s)"
-      >
-        <span class="m-icon"><Icon :name="I.magic" :size="16" /></span>
-        <span class="m-name">/skill:{{ s.name }}</span>
-        <span class="m-dir">{{ s.description }}</span>
-      </button>
+      <template v-for="(s, i) in slashMatches" :key="s.kind === 'skill' ? `s:${s.name}` : `e:${s.id}`">
+        <!-- 专家段标题：仅紧随技能段（即第一个专家条目）之前显示一次 -->
+        <div
+          v-if="s.kind === 'expert' && (i === 0 || slashMatches[i - 1]?.kind === 'skill')"
+          class="mention-group"
+        >
+          专家 · {{ centered ? "雇佣到新会话" : "以该专家身份" }}
+        </div>
+        <button
+          class="mention-item"
+          :class="{ active: i === slash.active }"
+          :title="s.description"
+          @mousedown.prevent
+          @mouseenter="slash.active = i"
+          @click="applySlash(s)"
+        >
+          <span class="m-icon">
+            <Icon :name="s.kind === 'skill' ? I.magic : 'user-star-line'" :size="16" />
+          </span>
+          <span class="m-name">{{ s.kind === "skill" ? `/skill:${s.name}` : `/expert:${s.name}` }}</span>
+          <span class="m-dir">{{ s.description }}</span>
+        </button>
+      </template>
+    </div>
+
+    <!-- 已雇佣专家 chip（新任务模式：绑定到将创建的会话） -->
+    <div v-if="hiredExpert" class="files-row">
+      <div class="file-chip expert-hired" :title="`已雇佣专家「${hiredExpert.name}」，将绑定到新会话`">
+        <Icon name="user-star-line" :size="15" />
+        <span class="file-name">专家 · {{ hiredExpert.name }}</span>
+        <button class="file-x" title="取消雇佣" @click="emit('unhire')">
+          <Icon :name="I.x" :size="10" />
+        </button>
+      </div>
     </div>
 
     <!-- 附件（文档类）chip 行 -->
@@ -941,6 +1017,16 @@ function onKeydown(e: KeyboardEvent): void {
   color: var(--pd-text-2);
   font-size: 13px;
   cursor: pointer;
+}
+.mention-group {
+  padding: 6px 10px 2px;
+  font-size: 11px;
+  color: var(--pd-text-4);
+  user-select: none;
+}
+.expert-hired {
+  color: var(--pd-accent);
+  border-color: var(--pd-accent);
 }
 .mention-item.active,
 .mention-item:hover { background: var(--pd-bg-hover); color: var(--pd-text); }

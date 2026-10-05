@@ -19,6 +19,8 @@ import { entryToPayload, metaPayloadFromSession } from "./map.js";
 import { parseAttachments, type IncomingAttachment } from "./attachments.js";
 import { createTodoWriteTool, sanitizeTodos } from "./todo.js";
 import { createAskUserQuestionTool, type AskAnswer } from "./ask.js";
+import { buildExpertPromptBlock, ExpertsService, matchExpertCommand, type ExpertSessionConfig } from "./experts.js";
+import { basename } from "node:path";
 import {
   ATTACHMENT_THRESHOLD_BYTES,
   Event,
@@ -35,6 +37,8 @@ export const HOST_VERSION = "0.1.0";
 export type PermissionMode = "plan" | "confirm" | "edit-auto" | "full";
 const PERMISSION_MODES: PermissionMode[] = ["plan", "confirm", "edit-auto", "full"];
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
+
+type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 
 export class RpcError extends Error {
   constructor(
@@ -84,6 +88,8 @@ interface RegistryEntry {
   provider?: string;
   model?: string;
   name?: string;
+  /** 创建时雇佣的专家（重开会话据此重放同样的 loader 覆盖） */
+  expert_id?: string;
   created_at: string;
 }
 
@@ -94,6 +100,8 @@ export interface SessionSummary {
   provider?: string;
   model?: string;
   name?: string;
+  expert_id?: string;
+  expert_name?: string;
   created_at: string;
   open: boolean;
   state: AgentState;
@@ -104,6 +112,8 @@ const SNAPSHOT_INTERVAL_MS = 2000;
 export class SessionPool {
   private sessions = new Map<string, TrackedSession>();
   private modelRuntimePromise: Promise<ModelRuntime> | null = null;
+  /** 专家档案服务（无状态，读 experts.json） */
+  private experts = new ExpertsService();
   /** 每会话权限模式（内置权限扩展实时读取） */
   private permissionStates = new Map<string, { mode: PermissionMode }>();
   /** 每会话回合内被修改文件的快照（撤销/文件变更卡片的数据源） */
@@ -192,23 +202,63 @@ export class SessionPool {
 
   // ------------------------------------------------------------- creation
 
+  /**
+   * 专家档案 → DefaultResourceLoader 覆盖项。角色提示词与知识库清单走
+   * appendSystemPrompt（追加在 pi 默认系统提示词之后，保留编码底座）；
+   * 私有技能/插件目录走 additional*Paths（与全局资源合并后加载）；
+   * skillsOverride 过滤的是合并结果（0.80.10 reload 顺序已核实），所以
+   * 白名单同时约束全局技能与专家私有技能；extensionsOverride 必须保留
+   * `<inline:` 前缀条目——host 的权限拦截扩展是 inline factory。
+   */
+  private expertLoaderOptions(cfg: ExpertSessionConfig | null): Partial<LoaderOptions> {
+    if (!cfg) return {};
+    const options: Partial<LoaderOptions> = {
+      ...(cfg.appendSystemPrompt.length ? { appendSystemPrompt: cfg.appendSystemPrompt } : {}),
+      ...(cfg.additionalSkillPaths.length ? { additionalSkillPaths: cfg.additionalSkillPaths } : {}),
+      ...(cfg.additionalExtensionPaths.length ? { additionalExtensionPaths: cfg.additionalExtensionPaths } : {}),
+    };
+    if (cfg.skillAllowlist) {
+      const allow = cfg.skillAllowlist;
+      options.skillsOverride = (base) => ({
+        ...base,
+        skills: base.skills.filter((s) => allow.includes(s.name)),
+      });
+    }
+    if (cfg.extensionAllowlist) {
+      const allow = cfg.extensionAllowlist;
+      options.extensionsOverride = (base) => ({
+        ...base,
+        extensions: base.extensions.filter(
+          (x) => x.path.startsWith("<inline:") || allow.includes(basename(x.path).replace(/\.(ts|js)$/i, "")),
+        ),
+      });
+    }
+    return options;
+  }
+
   async createSession(params: {
     cwd?: string;
     model?: string;
     thinking_level?: string;
-  }): Promise<{ session_id: string; file: string; cwd: string }> {
+    /** 雇佣的专家 id（缺省 = 普通会话） */
+    expert_id?: string;
+  }): Promise<{ session_id: string; file: string; cwd: string; expert_id?: string; expert_name?: string }> {
     // 无头模式下没有"当前项目"概念：缺省落在用户主目录而不是 host 进程目录
     const cwd = params.cwd ?? homedir();
-    const model = await this.resolveModel(params.model);
+    const expertCfg = this.experts.resolveForSession(params.expert_id);
+    // 显式传入的模型/思考级别优先于专家预设
+    const model = await this.resolveModel(params.model ?? expertCfg?.expert.model);
     const sessionManager = SessionManager.create(cwd);
-    // 新会话默认计划模式：修改类工具（bash/write/edit）先被拦下，用户可在输入卡切换
-    const permission = { mode: "plan" as PermissionMode };
+    // 新会话默认计划模式：修改类工具（bash/write/edit）先被拦下，用户可在输入卡切换；
+    // 专家可带建议权限模式（如只读专家保持 plan、自动化场景的 full）
+    const permission = { mode: expertCfg?.expert.permission_mode ?? "plan" };
     const sessionIdRef = { id: "" };
     const trackedRef: { current: TrackedSession | null } = { current: null };
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: getAgentDir(),
       settingsManager: SettingsManager.create(cwd, getAgentDir()),
+      ...this.expertLoaderOptions(expertCfg),
       extensionFactories: [
         {
           name: "pidock-permission",
@@ -222,12 +272,14 @@ export class SessionPool {
       ],
     });
     await loader.reload();
+    const thinkingLevel = params.thinking_level ?? expertCfg?.expert.thinking_level;
     const { session } = await createAgentSession({
       cwd,
       model: model as never,
-      ...(params.thinking_level
-        ? { thinkingLevel: params.thinking_level as never }
-        : {}),
+      ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}),
+      // 专家可增减内置工具（如文档专家禁掉 bash/edit）
+      ...(expertCfg?.tools ? { tools: expertCfg.tools } : {}),
+      ...(expertCfg?.excludeTools?.length ? { excludeTools: expertCfg.excludeTools } : {}),
       modelRuntime: await this.modelRuntime(),
       sessionManager,
       resourceLoader: loader,
@@ -268,27 +320,38 @@ export class SessionPool {
       session_id: sessionId,
       file,
       cwd,
-      model: params.model,
+      model: params.model ?? expertCfg?.expert.model,
+      ...(expertCfg ? { expert_id: expertCfg.expert.id } : {}),
       created_at: new Date().toISOString(),
     });
 
-    emitEvent(sessionId, Event.SESSION_META, metaPayloadFromSession({ cwd, model: params.model }), {
+    emitEvent(sessionId, Event.SESSION_META, metaPayloadFromSession({ cwd, model: params.model ?? expertCfg?.expert.model }), {
       persist: false,
     });
-    return { session_id: sessionId, file, cwd };
+    return {
+      session_id: sessionId,
+      file,
+      cwd,
+      ...(expertCfg ? { expert_id: expertCfg.expert.id, expert_name: expertCfg.expert.name } : {}),
+    };
   }
 
-  async openSession(params: { file: string }): Promise<{ session_id: string; file: string; cwd: string }> {
+  async openSession(params: { file: string }): Promise<{ session_id: string; file: string; cwd: string; expert_id?: string; expert_name?: string }> {
     const sessionManager = SessionManager.open(params.file);
     const cwd = sessionManager.getCwd() || process.cwd();
-    // 与 createSession 一致：权限模式不持久化，重开回到默认计划模式
-    const permission = { mode: "plan" as PermissionMode };
+    // 重开会话按注册表里的 expert_id 重放专家配置（专家已被删除则回退普通会话）
+    const expertCfg = this.experts.resolveForSession(
+      this.readRegistry().find((e) => e.file === params.file)?.expert_id,
+    );
+    // 与 createSession 一致：权限模式不持久化，重开回到默认（专家会话回到专家预设）计划模式
+    const permission = { mode: expertCfg?.expert.permission_mode ?? "plan" };
     const sessionIdRef = { id: "" };
     const trackedRef: { current: TrackedSession | null } = { current: null };
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: getAgentDir(),
       settingsManager: SettingsManager.create(cwd, getAgentDir()),
+      ...this.expertLoaderOptions(expertCfg),
       extensionFactories: [
         {
           name: "pidock-permission",
@@ -307,6 +370,9 @@ export class SessionPool {
       modelRuntime: await this.modelRuntime(),
       sessionManager,
       resourceLoader: loader,
+      // 与 createSession 一致：专家会话重开同样应用工具增减
+      ...(expertCfg?.tools ? { tools: expertCfg.tools } : {}),
+      ...(expertCfg?.excludeTools?.length ? { excludeTools: expertCfg.excludeTools } : {}),
       // 与 createSession 一致：TodoWrite 推送任务清单（重开场景由 restoreTodos 补发历史状态）
       customTools: [
         createTodoWriteTool((todos) => {
@@ -342,7 +408,12 @@ export class SessionPool {
     }
 
     emitEvent(sessionId, Event.SESSION_META, metaPayloadFromSession({ cwd }), { persist: false });
-    return { session_id: sessionId, file: params.file, cwd };
+    return {
+      session_id: sessionId,
+      file: params.file,
+      cwd,
+      ...(expertCfg ? { expert_id: expertCfg.expert.id, expert_name: expertCfg.expert.name } : {}),
+    };
   }
 
   closeSession(params: { session_id: string }): { closed: boolean } {
@@ -383,6 +454,7 @@ export class SessionPool {
 
   listSessions(): { sessions: SessionSummary[]; home: string } {
     const openIds = new Set(this.sessions.keys());
+    const expertNames = new Map(this.experts.list().experts.map((e) => [e.id, e.name]));
     const summaries: SessionSummary[] = this.readRegistry().map((entry) => ({
       session_id: entry.session_id,
       file: entry.file,
@@ -390,6 +462,9 @@ export class SessionPool {
       ...(entry.provider ? { provider: entry.provider } : {}),
       ...(entry.model ? { model: entry.model } : {}),
       ...(entry.name ? { name: entry.name } : {}),
+      ...(entry.expert_id
+        ? { expert_id: entry.expert_id, ...(expertNames.get(entry.expert_id) ? { expert_name: expertNames.get(entry.expert_id) } : {}) }
+        : {}),
       created_at: entry.created_at,
       open: openIds.has(entry.session_id),
       state: this.stateOf(entry.session_id),
@@ -575,9 +650,18 @@ export class SessionPool {
       .slice(0, 6)
       .filter((img) => img?.data)
       .map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mime_type || "image/png" }));
+    // /expert:name args → 以该专家身份发言：整条消息替换为专家块（与 pi 的
+    // /skill: 展开同构，展开后的文本就是持久化的用户消息）；未知专家原样透传。
+    // 这是会话中途"咨询"专家的通道——完整雇佣（技能/工具过滤）只在创建会话时生效。
+    const expertCall = matchExpertCommand(params.text);
+    let promptText = params.text;
+    if (expertCall) {
+      const found = this.experts.get({ name: expertCall.name }).expert;
+      if (found) promptText = buildExpertPromptBlock(found, expertCall.args);
+    }
     const parsed = await parseAttachments(params.attachments);
     const allImages = [...images, ...parsed.images].slice(0, 6);
-    const fullText = parsed.blocks.length ? `${params.text}\n\n${parsed.blocks.join("\n\n")}` : params.text;
+    const fullText = parsed.blocks.length ? `${promptText}\n\n${parsed.blocks.join("\n\n")}` : promptText;
     tracked.session
       .prompt(fullText, allImages.length ? { images: allImages } : undefined)
       .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: String(err) }))

@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AutomationView,
   ChatView,
+  ExpertsView,
   Icon,
   SessionSidebar,
   SettingsView,
@@ -34,14 +35,19 @@ const showSettings = ref(false);
 const settingsPane = ref("general");
 /** 自动化（定时任务）全屏页 */
 const showAutomation = ref(false);
+/** 专家管理页（与聊天共用主区，同自动化模式） */
+const showExperts = ref(false);
 /** 新建任务模式：右侧显示默认对话页，发送首条消息后自动创建会话并退出该模式 */
 const newTaskMode = ref(false);
+/** 新任务预雇佣的专家（专家页「雇佣」进入） */
+const newTaskExpert = ref<{ id: string; name: string } | null>(null);
 /** 新建任务预选的项目目录（侧栏项目分组点击）；seq 自增让重复点击同一目录也能重新应用选中 */
 const newTaskCwd = ref<{ cwd: string; seq: number } | null>(null);
 const bus = createTauriBus();
 
-function startNewTask(cwd?: string): void {
+function startNewTask(cwd?: string, expert?: { id: string; name: string } | null): void {
   newTaskMode.value = true;
+  newTaskExpert.value = expert ?? null;
   newTaskCwd.value = cwd ? { cwd, seq: (newTaskCwd.value?.seq ?? 0) + 1 } : null;
 }
 
@@ -223,14 +229,16 @@ onMounted(async () => {
         :home-dir="store.homeDir"
         :show-settings-btn="true"
         :show-automation="true"
-        :active-tool="showAutomation ? 'automation' : undefined"
+        :show-experts="true"
+        :active-tool="showAutomation ? 'automation' : showExperts ? 'experts' : undefined"
         :width="sidebarWidth ?? undefined"
-        @select="(id) => { showAutomation = false; store?.openSession(id); }"
-        @new-task="() => { showAutomation = false; startNewTask(); }"
-        @open-project="(cwd) => { showAutomation = false; startNewTask(cwd); }"
+        @select="(id) => { showAutomation = false; showExperts = false; store?.openSession(id); }"
+        @new-task="() => { showAutomation = false; showExperts = false; startNewTask(); }"
+        @open-project="(cwd) => { showAutomation = false; showExperts = false; startNewTask(cwd); }"
         @rename="(id, name) => store?.renameSession(id, name)"
         @open-settings="(tab) => openSettings(tab)"
         @open-automation="showAutomation = !showAutomation"
+        @open-experts="showExperts = !showExperts"
       >
       </SessionSidebar>
       </template>
@@ -261,12 +269,13 @@ onMounted(async () => {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
           </button>
         </header>
-        <!-- 自动化（定时任务）与聊天共用主区：侧栏保留，左右分栏；ChatView 用 v-show 保活，切回来不丢草稿 -->
+        <!-- 自动化/专家页与聊天共用主区：侧栏保留；ChatView 用 v-show 保活，切回来不丢草稿 -->
         <ChatView
-          v-show="!showAutomation"
+          v-show="!showAutomation && !showExperts"
           :store="store"
           :new-task="newTaskMode"
           :new-task-cwd="newTaskCwd"
+          :new-task-expert="newTaskExpert"
           :model="store.sessions.find((s) => s.session_id === store?.activeId)?.model"
           @open-settings="(tab) => openSettings(tab)"
           @open-providers="() => openSettings('providers')"
@@ -276,6 +285,13 @@ onMounted(async () => {
           :bus="bus"
           @close="showAutomation = false"
           @open-providers="() => openSettings('providers')"
+        />
+        <ExpertsView
+          v-if="showExperts"
+          :bus="bus"
+          @close="showExperts = false"
+          @open-providers="() => openSettings('providers')"
+          @hire="(expert) => { showExperts = false; startNewTask(undefined, expert); }"
         />
         <SettingsView
           v-if="showSettings"

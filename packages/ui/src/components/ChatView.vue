@@ -21,6 +21,8 @@ const props = withDefaults(
     newTask?: boolean;
     /** 新建任务预选的项目目录（来自侧栏项目分组点击），透传给首页输入卡 */
     newTaskCwd?: { cwd: string; seq: number } | null;
+    /** 新任务预雇佣的专家（专家页「雇佣」按钮进入）；雇佣后随首条消息绑定到新会话 */
+    newTaskExpert?: { id: string; name: string } | null;
   }>(),
   { disabled: false },
 );
@@ -43,6 +45,18 @@ const homeModel = ref<string | null>(null);
 /** 首页暂存的权限模式 / 思考级别（新建会话后下发给 host） */
 const homePermissionMode = ref<string | null>(null);
 const homeThinkingLevel = ref<string | null>(null);
+/** 首页雇佣的专家（绑定到将创建的会话；专家页「雇佣」进入时预置） */
+const hiredExpert = ref<{ id: string; name: string } | null>(null);
+watch(
+  () => props.newTaskExpert,
+  (v) => {
+    if (v) hiredExpert.value = v;
+  },
+  { immediate: true },
+);
+watch(home, (h) => {
+  if (!h) hiredExpert.value = null;
+});
 /** 模型下拉可选项：全部已配置供应商的模型（provider/id），兜底合并历史会话里出现过的模型 */
 const modelOptions = computed(() => {
   const set = new Set<string>();
@@ -79,6 +93,10 @@ function mentionLoader(cwd: string): Promise<Array<{ path: string; name: string;
 /** $ 技能列表加载器（会话内含项目级技能） */
 function skillsLoader(): Promise<Array<{ name: string; description: string }>> {
   return props.store.listSkills(activeSession.value?.cwd);
+}
+/** / 弹层专家段加载器 */
+function expertsLoader(): Promise<Array<{ id: string; name: string; description?: string; icon?: string }>> {
+  return props.store.listExperts();
 }
 /** 当前模型是否支持图片输入（未知 = undefined，不预警） */
 const modelSupportsImages = computed<boolean | undefined>(() => {
@@ -445,7 +463,8 @@ async function sendFromHome(
   // 未指定时用最近会话的目录兜底；首页选中的模型随新会话生效
   const last = props.store.sessions[0];
   const dir = cwd === null ? undefined : cwd || last?.cwd || ".";
-  await props.store.newSession(dir, homeModel.value ?? undefined);
+  await props.store.newSession(dir, homeModel.value ?? undefined, hiredExpert.value?.id);
+  hiredExpert.value = null;
   // 首页暂存的权限模式 / 思考级别随新会话下发；失败时不发送，避免以错误权限执行任务
   try {
     if (homePermissionMode.value) await props.store.setPermissionMode(homePermissionMode.value);
@@ -515,6 +534,8 @@ watch(
           :mention-cwd="store.homeDir ?? undefined"
           :mention-loader="mentionLoader"
           :skills-loader="skillsLoader"
+          :experts-loader="expertsLoader"
+          :hired-expert="hiredExpert"
           :model-images-ok="modelSupportsImages"
           centered
           :projects="projects"
@@ -522,6 +543,8 @@ watch(
           placeholder="描述你的任务，Enter 发送"
           :preset="preset"
           @send="sendFromHome"
+          @hire="(e) => (hiredExpert = e)"
+          @unhire="hiredExpert = null"
           @set-permission-mode="setPermissionMode"
           @set-thinking-level="setThinkingLevel"
           @set-model="setModel"
@@ -647,6 +670,7 @@ watch(
           :mention-cwd="activeSession?.cwd"
           :mention-loader="mentionLoader"
           :skills-loader="skillsLoader"
+          :experts-loader="expertsLoader"
           :model-images-ok="modelSupportsImages"
           :models="modelOptions"
           @send="(t: string, _cwd: unknown, imgs?: Array<{ data: string; mime_type: string }>, files?: Array<{ name: string; mime_type: string; size: number; data: string }>) => store.send(t, imgs, files)"

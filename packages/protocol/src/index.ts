@@ -236,6 +236,39 @@ export interface ErrorPayload {
 }
 
 // ---------------------------------------------------------------------------
+// experts（专家智能体编排）
+// ---------------------------------------------------------------------------
+
+/** 专家 = 预编排的智能体档案：角色提示词 + 技能/工具白名单 + 知识库 + 默认参数 */
+export interface Expert {
+  id: string;
+  /** 显示名，同时是 /expert:name 的调用名（唯一） */
+  name: string;
+  description?: string;
+  /** remixicon 图标名（可选） */
+  icon?: string;
+  /** 角色定位提示词，以 append 方式叠加在 pi 默认系统提示词之后 */
+  prompt: string;
+  /** 全局技能名白名单；空数组 = 不限制（全部可用） */
+  skills: string[];
+  /** 全局插件（含 MCP extension）文件名白名单（不含扩展名）；空数组 = 不限制 */
+  extensions: string[];
+  /** 内置工具白名单（read/bash/edit/write…）；空/缺省 = 不限制 */
+  tools?: string[];
+  /** 内置工具黑名单，在白名单之后生效 */
+  exclude_tools?: string[];
+  /** 知识库目录：会话内注入文件清单，模型按需用 read 读取 */
+  knowledge_dirs: string[];
+  /** 会话默认模型（provider/model-id）与思考级别 */
+  model?: string;
+  thinking_level?: string;
+  /** 会话建议权限模式（缺省走全局默认 plan） */
+  permission_mode?: "plan" | "confirm" | "full";
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
 // event kinds
 // ---------------------------------------------------------------------------
 
@@ -315,6 +348,13 @@ export const Method = {
   PIDOCK_SETTINGS_GET: "pidock.settings.get",
   PIDOCK_SETTINGS_SET: "pidock.settings.set",
   ATTACHMENT_GET: "attachment.get",
+  EXPERTS_LIST: "experts.list",
+  EXPERTS_GET: "experts.get",
+  EXPERTS_SAVE: "experts.save",
+  EXPERTS_DELETE: "experts.delete",
+  EXPERTS_INSTALL_RESOURCE: "experts.install_resource",
+  EXPERTS_PRIVATE_LIST: "experts.private_list",
+  EXPERTS_REMOVE_RESOURCE: "experts.remove_resource",
 } as const;
 
 // payload size limits (mirrors pidock-protocol Rust crate)

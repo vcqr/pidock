@@ -5,6 +5,7 @@ export { ATTACHMENT_LOADER, FOLDER_PICKER, FILE_PICKER, REVEAL_PATH, WINDOW_CONT
 export { initTheme, toggleTheme, applyTheme, themeMode, themePref, type ThemeMode, type ThemePref } from "./theme.js";
 export { default as ChatView } from "./components/ChatView.vue";
 export { default as AutomationView } from "./components/AutomationView.vue";
+export { default as ExpertsView } from "./components/ExpertsView.vue";
 export { default as Composer } from "./components/Composer.vue";
 export { default as FileIcon } from "./components/FileIcon.vue";
 export { default as Icon } from "./components/Icon.vue";
