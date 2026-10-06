@@ -61,15 +61,15 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
         :title="t.path"
         @click="emit('activate', t.path)"
       >
-        <FileIcon :path="t.path" :size="13" />
+        <FileIcon :path="t.path" :size="15" />
         <span class="tab-name">{{ t.path.split("/").pop() }}</span>
         <button class="tab-close" title="关闭标签" @click.stop="emit('close', t.path)">
-          <Icon name="close-line" :size="11" />
+          <Icon name="close-line" :size="12" />
         </button>
       </div>
       <span class="tabs-sp"></span>
       <button class="pv-close-all" title="关闭预览" @click="emit('closeAll')">
-        <Icon name="close-line" :size="15" />
+        <Icon name="close-line" :size="16" />
       </button>
     </div>
 
@@ -80,7 +80,7 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
         <template v-for="(seg, i) in crumbSegments" :key="i">
           <span class="crumb-sep">›</span>
           <span v-if="i === crumbSegments.length - 1" class="crumb-last">
-            <FileIcon :path="activeTab.path" :size="12" />{{ seg }}
+            <FileIcon :path="activeTab.path" :size="14" />{{ seg }}
           </span>
           <span v-else class="crumb-seg">{{ seg }}</span>
         </template>
@@ -133,7 +133,7 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
   border-bottom: none;
   border-radius: 8px 8px 0 0;
   color: var(--pd-text-3);
-  font-size: 12px;
+  font-size: 12.5px;
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
@@ -186,7 +186,7 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
   align-items: center;
   gap: 5px;
   padding: 6px 12px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--pd-text-3);
   border-bottom: 1px solid var(--pd-border-soft);
   white-space: nowrap;
@@ -218,7 +218,7 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
 .pv-gutter, .pv-code {
   margin: 0;
   font-family: var(--pd-mono, ui-monospace, Consolas, monospace);
-  font-size: 11.5px;
+  font-size: 12.5px;
   line-height: 1.6;
 }
 .pv-gutter {
@@ -226,7 +226,7 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
   left: 0;
   z-index: 1;
   flex: none;
-  min-width: 36px;
+  min-width: 40px;
   padding: 10px 8px 14px 12px;
   text-align: right;
   color: var(--pd-text-4);
@@ -247,7 +247,7 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
   gap: 6px;
   padding: 10px 14px;
   color: var(--pd-text-4);
-  font-size: 12px;
+  font-size: 12.5px;
 }
 .pv-note.err { color: var(--pd-red); }
 .pv-foot { flex: none; border-top: 1px solid var(--pd-border-soft); }

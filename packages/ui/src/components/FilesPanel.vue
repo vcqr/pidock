@@ -161,17 +161,17 @@ onMounted(load);
 <template>
   <aside class="files-panel">
     <header class="fp-head">
-      <Icon name="folder-open-line" :size="15" />
+      <Icon name="folder-open-line" :size="17" />
       <span class="fp-title" :title="cwd">{{ title }}</span>
       <span class="flex-sp"></span>
-      <button class="icon-btn" title="刷新" @click="load"><Icon name="refresh-line" :size="14" /></button>
+      <button class="icon-btn" title="刷新" @click="load"><Icon name="refresh-line" :size="15" /></button>
       <button
         v-if="revealPath"
         class="icon-btn"
         title="在资源管理器中打开"
         @click="revealPath(cwd)"
-      ><Icon name="folder-line" :size="14" /></button>
-      <button class="icon-btn" title="关闭" @click="emit('close')"><Icon name="close-line" :size="15" /></button>
+      ><Icon name="folder-line" :size="15" /></button>
+      <button class="icon-btn" title="关闭" @click="emit('close')"><Icon name="close-line" :size="16" /></button>
     </header>
 
     <div class="fp-search">
@@ -179,8 +179,8 @@ onMounted(load);
     </div>
 
     <div class="fp-tree">
-      <div v-if="loading" class="fp-hint"><Icon name="loader-2-line" :size="15" />加载中…</div>
-      <div v-else-if="loadError" class="fp-hint"><Icon name="error-warning-line" :size="15" />{{ loadError }}</div>
+      <div v-if="loading" class="fp-hint"><Icon name="loader-2-line" :size="16" />加载中…</div>
+      <div v-else-if="loadError" class="fp-hint"><Icon name="error-warning-line" :size="16" />{{ loadError }}</div>
       <template v-else-if="query.trim()">
         <div
           v-for="e in searchRows"
@@ -190,12 +190,12 @@ onMounted(load);
           :title="e.path"
           @click="!e.dir && onRowClick({ name: e.name, path: e.path, dir: e.dir, children: [] })"
         >
-          <span class="tile"><FileIcon :path="e.path" :dir="e.dir" :size="14" /></span>
+          <span class="tile"><FileIcon :path="e.path" :dir="e.dir" :size="16" /></span>
           <span class="row-name">{{ e.name }}</span>
           <span class="row-sp"></span>
           <span v-if="isOpen(e.path)" class="open-dot" title="已在预览中打开"></span>
           <button class="row-copy" title="复制路径" @click.stop="copyText(joinAbs(e.path))">
-            <Icon name="file-copy-line" :size="13" />
+            <Icon name="file-copy-line" :size="14" />
           </button>
         </div>
         <div v-if="!searchRows.length" class="fp-hint">没有匹配的文件</div>
@@ -211,14 +211,14 @@ onMounted(load);
           @click="onRowClick(node)"
         >
           <span class="chev" :class="{ fold: !expandedDirs.has(node.path), blank: !node.dir }">
-            <Icon name="arrow-down-s-line" :size="12" />
+            <Icon name="arrow-down-s-line" :size="13" />
           </span>
-          <span class="tile"><FileIcon :path="node.path" :dir="node.dir" :size="14" /></span>
+          <span class="tile"><FileIcon :path="node.path" :dir="node.dir" :size="16" /></span>
           <span class="row-name">{{ node.name }}</span>
           <span class="row-sp"></span>
           <span v-if="isOpen(node.path)" class="open-dot" title="已在预览中打开"></span>
           <button class="row-copy" title="复制路径" @click.stop="copyText(joinAbs(node.path))">
-            <Icon name="file-copy-line" :size="13" />
+            <Icon name="file-copy-line" :size="14" />
           </button>
         </div>
         <div v-if="!visibleRows.length" class="fp-hint">目录为空</div>
@@ -247,7 +247,7 @@ onMounted(load);
   gap: 7px;
   padding: 10px 10px 8px 12px;
   color: var(--pd-text);
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 .fp-title {
@@ -256,9 +256,9 @@ onMounted(load);
   white-space: nowrap;
 }
 .icon-btn {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
   display: grid;
   place-items: center;
   color: var(--pd-text-3);
@@ -278,8 +278,8 @@ onMounted(load);
   border: 1px solid var(--pd-border);
   color: var(--pd-text);
   border-radius: 8px;
-  padding: 5px 10px;
-  font-size: 12px;
+  padding: 6px 10px;
+  font-size: 12.5px;
 }
 .fp-search input:focus { outline: none; border-color: var(--pd-accent); }
 
@@ -302,12 +302,12 @@ onMounted(load);
 .row {
   display: flex;
   align-items: center;
-  gap: 5px;
-  height: 25px;
+  gap: 6px;
+  height: 27px;
   padding-right: 6px;
   border-radius: 6px;
   color: var(--pd-text-2);
-  font-size: 12.5px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
@@ -338,15 +338,15 @@ onMounted(load);
 /* 已在预览中打开的文件：名称右侧小圆点 */
 .row-sp { flex: 1; min-width: 0; }
 .open-dot {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   flex: none;
   background: var(--pd-accent);
 }
 .row-copy {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: 5px;
   display: grid;
   place-items: center;
