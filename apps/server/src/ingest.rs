@@ -137,6 +137,12 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
             set.insert("title", text.chars().take(60).collect::<String>());
         }
     }
+    // session_meta 携带 cwd（web 端项目分组与文件浏览依赖它；桌面端回填时补发）
+    if kind == "session_meta" {
+        if let Some(cwd) = envelope.pointer("/payload/cwd").and_then(|t| t.as_str()) {
+            set.insert("cwd", cwd);
+        }
+    }
     if let Err(e) = sessions
         .update_one(
                 doc! {"_id": session_id},

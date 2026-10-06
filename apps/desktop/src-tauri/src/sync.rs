@@ -303,6 +303,15 @@ async fn execute_command(
             }
             p
         }),
+        "session.rename" => ("session.rename", json!({"session_id": session_id, "name": payload.get("name").and_then(|t| t.as_str()).unwrap_or("")})),
+        // 移除项目/删除会话：session_ids 数组原样透传
+        "session.remove" => ("session.remove", json!({"session_ids": payload.get("session_ids").cloned().unwrap_or(json!([]))})),
+        // 文件浏览（@ 提及与文件面板共用）
+        "workspace.files" => ("workspace.files", json!({"cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or("")})),
+        "workspace.read_file" => ("workspace.read_file", json!({
+            "cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or(""),
+            "path": payload.get("path").and_then(|t| t.as_str()).unwrap_or(""),
+        })),
         other => {
             return Err(format!("command type \"{other}\" not supported by this desktop"));
         }
@@ -410,6 +419,23 @@ async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_prot
                         let sid = s.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                         if sid.is_empty() {
                             continue;
+                        }
+                        // 镜像不存 cwd：补发一条 session_meta（ephemeral，仅 upsert 会话行），
+                        // web 端项目分组与文件浏览才有真实工作目录
+                        if let Some(cwd) = s.get("cwd").and_then(|v| v.as_str()) {
+                            let mut meta_payload = json!({ "cwd": cwd });
+                            if let Some(m) = s.get("model").and_then(|v| v.as_str()) {
+                                meta_payload["model"] = json!(m);
+                            }
+                            let meta = json!({
+                                "event_id": Uuid::now_v7().to_string(),
+                                "session_id": sid,
+                                "persist": false,
+                                "ts": chrono::Utc::now().to_rfc3339(),
+                                "kind": "session_meta",
+                                "payload": meta_payload,
+                            });
+                            let _ = ws_sink.send(WsMessage::Text(meta.to_string().into())).await;
                         }
                         if let Ok(replay) = supervisor
                             .request(app.clone(), "session.events".into(), json!({"session_id": sid}))

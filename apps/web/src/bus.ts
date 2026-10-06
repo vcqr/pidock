@@ -123,6 +123,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
     const res = await auth.request("/commands", {
       method: "POST",
       body: JSON.stringify({
+        token: auth.token,
         machine_id: activeMachine,
         session_id: sessionId,
         type,
@@ -213,6 +214,28 @@ export function createWebBus(auth: AuthClient): DataBus & {
         case "workspace.files": {
           const result = await command(params?.session_id ?? "", "workspace.files", { cwd: params?.cwd });
           return result ?? {};
+        }
+        case "workspace.read_file": {
+          const result = await command(params?.session_id ?? "", "workspace.read_file", {
+            cwd: params?.cwd,
+            path: params?.path,
+          });
+          return result ?? {};
+        }
+        case "session.remove": {
+          // 先命令桌面端删 host 注册表条目（权威数据），再清 server 侧镜像；机器离线时整体拒绝
+          const ids: string[] = Array.isArray(params?.session_ids) ? params.session_ids : [];
+          const result = await command(params?.session_id ?? "", "session.remove", { session_ids: ids });
+          if (activeMachine && ids.length) {
+            await Promise.allSettled(
+              ids.map((sid) =>
+                auth.request(`/machines/${activeMachine}/sessions/${sid}?token=${auth.token}`, {
+                  method: "DELETE",
+                }),
+              ),
+            );
+          }
+          return result ?? { removed: ids.length };
         }
         case "agent.prompt":
           await command(params.session_id, "agent.prompt", { text: params.text });

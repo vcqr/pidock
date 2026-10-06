@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, createReadStream, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import {
   createAgentSession,
@@ -192,6 +192,26 @@ export class SessionPool {
     const path = this.registryPath();
     const all = this.readRegistry().filter((e) => e.session_id !== sessionId);
     writeFileSync(path, JSON.stringify({ sessions: all }, null, 2));
+  }
+
+  /**
+   * 从 UI 列表移除会话（只删注册表条目；磁盘 JSONL 保留）。
+   * 仍在内存中打开的会话先关闭，未知的 id 幂等跳过。
+   */
+  removeSessions(params: { session_ids: string[] }): { removed: number } {
+    const ids = new Set(
+      Array.isArray(params.session_ids) ? params.session_ids.filter((x) => typeof x === "string") : [],
+    );
+    if (!ids.size) return { removed: 0 };
+    const all = this.readRegistry();
+    const kept = all.filter((e) => !ids.has(e.session_id));
+    const removed = all.length - kept.length;
+    if (!removed) return { removed: 0 };
+    for (const e of all) {
+      if (ids.has(e.session_id)) this.closeSession({ session_id: e.session_id });
+    }
+    writeFileSync(this.registryPath(), JSON.stringify({ sessions: kept }, null, 2));
+    return { removed };
   }
 
   // ---------------------------------------------------------------- state
@@ -819,6 +839,49 @@ export class SessionPool {
     };
     walk(resolve(root), "", 0);
     return { files };
+  }
+
+  /**
+   * 读取工作区内的文本文件（文件浏览预览用）：路径解析后必须仍落在 cwd 内
+   * （防目录穿越），只取前 256KB（超出标记 truncated），头部含 NUL 视为二进制。
+   */
+  readWorkspaceFile(params: { cwd: string; path: string }): {
+    text: string;
+    truncated: boolean;
+    binary: boolean;
+    size: number;
+  } {
+    const root = resolve(String(params.cwd ?? ""));
+    if (!root || !existsSync(root)) throw new RpcError("bad_cwd", "workspace directory not found");
+    const rel = String(params.path ?? "").replace(/\\/g, "/");
+    if (!rel || rel.includes("\0")) throw new RpcError("bad_path", "file path required");
+    const abs = resolve(root, rel);
+    const relCheck = relative(root, abs);
+    if (relCheck.startsWith("..") || isAbsolute(relCheck)) {
+      throw new RpcError("bad_path", "path escapes workspace");
+    }
+    let st;
+    try {
+      st = statSync(abs);
+    } catch {
+      throw new RpcError("not_found", `no such file: ${rel}`);
+    }
+    if (!st.isFile()) throw new RpcError("not_found", `not a file: ${rel}`);
+    const LIMIT = 256 * 1024;
+    const buf = Buffer.alloc(Math.min(st.size, LIMIT));
+    const fd = openSync(abs, "r");
+    try {
+      const got = readSync(fd, buf, 0, buf.length, 0);
+      const head = (got === buf.length ? buf : buf.subarray(0, got));
+      return {
+        text: head.toString("utf8"),
+        truncated: st.size > got,
+        binary: head.subarray(0, 8192).includes(0),
+        size: st.size,
+      };
+    } finally {
+      closeSync(fd);
+    }
   }
 
   resolveApproval(params: { approval_id: string; approved: boolean }): { ok: boolean } {

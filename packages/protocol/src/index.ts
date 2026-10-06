@@ -310,8 +310,12 @@ export const Method = {
   SESSION_CLOSE: "session.close",
   SESSION_EVENTS: "session.events",
   SESSION_RENAME: "session.rename",
+  /** 从注册表移除会话（UI 列表消失；磁盘 JSONL 保留） */
+  SESSION_REMOVE: "session.remove",
   MODEL_OVERRIDE_SET: "config.model_override.set",
   WORKSPACE_FILES: "workspace.files",
+  /** 读取工作区内文本文件（路径安全校验 + 大小上限 + 二进制检测），文件浏览预览用 */
+  WORKSPACE_READ_FILE: "workspace.read_file",
   SESSION_SET_PERMISSION_MODE: "session.set_permission_mode",
   SESSION_RESOLVE_APPROVAL: "session.resolve_approval",
   SESSION_RESOLVE_ASK: "session.resolve_ask",

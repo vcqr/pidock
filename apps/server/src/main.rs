@@ -246,6 +246,35 @@ async fn machine_sessions(
     Ok(Json(json!({"sessions": sessions})))
 }
 
+/// 删除镜像里的单个会话及其事件（web 端「移除项目/删除会话」时，
+/// 桌面端命令删掉 host 注册表条目后调这里同步清镜像）
+async fn delete_machine_session(
+    State(state): State<AppState>,
+    Path((machine_id, session_id)): Path<(String, String)>,
+    Query(q): Query<TokenQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let user_id = auth::verify_token(&state, &q.token, "access")
+        .await
+        .map(|c| c.sub)
+        .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    let owner = doc! {"_id": &session_id, "user_id": &user_id, "machine_id": &machine_id};
+    let sessions = state.mongo.collection::<BsonDoc>("sessions");
+    let res = sessions
+        .delete_one(owner.clone())
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if res.deleted_count == 0 {
+        return Err(err(StatusCode::NOT_FOUND, "session not found"));
+    }
+    state
+        .mongo
+        .collection::<BsonDoc>("session_events")
+        .delete_many(doc! {"session_id": &session_id, "user_id": &user_id, "machine_id": &machine_id})
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({"deleted": true})))
+}
+
 /// persisted history replay for one session
 #[derive(Deserialize)]
 struct EventsQuery {
@@ -393,6 +422,10 @@ async fn main() {
         .route("/machines", get(machines))
         .route("/machines/{machine_id}", delete(delete_machine))
         .route("/machines/{machine_id}/sessions", get(machine_sessions))
+        .route(
+            "/machines/{machine_id}/sessions/{session_id}",
+            delete(delete_machine_session),
+        )
         .route(
             "/machines/{machine_id}/sessions/{session_id}/events",
             get(session_events),
