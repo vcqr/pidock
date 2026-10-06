@@ -390,9 +390,9 @@ onMounted(async () => {
   user-select: none;
   flex: none;
 }
-.transport { font-size: 12px; color: var(--pd-text-4); }
+.transport { font-size: calc(12px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .err {
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-red);
   overflow: hidden;
   text-overflow: ellipsis;

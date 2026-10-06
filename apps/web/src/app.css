@@ -19,7 +19,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 18px;
+  font-size: calc(18px * var(--pd-font-scale));
   font-weight: 700;
   color: var(--pd-text);
   margin-bottom: 8px;
@@ -37,7 +37,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-2);
 }
 .login-card input {
@@ -46,7 +46,7 @@
   border: 1px solid var(--pd-border);
   border-radius: 8px;
   padding: 9px 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
 }
 .login-card input:focus {
   outline: none;
@@ -58,7 +58,7 @@ button.primary {
   border: none;
   border-radius: 8px;
   padding: 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
 }
 button.primary:disabled {
@@ -67,7 +67,7 @@ button.primary:disabled {
 }
 .login-error {
   color: var(--pd-red-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
 }
 
 .layout {
@@ -99,7 +99,7 @@ button.primary:disabled {
   background: var(--pd-accent);
   border-radius: 6px;
   color: white;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-weight: 700;
 }
 .ghost {
@@ -107,7 +107,7 @@ button.primary:disabled {
   background: transparent;
   color: var(--pd-text-3);
   border: none;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   cursor: pointer;
 }
 .ghost:hover { color: var(--pd-text); }
@@ -131,7 +131,7 @@ button.primary:disabled {
   align-items: center;
   gap: 6px;
   color: var(--pd-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-weight: 600;
 }
 .dot {
@@ -142,7 +142,7 @@ button.primary:disabled {
   flex: none;
 }
 .dot.on { background: var(--pd-green); }
-.m-sub { color: var(--pd-text-3); font-size: 11px; margin-top: 3px; }
+.m-sub { color: var(--pd-text-3); font-size: calc(11px * var(--pd-font-scale)); margin-top: 3px; }
 .col {
   width: 250px;
   min-width: 250px;
@@ -173,22 +173,22 @@ button.primary:disabled {
   border-bottom: 1px solid var(--pd-border);
   background: var(--pd-bg-panel);
 }
-.transport { font-size: 12px; color: var(--pd-text-4); }
+.transport { font-size: calc(12px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .who {
   margin-left: auto;
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   color: var(--pd-text-4);
   font-family: monospace;
 }
 .hint {
   color: var(--pd-text-4);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   padding: 40px;
   text-align: center;
 }
 .empty {
   color: var(--pd-text-4);
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   padding: 16px 12px;
   line-height: 1.6;
 }

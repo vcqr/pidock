@@ -123,7 +123,7 @@ const stateLabel = (s: any): string =>
 .sync-page { max-width: 720px; }
 .grp-title {
   margin: 26px 0 10px;
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--pd-font-scale));
   font-weight: 600;
   color: var(--pd-text-2);
 }
@@ -147,8 +147,8 @@ const stateLabel = (s: any): string =>
   flex-direction: column;
   gap: 3px;
 }
-.row-text b { font-size: 13.5px; font-weight: 600; color: var(--pd-text); }
-.row-text span { font-size: 12px; color: var(--pd-text-3); line-height: 1.5; word-break: break-all; }
+.row-text b { font-size: calc(13.5px * var(--pd-font-scale)); font-weight: 600; color: var(--pd-text); }
+.row-text span { font-size: calc(12px * var(--pd-font-scale)); color: var(--pd-text-3); line-height: 1.5; word-break: break-all; }
 .dot {
   display: inline-block;
   width: 8px;
@@ -159,14 +159,14 @@ const stateLabel = (s: any): string =>
   vertical-align: 1px;
 }
 .dot.on { background: var(--pd-green); }
-.mono { font-family: Consolas, monospace; }
+.mono { font-family: var(--pd-mono); }
 .danger-btn {
   background: var(--pd-red-soft);
   color: var(--pd-red-text);
   border: none;
   border-radius: 8px;
   padding: 6px 12px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   cursor: pointer;
   flex: none;
 }
@@ -177,7 +177,7 @@ const stateLabel = (s: any): string =>
 .field:last-of-type { margin-bottom: 0; }
 .field label {
   display: block;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-2);
   margin-bottom: 6px;
 }
@@ -188,7 +188,7 @@ const stateLabel = (s: any): string =>
   border: 1px solid var(--pd-border);
   border-radius: 9px;
   color: var(--pd-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   padding: 8px 12px;
 }
 .field input:focus { outline: none; border-color: var(--pd-accent); }
@@ -200,7 +200,7 @@ const stateLabel = (s: any): string =>
   border: none;
   border-radius: 9px;
   padding: 8px 16px;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-weight: 600;
   cursor: pointer;
 }
@@ -208,7 +208,7 @@ const stateLabel = (s: any): string =>
 .primary-btn:disabled { opacity: 0.6; cursor: default; }
 .notice {
   margin-top: 12px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-green-text);
   background: var(--pd-green-soft);
   border-radius: 8px;
@@ -217,7 +217,7 @@ const stateLabel = (s: any): string =>
 .notice.err { color: var(--pd-red-text); background: var(--pd-red-soft); }
 .hint {
   margin: 12px 0 0;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--pd-font-scale));
   color: var(--pd-text-4);
   line-height: 1.6;
 }
