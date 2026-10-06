@@ -109,15 +109,22 @@ const contextPercent = computed(() => {
   const p = contextInfo.value?.percent;
   return typeof p === "number" && Number.isFinite(p) ? Math.min(100, Math.max(0, p)) : null;
 });
+/** token 数缩写：≥1M 显示 xM（整数），≥1K 显示 x.xK，其余原样 */
+function fmtTokens(n: number): string {
+  if (n >= 1024 * 1024) {
+    const m = n / (1024 * 1024);
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+  }
+  if (n >= 1024) return `${(n / 1024).toFixed(1)}K`;
+  return String(n);
+}
 const contextTokensText = computed(() => {
   const t = contextInfo.value?.tokens;
-  if (typeof t !== "number" || !Number.isFinite(t)) return "";
-  return t >= 1024 ? `${(t / 1024).toFixed(1)}K` : String(t);
+  return typeof t === "number" && Number.isFinite(t) ? fmtTokens(t) : "";
 });
 const contextWindowText = computed(() => {
   const w = contextInfo.value?.context_window;
-  if (typeof w !== "number" || !Number.isFinite(w)) return "";
-  return w >= 1024 ? `${Math.round(w / 1024)}K` : String(w);
+  return typeof w === "number" && Number.isFinite(w) ? fmtTokens(w) : "";
 });
 /** 仪表条颜色阈值：<70% 常态色，<90% 琥珀，≥90% 红 */
 const contextMeterClass = computed(() => {
