@@ -4,6 +4,7 @@ import { NSplit } from "naive-ui";
 import type { AgentStore, ExpertInfo, UiItem } from "../store.js";
 import { formatSpan, greeting } from "../utils/time.js";
 import FileIcon from "./FileIcon.vue";
+import FilePreview from "./FilePreview.vue";
 import FilesPanel from "./FilesPanel.vue";
 import MdContent from "./MdContent.vue";
 import ReviewPanel from "./ReviewPanel.vue";
@@ -368,22 +369,120 @@ function readReviewWidth(): number | null {
   const v = Number(localStorage.getItem(REVIEW_KEY));
   return Number.isFinite(v) && v >= REVIEW_MIN && v <= 1200 ? Math.round(v) : null;
 }
-/** pane1（对话区）flex-basis：未开审查时占满；打开时 = 容器 − 触发条 − 面板宽 */
-const reviewPane1Size = computed(() =>
-  reviewTabs.value.length
-    ? `calc(100% - ${SPLIT_TRIGGER}px - ${(reviewWidth.value ?? Math.round(chatW.value * 0.42))}px)`
-    : "100%",
-);
+/** pane1（对话区）flex-basis：右侧无分栏时占满；否则 = 容器 − 触发条 − 右侧组（预览/审查）宽 */
+const reviewPane1Size = computed(() => {
+  const right =
+    (previewTabs.value.length ? previewWidth.value + SPLIT_TRIGGER : 0) +
+    (reviewTabs.value.length ? (reviewWidth.value ?? Math.round(chatW.value * 0.42)) : 0);
+  return right > 0 ? `calc(100% - ${SPLIT_TRIGGER}px - ${right}px)` : "100%";
+});
 const reviewPane1Max = computed(() => `${Math.max(360, chatW.value - SPLIT_TRIGGER - REVIEW_MIN)}px`);
 function onReviewSplitSize(s: string | number): void {
   const usable = Math.max(0, chatW.value - SPLIT_TRIGGER);
   const px = typeof s === "string" ? parseFloat(s) : s * usable;
   if (!Number.isFinite(px)) return;
-  reviewWidth.value = Math.round(Math.min(usable - 360, Math.max(REVIEW_MIN, usable - px)));
+  // 右侧组总宽 = 容器 − 对话区。组内含预览分栏时，拖 A 触发条调整的是组内
+  // 除预览外的部分（审查面板；审查关闭时即预览分栏自身宽度）
+  const group = Math.max(0, usable - Math.round(px));
+  if (previewTabs.value.length) {
+    previewWidth.value = Math.round(Math.min(usable - 280, Math.max(PREVIEW_MIN, group - SPLIT_TRIGGER)));
+  } else {
+    reviewWidth.value = Math.round(Math.min(usable - 360, Math.max(REVIEW_MIN, group)));
+  }
 }
 function saveReview(): void {
   try {
-    if (reviewWidth.value != null) localStorage.setItem(REVIEW_KEY, String(reviewWidth.value));
+    // 右侧组含预览分栏时，A 触发条调整的是预览宽度
+    if (previewTabs.value.length) localStorage.setItem(PREVIEW_KEY, String(previewWidth.value));
+    else if (reviewWidth.value != null) localStorage.setItem(REVIEW_KEY, String(reviewWidth.value));
+  } catch {
+    // localStorage 不可用时忽略
+  }
+}
+
+// ---- 主区文件预览（编辑器式多标签）：文件树点击 → 在对话旁的分栏打开/激活 ----
+const previewTabs = ref<Array<{ path: string; text?: string; truncated?: boolean; binary?: boolean; size?: number; error?: string }>>([]);
+const activePreviewPath = ref<string | null>(null);
+const previewProjectName = computed(
+  () => props.filesCwd?.cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "",
+);
+// 切换浏览的项目时清空预览标签（标签内容属于该项目）
+watch(
+  () => props.filesCwd?.cwd,
+  () => {
+    previewTabs.value = [];
+    activePreviewPath.value = null;
+  },
+);
+const PREVIEW_MAX_TABS = 12;
+async function openPreviewFile(path: string): Promise<void> {
+  const cwd = props.filesCwd?.cwd;
+  if (!cwd) return;
+  if (!previewTabs.value.some((t) => t.path === path)) {
+    try {
+      const r = await props.store.readWorkspaceFile(cwd, path);
+      previewTabs.value.push({ ...r, path });
+      if (previewTabs.value.length > PREVIEW_MAX_TABS) previewTabs.value.shift();
+    } catch (err) {
+      previewTabs.value.push({ path, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  activePreviewPath.value = path;
+}
+function closePreviewTab(path: string): void {
+  const i = previewTabs.value.findIndex((t) => t.path === path);
+  if (i < 0) return;
+  previewTabs.value.splice(i, 1);
+  if (activePreviewPath.value === path) {
+    activePreviewPath.value = previewTabs.value[Math.min(i, previewTabs.value.length - 1)]?.path ?? null;
+  }
+}
+
+// ---- 预览分栏宽度（嵌套 NSplit #1 = 预览），记忆 px ----
+const PREVIEW_KEY = "pidock.previewWidth";
+const PREVIEW_MIN = 320;
+const previewWrapEl = ref<HTMLElement | null>(null);
+const previewWidth = ref<number>(readPreviewWidth() ?? 560);
+function readPreviewWidth(): number | null {
+  const v = Number(localStorage.getItem(PREVIEW_KEY));
+  return Number.isFinite(v) && v >= PREVIEW_MIN && v <= 1600 ? Math.round(v) : null;
+}
+function onPreviewSplitSize(s: string | number): void {
+  const usable = Math.max(0, (previewWrapEl.value?.getBoundingClientRect().width ?? chatW.value) - SPLIT_TRIGGER);
+  const px = typeof s === "string" ? parseFloat(s) : s * usable;
+  if (!Number.isFinite(px)) return;
+  previewWidth.value = Math.round(Math.min(usable - 280, Math.max(PREVIEW_MIN, px)));
+}
+function savePreviewWidth(): void {
+  try {
+    localStorage.setItem(PREVIEW_KEY, String(previewWidth.value));
+  } catch {
+    // localStorage 不可用时忽略
+  }
+}
+
+// ---- 文件树面板宽度（chat-body 的 NSplit #2 = 文件树），记忆 px ----
+const FILES_KEY = "pidock.filesWidth";
+const FILES_MIN = 240;
+const filesWidth = ref<number>(readFilesWidth() ?? 300);
+function readFilesWidth(): number | null {
+  const v = Number(localStorage.getItem(FILES_KEY));
+  return Number.isFinite(v) && v >= FILES_MIN && v <= 1200 ? Math.round(v) : null;
+}
+/** pane1（主内容）flex-basis：未开文件树时占满；打开时 = 容器 − 触发条 − 面板宽 */
+const bodyPane1Size = computed(() =>
+  props.filesCwd ? `calc(100% - ${SPLIT_TRIGGER}px - ${filesWidth.value}px)` : "100%",
+);
+const bodyPane1Max = computed(() => `${Math.max(360, chatW.value - SPLIT_TRIGGER - FILES_MIN)}px`);
+function onBodySplitSize(s: string | number): void {
+  const usable = Math.max(0, chatW.value - SPLIT_TRIGGER);
+  const px = typeof s === "string" ? parseFloat(s) : s * usable;
+  if (!Number.isFinite(px)) return;
+  filesWidth.value = Math.round(Math.min(usable - 360, Math.max(FILES_MIN, usable - px)));
+}
+function saveFilesWidth(): void {
+  try {
+    localStorage.setItem(FILES_KEY, String(filesWidth.value));
   } catch {
     // localStorage 不可用时忽略
   }
@@ -530,9 +629,24 @@ watch(
 
 <template>
   <div ref="chatEl" class="chat" :class="{ home }">
-    <div class="chat-body">
+    <!-- 文件树宽度可拖（NSplit）：#1 主内容区，#2 文件树面板 -->
+    <n-split
+      direction="horizontal"
+      class="body-split"
+      :size="bodyPane1Size"
+      min="360px"
+      :max="bodyPane1Max"
+      :resize-trigger-size="6"
+      :disabled="!filesCwd"
+      :pane1-style="{ display: 'flex', minWidth: '0', overflow: 'hidden' }"
+      :pane2-style="{ flex: '1 1 0', minWidth: '0', overflow: 'hidden' }"
+      @update:size="onBodySplitSize"
+      @drag-end="saveFilesWidth"
+    >
+    <template #1>
     <!-- home: watermark + greeting + composer -->
-    <div v-if="home" class="home-wrap">
+    <div v-if="home" class="home-row">
+    <div class="home-wrap">
       <div class="watermark">π</div>
       <div class="home-inner">
         <h1 class="greeting">{{ greeting() }}，接下来交给我吧</h1>
@@ -577,6 +691,18 @@ watch(
         </div>
       </div>
     </div>
+    <!-- 首页文件预览分栏：会话未开时点文件树同样在主区预览 -->
+    <FilePreview
+      v-if="previewTabs.length"
+      class="home-preview"
+      :style="{ width: previewWidth + 'px' }"
+      :tabs="previewTabs"
+      :active="activePreviewPath"
+      :project-name="previewProjectName"
+      @activate="(p: string) => (activePreviewPath = p)"
+      @close="closePreviewTab"
+    />
+    </div>
 
     <!-- conversation -->
     <div v-else class="conv-row">
@@ -587,7 +713,7 @@ watch(
         min="360px"
         :max="reviewPane1Max"
         :resize-trigger-size="6"
-        :disabled="!reviewTabs.length"
+        :disabled="!reviewTabs.length && !previewTabs.length"
         :pane1-style="{ display: 'flex' }"
         :pane2-style="{ flex: '1 1 0', minWidth: '0', overflow: 'hidden' }"
         @update:size="onReviewSplitSize"
@@ -703,8 +829,45 @@ watch(
       </div>
       </template>
         <template #2>
+          <!-- 主区文件预览（编辑器式多标签）与审查面板并排，分界可拖 -->
+          <div v-if="previewTabs.length" ref="previewWrapEl" class="preview-wrap">
+            <n-split
+              direction="horizontal"
+              class="preview-split"
+              :size="previewWidth + 'px'"
+              min="320px"
+              max="75%"
+              :resize-trigger-size="6"
+              :disabled="!reviewTabs.length"
+              :pane1-style="{ display: 'flex', minWidth: '0', overflow: 'hidden' }"
+              :pane2-style="{ flex: '1 1 0', minWidth: '0', overflow: 'hidden' }"
+              @update:size="onPreviewSplitSize"
+              @drag-end="savePreviewWidth"
+            >
+              <template #1>
+                <FilePreview
+                  :tabs="previewTabs"
+                  :active="activePreviewPath"
+                  :project-name="previewProjectName"
+                  @activate="(p: string) => (activePreviewPath = p)"
+                  @close="closePreviewTab"
+                />
+              </template>
+              <template #2>
+                <ReviewPanel
+                  v-if="reviewTabs.length"
+                  :tabs="reviewTabs"
+                  :active="reviewActive ?? reviewTabs[0]!.path"
+                  @select="(p: string) => (reviewActive = p)"
+                  @close-tab="closeReviewTab"
+                  @close="closeReviewAll"
+                />
+              </template>
+              <template #resize-trigger><div class="rz-line" /></template>
+            </n-split>
+          </div>
           <ReviewPanel
-            v-if="reviewTabs.length"
+            v-else-if="reviewTabs.length"
             :tabs="reviewTabs"
             :active="reviewActive ?? reviewTabs[0]!.path"
             @select="(p: string) => (reviewActive = p)"
@@ -717,16 +880,22 @@ watch(
       <!-- 任务进度第三栏（TodoWrite 推送或雇佣专家时停靠展开；收起为悬浮小圆标） -->
       <ProgressCard :store="store" :expert="activeExpert" />
       </div>
-      <!-- 项目文件浏览面板（侧栏项目右键「查看项目文件」停靠；首页新建任务模式下同样可用） -->
+    </template>
+    <template #2>
+      <!-- 项目文件浏览面板：宽度可拖；点击文件在主区预览分栏打开 -->
       <FilesPanel
         v-if="filesCwd"
         :key="filesCwd.seq"
         :cwd="filesCwd.cwd"
+        :open-paths="previewTabs.map((t) => t.path)"
+        :active-path="activePreviewPath"
         :load-files="store.listWorkspaceFiles"
-        :read-file="store.readWorkspaceFile"
+        @open-file="openPreviewFile"
         @close="emit('close-files')"
       />
-    </div>
+    </template>
+    <template #resize-trigger><div class="rz-line" /></template>
+    </n-split>
   </div>
 </template>
 
@@ -784,10 +953,32 @@ export default { components: { ToolCard, MessageItem } };
   min-height: 0;
 }
 .chat.home { background: var(--pd-bg); }
-/* 对话主体行：home 页 / 会话区 与 项目文件面板 的水平容器 */
-.chat-body {
+/* 文件树宽度可拖的分栏容器（NSplit）：#1 主内容，#2 文件树面板 */
+.body-split {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* 首页：居中任务区与文件预览分栏的水平容器 */
+.home-row {
   flex: 1;
   display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.home-preview { flex: none; min-width: 0; }
+/* 会话区：主预览+审查 嵌套分栏的容器 */
+.preview-wrap {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.preview-split {
+  flex: 1;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
