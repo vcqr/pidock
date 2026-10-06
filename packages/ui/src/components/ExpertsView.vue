@@ -104,8 +104,6 @@ const form = ref({
   extensions: [] as string[],
   exclude_tools: [] as string[],
   knowledge_dirs: [] as string[],
-  thinking_level: "",
-  permission_mode: "",
 });
 const newKbDir = ref("");
 const folderPicker = inject(FOLDER_PICKER, null);
@@ -121,8 +119,6 @@ function openCreate(): void {
     extensions: [],
     exclude_tools: [],
     knowledge_dirs: [],
-    thinking_level: "",
-    permission_mode: "",
   };
   privates.value = { skills: [], extensions: [] };
   activeTab.value = "basic";
@@ -140,8 +136,6 @@ function openEdit(e: Expert): void {
     extensions: [...(e.extensions ?? [])],
     exclude_tools: [...(e.exclude_tools ?? [])],
     knowledge_dirs: [...(e.knowledge_dirs ?? [])],
-    thinking_level: e.thinking_level ?? "",
-    permission_mode: e.permission_mode ?? "",
   };
   activeTab.value = "basic";
   showEditor.value = true;
@@ -168,8 +162,6 @@ async function save(): Promise<void> {
       extensions: form.value.extensions,
       exclude_tools: form.value.exclude_tools,
       knowledge_dirs: form.value.knowledge_dirs,
-      thinking_level: form.value.thinking_level || undefined,
-      permission_mode: form.value.permission_mode || undefined,
     });
     flash(editingId.value ? "专家已保存" : "专家已创建");
     showEditor.value = false;
@@ -433,27 +425,6 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
               rows="7"
               placeholder="你是……。你的职责是……。约束：……（追加在系统提示词之后，不影响基础编码能力）"
             ></textarea>
-          </div>
-          <div class="grid2">
-            <div class="field">
-              <label>思考等级</label>
-              <select v-model="form.thinking_level">
-                <option value="">默认</option>
-                <option value="off">关闭</option>
-                <option value="low">低</option>
-                <option value="medium">中</option>
-                <option value="high">高</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>权限模式</label>
-              <select v-model="form.permission_mode">
-                <option value="">默认（计划模式）</option>
-                <option value="plan">计划模式</option>
-                <option value="confirm">变更前确认</option>
-                <option value="full">完全访问</option>
-              </select>
-            </div>
           </div>
         </div>
 

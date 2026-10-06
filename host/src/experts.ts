@@ -169,8 +169,10 @@ export class ExpertsService {
       tools: Array.isArray(params.tools) && params.tools.length ? params.tools.map(String) : undefined,
       exclude_tools: Array.isArray(params.exclude_tools) && params.exclude_tools.length ? params.exclude_tools.map(String) : undefined,
       knowledge_dirs: Array.isArray(params.knowledge_dirs) ? params.knowledge_dirs.map((d) => String(d).trim()).filter(Boolean) : [],
-      model: params.model?.trim() || undefined,
-      thinking_level: params.thinking_level?.trim() || undefined,
+      // model/thinking_level/permission_mode 已从编辑器 UI 移除（归属会话层配置）；
+      // 字段保留兼容旧数据，参数缺省时保留既有值不被覆盖
+      model: params.model !== undefined ? params.model.trim() || undefined : existing?.model,
+      thinking_level: params.thinking_level !== undefined ? params.thinking_level.trim() || undefined : existing?.thinking_level,
       permission_mode: params.permission_mode ?? existing?.permission_mode,
       created_at: existing?.created_at ?? now,
       updated_at: now,
