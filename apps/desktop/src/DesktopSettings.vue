@@ -76,7 +76,7 @@ async function save(): Promise<void> {
       </div>
     </div>
     <div v-if="notice" class="notice" :class="{ err: noticeKind === 'err' }">{{ notice }}</div>
-    <p class="hint">托盘：左键单击显示/隐藏窗口，右键打开菜单（会话速览、开关与退出）。</p>
+    <p class="hint">托盘：左键单击显示/隐藏窗口，右键打开菜单（开关与退出）。</p>
   </div>
 </template>
 

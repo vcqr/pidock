@@ -1,18 +1,18 @@
-//! 系统托盘：图标角标、会话速览菜单、通知、关闭到托盘、开机自启。
+//! 系统托盘：图标角标、通知、关闭到托盘、开机自启。
 //!
-//! 数据流分两路：
-//! - 前端 tray-bridge 通过 `tray_update` 推会话列表（标题/状态/待处理）→ 菜单、角标、tooltip；
-//! - Rust watcher 直接消费 host 事件广播（agent_state_changed / automation.run_finished）
-//!   → 系统通知。通知只在本体窗口隐藏或失焦时发出，避免前台打扰。
-use std::collections::HashSet;
+//! 全部由 Rust watcher 消费 host 事件广播驱动（agent_state_changed /
+//! session_meta / automation.run_finished），不需要前端推送：
+//! - watcher 维护「当前等待确认的会话集合」→ 角标图标与 tooltip；
+//! - 等待/自动化结束在窗口隐藏或失焦时发系统通知（title 从 session_meta 缓存）。
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use pidock_protocol::{ephemeral, Envelope};
+use pidock_protocol::{ephemeral, event, Envelope};
 use serde::{Deserialize, Serialize};
 use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{image::Image, AppHandle, Emitter, Manager};
+use tauri::{image::Image, AppHandle, Manager};
 use tokio::sync::broadcast;
 
 /// 桌面端本地偏好（%APPDATA%/app.pidock.desktop/desktop.json），与 host 的 settings.json 无关
@@ -37,23 +37,12 @@ impl Default for DesktopConfig {
     }
 }
 
-/// 前端推送的单会话速览（tray-bridge 从 store 组装）
-#[derive(Debug, Clone, Deserialize)]
-pub struct SessionEntry {
-    pub id: String,
-    pub title: String,
-    #[serde(default)]
-    pub state: String,
-    /// "approval" | "ask" | null
-    #[serde(default)]
-    pub pending: Option<String>,
-}
-
 pub struct TrayState {
     config: Mutex<DesktopConfig>,
-    sessions: Mutex<Vec<SessionEntry>>,
-    /// 已发过等待通知的会话；状态离开 waiting 时移除，避免同一等待重复打扰
-    waiting_notified: Mutex<HashSet<String>>,
+    /// 会话标题缓存（session_meta 事件，通知文案用）
+    titles: Mutex<HashMap<String, String>>,
+    /// 当前处于等待确认/提问状态的会话；同时承担等待通知去重（状态离开 waiting 时移除）
+    waiting: Mutex<HashSet<String>>,
     hint_shown: AtomicBool,
     tray: Mutex<Option<TrayIcon>>,
     icon_normal: Image<'static>,
@@ -86,50 +75,11 @@ fn save_config(app: &AppHandle, cfg: &DesktopConfig) {
     }
 }
 
-/// 会话菜单项与通知里的人类可读状态；pending 优先（事件即时、session.list 是 30s 轮询）
-fn state_label(entry: &SessionEntry) -> String {
-    match entry.pending.as_deref() {
-        Some("approval") => return "等待审批".into(),
-        Some("ask") => return "等待回答".into(),
-        _ => {}
-    }
-    match entry.state.as_str() {
-        "waiting_approval" => "等待审批".into(),
-        "waiting_ask" => "等待回答".into(),
-        "thinking" | "responding" | "executing_tool" | "compacting" | "retrying" | "running" => {
-            "运行中".into()
-        }
-        "idle" => "空闲".into(),
-        "done" => "已完成".into(),
-        "error" => "出错".into(),
-        other => other.to_string(),
-    }
-}
-
-/// 会话是否处于需要用户处理的状态（角标/tooltip 用）
-fn needs_attention(entries: &[SessionEntry]) -> usize {
-    entries.iter().filter(|s| s.pending.is_some()).count()
-}
-
 fn build_menu(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<TrayState>();
-    let (cfg, sessions) = {
-        let cfg = state.config.lock().unwrap().clone();
-        let sessions = state.sessions.lock().unwrap();
-        (cfg, sessions)
-    };
+    let cfg = state.config.lock().unwrap().clone();
 
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-    let mut menu = MenuBuilder::new(app).item(&show).item(&PredefinedMenuItem::separator(app)?);
-    // 会话速览：最多 12 条，顺序跟随前端推送（近期活跃在前）
-    for s in sessions.iter().take(12) {
-        let label = format!("{}  ·  {}", s.title, state_label(s));
-        let item = MenuItem::with_id(app, format!("sess:{}", s.id), label, true, None::<&str>)?;
-        menu = menu.item(&item);
-    }
-    if !sessions.is_empty() {
-        menu = menu.item(&PredefinedMenuItem::separator(app)?);
-    }
     let notify = CheckMenuItem::with_id(
         app,
         "toggle-notify",
@@ -155,7 +105,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, "quit", "退出 PiDock", true, None::<&str>)?;
-    let menu = menu
+    let menu = MenuBuilder::new(app)
+        .item(&show)
+        .item(&PredefinedMenuItem::separator(app)?)
         .item(&notify)
         .item(&close_hide)
         .item(&autostart)
@@ -164,8 +116,18 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         .build()?;
 
     if let Some(tray) = state.tray.lock().unwrap().as_ref() {
-        let n = needs_attention(&sessions);
         let _ = tray.set_menu(Some(menu));
+    }
+    Ok(())
+}
+
+/// 按等待集合刷新角标图标与 tooltip
+fn update_attention(app: &AppHandle) {
+    let state = app.state::<TrayState>();
+    let n = state.waiting.lock().unwrap().len();
+    // guard 显式落局部变量：尾位置 if-let 的临时值会活到 state 之后（E0597）
+    let tray_guard = state.tray.lock().unwrap();
+    if let Some(tray) = tray_guard.as_ref() {
         let _ = tray.set_icon(Some(if n > 0 {
             state.icon_attention.clone()
         } else {
@@ -177,7 +139,6 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
             "PiDock".to_string()
         }));
     }
-    Ok(())
 }
 
 fn apply_autostart(app: &AppHandle, enable: bool) {
@@ -237,17 +198,6 @@ fn maybe_notify(app: &AppHandle, title: &str, body: &str) {
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
-/// 会话标题：优先前端推送的缓存，缺失时退回短 id
-fn session_title(app: &AppHandle, session_id: &str) -> String {
-    let state = app.state::<TrayState>();
-    let sessions = state.sessions.lock().unwrap();
-    sessions
-        .iter()
-        .find(|s| s.id == session_id)
-        .map(|s| s.title.clone())
-        .unwrap_or_else(|| format!("会话 {}", &session_id[..session_id.len().min(8)]))
-}
-
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
     let config = load_config(app);
     let icon_normal = Image::from_bytes(include_bytes!("../icons/tray.png"))?.to_owned();
@@ -255,8 +205,8 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     let initial_icon = icon_normal.clone();
     app.manage(TrayState {
         config: Mutex::new(config),
-        sessions: Mutex::new(Vec::new()),
-        waiting_notified: Mutex::new(HashSet::new()),
+        titles: Mutex::new(HashMap::new()),
+        waiting: Mutex::new(HashSet::new()),
         hint_shown: AtomicBool::new(false),
         tray: Mutex::new(None),
         icon_normal,
@@ -269,8 +219,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         .tooltip("PiDock")
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
-            let id = event.id().0.as_str();
-            match id {
+            match event.id().0.as_str() {
                 "show" => show_main(app),
                 "quit" => app.exit(0),
                 "toggle-notify" => {
@@ -305,12 +254,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
                     save_config(app, &cfg);
                     let _ = build_menu(app);
                 }
-                other => {
-                    if let Some(sid) = other.strip_prefix("sess:") {
-                        show_main(app);
-                        let _ = app.emit("pidock:focus-session", sid.to_string());
-                    }
-                }
+                _ => {}
             }
         })
         .on_tray_icon_event(|tray, event| {
@@ -337,8 +281,9 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 直接消费 host 事件广播的第三路：等待确认/提问、自动化任务结束 → 系统通知。
-/// 独立于前端推送，窗口隐藏时 webview 定时器被节流也不影响关键提醒。
+/// 直接消费 host 事件广播的第三路：等待确认/提问 → 角标 + 系统通知，
+/// 自动化任务结束 → 系统通知。独立于前端，窗口隐藏时 webview 定时器
+/// 被节流也不影响关键提醒。
 pub fn spawn_watcher(app: &AppHandle) {
     // broadcast::Sender::subscribe 不会失败（容量固定），直接拿接收端
     let mut rx = app.state::<broadcast::Sender<Envelope>>().subscribe();
@@ -353,18 +298,43 @@ pub fn spawn_watcher(app: &AppHandle) {
             if env.kind == ephemeral::AGENT_STATE_CHANGED {
                 let st = env.payload.get("state").and_then(|v| v.as_str()).unwrap_or("");
                 let state = app.state::<TrayState>();
-                let is_waiting = st == "waiting_approval" || st == "waiting_ask";
-                if is_waiting {
-                    let fresh = state.waiting_notified.lock().unwrap().insert(env.session_id.clone());
-                    drop(state);
-                    if fresh {
-                        let title = session_title(&app, &env.session_id);
-                        let what =
-                            if st == "waiting_approval" { "等待你的确认" } else { "等待你的回答" };
-                        maybe_notify(&app, "PiDock · 需要你处理", &format!("会话「{title}」{what}"));
+                let changed = {
+                    let mut waiting = state.waiting.lock().unwrap();
+                    if st == "waiting_approval" || st == "waiting_ask" {
+                        waiting.insert(env.session_id.clone())
+                    } else {
+                        waiting.remove(&env.session_id)
                     }
-                } else {
-                    state.waiting_notified.lock().unwrap().remove(&env.session_id);
+                };
+                drop(state);
+                if !changed {
+                    continue;
+                }
+                update_attention(&app);
+                if st == "waiting_approval" || st == "waiting_ask" {
+                    // 先落局部变量：块尾表达式里的 MutexGuard 临时值会活到 state 之后（E0597）
+                    let title = {
+                        let state = app.state::<TrayState>();
+                        let cached = state.titles.lock().unwrap().get(&env.session_id).cloned();
+                        cached.unwrap_or_else(|| {
+                            format!("会话 {}", &env.session_id[..env.session_id.len().min(8)])
+                        })
+                    };
+                    let what =
+                        if st == "waiting_approval" { "等待你的确认" } else { "等待你的回答" };
+                    maybe_notify(&app, "PiDock · 需要你处理", &format!("会话「{title}」{what}"));
+                }
+            } else if env.kind == event::SESSION_META {
+                // host 生成/更新会话标题后推送，缓存给通知文案
+                if let Some(name) = env.payload.get("name").and_then(|v| v.as_str()) {
+                    if !name.is_empty() {
+                        let state = app.state::<TrayState>();
+                        state
+                            .titles
+                            .lock()
+                            .unwrap()
+                            .insert(env.session_id.clone(), name.to_string());
+                    }
                 }
             } else if env.kind == "automation.run_finished" {
                 let status = env.payload.get("status").and_then(|v| v.as_str()).unwrap_or("");
@@ -384,12 +354,6 @@ pub fn spawn_watcher(app: &AppHandle) {
             }
         }
     });
-}
-
-#[tauri::command]
-pub fn tray_update(app: AppHandle, sessions: Vec<SessionEntry>) -> Result<(), String> {
-    *app.state::<TrayState>().sessions.lock().unwrap() = sessions;
-    build_menu(&app).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

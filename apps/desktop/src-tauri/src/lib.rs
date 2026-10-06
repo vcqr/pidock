@@ -122,7 +122,6 @@ pub fn run() {
             sync::sync_configure,
             sync::sync_status,
             sync::sync_disable,
-            tray::tray_update,
             tray::desktop_config_get,
             tray::desktop_config_set,
             pick_folder,

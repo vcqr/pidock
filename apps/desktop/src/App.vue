@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, provide, ref, watch } from "vue";
+import { computed, onMounted, provide, ref, watch } from "vue";
 import { darkTheme, NConfigProvider, NSplit } from "naive-ui";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AutomationView,
@@ -26,7 +25,6 @@ import {
 import { createTauriBus } from "./bus";
 import SyncSettings from "./SyncSettings.vue";
 import DesktopSettings from "./DesktopSettings.vue";
-import { startTrayBridge } from "./tray-bridge";
 
 initTheme();
 const naiveTheme = computed(() => (themeMode.value === "dark" ? darkTheme : undefined));
@@ -211,18 +209,6 @@ onMounted(async () => {
     await s.start();
     store.value = s;
 
-    // 托盘桥：会话状态推送 + 托盘菜单点击会话跳回（Rust 发 pidock:focus-session）
-    startTrayBridge(s);
-    let unlistenFocus: (() => void) | undefined;
-    if (appWin) {
-      unlistenFocus = await listen<string>("pidock:focus-session", (ev) => {
-        showSettings.value = false;
-        showAutomation.value = false;
-        showExperts.value = false;
-        void s.openSession(ev.payload);
-      });
-    }
-
     // auto-refresh the session list when an unknown session shows up
     let pending = false;
     void bus.onEvent((e) => {
@@ -237,7 +223,6 @@ onMounted(async () => {
       }
     });
     setInterval(() => void s.refreshSessions(), 30000);
-    onUnmounted(() => unlistenFocus?.());
   } catch (err) {
     bootError.value = String(err);
   }

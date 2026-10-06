@@ -209,8 +209,9 @@ export function createAgentStore(bus: DataBus) {
   const pendingApproval = ref<{ approvalId: string; toolName: string; args: string } | null>(null);
   /** 待用户回答的 AskUserQuestion 问题卡（仅活动会话展示；timeoutSec=倒计时秒数，0/缺省不限时） */
   const pendingAsk = ref<{ askId: string; question: AskQuestion; timeoutSec?: number } | null>(null);
-  /** 每会话待处理交互（审批/提问），不分活动/后台——后台会话等待确认的托盘提醒与
-   * 切会话恢复都依赖它；host 对离开 waiting 状态会补发 agent_state_changed，据此清除 */
+  /** 每会话待处理交互（审批/提问），不分活动/后台——后台会话的等待不再被
+   * activeId 过滤器丢弃，切会话回来时审批卡/问题卡能从中恢复；
+   * host 对离开 waiting 状态会补发 agent_state_changed，据此清除 */
   const pendingBySession = ref<Record<string, PendingInteraction>>({});
   /** 当前回合开始时间；结束后保留并写入 turnEndedAt（「已工作 · 耗时」折叠行用） */
   const turnStartedAt = ref<number | null>(null);
