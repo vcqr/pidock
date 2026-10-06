@@ -367,7 +367,7 @@ onBeforeUnmount(() => {
                 >
                   <Icon name="arrow-down-s-line" :size="12" />
                 </span>
-                <Icon name="folder-line" :size="15" />
+                <Icon :name="collapsed.has(g.project) ? 'folder-line' : 'folder-open-line'" :size="15" />
                 <span class="fname">{{ g.project }}</span>
                 <span class="g-count">{{ g.sessions.length }}</span>
               </div>
