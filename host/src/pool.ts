@@ -158,6 +158,66 @@ export class SessionPool {
     return this.modelRuntimePromise;
   }
 
+  /**
+   * 重建 ModelRuntime（models.json 被外部编辑或配置页写入后调用）。
+   * ModelRuntime 在进程内只建一次、不监听磁盘，旧对象上的 contextWindow 等
+   * 定义是构建时的快照；重建后把空闲中的已开会话重新对齐到新目录——只在
+   * 定义确实变化时 setModel（避免无谓的 model_change 条目），忙碌会话跳过
+   * （新目录对它们下一次显式 setModel 时生效）。
+   */
+  async reloadRuntime(): Promise<{
+    providers: number;
+    models: number;
+    refreshed_sessions: number;
+    skipped_busy: number;
+  }> {
+    this.modelRuntimePromise = ModelRuntime.create();
+    const mr = await this.modelRuntimePromise;
+    const providers = mr.getProviders() as unknown as Array<{ id: string }>;
+    const modelCount = providers.reduce((n, p) => n + mr.getModels(p.id).length, 0);
+    let refreshed = 0;
+    let skippedBusy = 0;
+    // 定义指纹：这些字段变化才值得打断会话换模型对象
+    const fingerprint = (m: Record<string, any> | undefined): string =>
+      JSON.stringify({
+        contextWindow: m?.contextWindow,
+        maxTokens: m?.maxTokens,
+        reasoning: m?.reasoning,
+        input: m?.input,
+        baseUrl: m?.baseUrl,
+        api: m?.api,
+        cost: m?.cost,
+      });
+    for (const [sid, tracked] of this.sessions) {
+      if (this.stateOf(sid) !== "idle") {
+        skippedBusy++;
+        continue;
+      }
+      const current = tracked.session.model as Record<string, any> | undefined;
+      if (!current?.provider || !current.id) continue;
+      const fresh = mr.getModel(current.provider, current.id) as Record<string, any> | undefined;
+      if (!fresh) continue; // 新目录里没有：保留旧对象，请求失败由 SDK 自行报错
+      if (fingerprint(current) === fingerprint(fresh)) continue;
+      try {
+        await tracked.session.setModel(fresh as never);
+        refreshed++;
+        const entry = this.readRegistry().find((e) => e.session_id === sid);
+        if (entry) {
+          entry.model = `${current.provider}/${current.id}`;
+          this.writeRegistryEntry(entry);
+        }
+      } catch {
+        // 单会话对齐失败不阻塞整体重载
+      }
+    }
+    return {
+      providers: providers.length,
+      models: modelCount,
+      refreshed_sessions: refreshed,
+      skipped_busy: skippedBusy,
+    };
+  }
+
   private async resolveModel(ref?: string): Promise<object | undefined> {
     if (!ref) return undefined;
     const slash = ref.indexOf("/");

@@ -473,6 +473,26 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
     flash(String(err));
   }
 }
+
+/** 手动重载模型目录（models.json 被外部编辑后；配置页保存会自动触发，无需点这里） */
+const reloading = ref(false);
+async function reloadRuntime(): Promise<void> {
+  if (reloading.value) return;
+  reloading.value = true;
+  try {
+    const r = await props.bus.request("config.reload_runtime", {});
+    if (r?.runtime_error) flash(`重载失败：${r.runtime_error}`);
+    else {
+      const aligned = Number(r?.refreshed_sessions) || 0;
+      flash(`模型目录已重载：${r?.providers ?? "?"} 个供应商 / ${r?.models ?? "?"} 个模型${aligned ? `，${aligned} 个已开会话已对齐` : ""}`);
+    }
+    await load();
+  } catch (err) {
+    flash(String(err));
+  } finally {
+    reloading.value = false;
+  }
+}
 </script>
 
 <template>
@@ -498,9 +518,14 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
         </button>
         <div v-if="!filtered.length && !loading" class="state small">没有匹配的供应商</div>
       </div>
-      <button class="add-btn" @click="startAdd">
-        <Icon name="add-line" :size="15" />添加供应商
-      </button>
+      <div class="add-row">
+        <button class="add-btn" @click="startAdd">
+          <Icon name="add-line" :size="15" />添加供应商
+        </button>
+        <button class="add-btn" :disabled="reloading" title="重新加载 models.json（直接编辑过配置文件后点这里，已开会话同步对齐）" @click="reloadRuntime">
+          <Icon name="refresh-line" :size="15" />{{ reloading ? "重载中…" : "重载模型目录" }}
+        </button>
+      </div>
     </aside>
 
     <!-- 右：详情 / 表单 -->
@@ -888,6 +913,9 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   cursor: pointer;
 }
 .add-btn:hover { color: var(--pd-text); border-color: var(--pd-accent); }
+.add-btn:disabled { opacity: 0.6; cursor: default; }
+.add-row { display: flex; gap: 8px; }
+.add-row .add-btn { flex: 1; }
 
 /* 右栏 */
 .detail-pane {

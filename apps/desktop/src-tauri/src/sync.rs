@@ -328,6 +328,7 @@ async fn execute_command(
             | "session.tree"
             | "session.navigate_tree"
             | "config.prompts.list"
+            | "config.reload_runtime"
             | "session.thinking_info"
             | "session.trust") => {
             let mut p = payload.clone();

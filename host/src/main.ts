@@ -58,6 +58,7 @@ const handlers: Record<string, Handler> = {
   [Method.CONFIG_PROVIDER_REMOVE_KEY]: (p) => config.providerRemoveKey(p),
   [Method.CONFIG_MODELS_LIST]: () => config.modelsList(),
   [Method.CONFIG_MODELS_SET_DEFAULT]: (p) => config.modelsSetDefault(p),
+  [Method.CONFIG_RELOAD_RUNTIME]: () => pool.reloadRuntime(),
   [Method.MODEL_OVERRIDE_SET]: (p) => config.modelOverrideSet(p),
   [Method.CONFIG_EXTENSIONS_LIST]: (p) => config.extensionsList(p),
   [Method.CONFIG_EXTENSIONS_TOGGLE]: (p) => config.extensionsToggle(p),

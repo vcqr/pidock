@@ -262,6 +262,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
         case "session.navigate_tree":
         case "config.prompts.list":
         case "session.thinking_info":
+        case "config.reload_runtime":
         case "session.trust": {
           // 新一代会话级命令：桌面端按同名 method 透传给 host
           const { session_id, ...payload } = params ?? {};

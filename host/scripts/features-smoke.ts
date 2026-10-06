@@ -222,6 +222,11 @@ async function main(): Promise<void> {
   void trustState;
   ok("trust write — 重写 true 无异常");
 
+  // 重载模型目录（重建 ModelRuntime + 空闲会话对齐）
+  const rl = await request("config.reload_runtime", {});
+  if (!Number(rl.providers) || !Number(rl.models)) fail("reload_runtime", `providers=${rl.providers} models=${rl.models}`);
+  ok(`reload_runtime — ${rl.providers} 供应商 / ${rl.models} 模型，对齐 ${rl.refreshed_sessions} 会话（忙碌跳过 ${rl.skipped_busy}）`);
+
   // 收尾
   await request("session.close", { session_id: sid });
   await request("session.remove", { session_ids: [sid, declined.session_id] });

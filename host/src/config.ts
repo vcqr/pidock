@@ -540,8 +540,12 @@ export class ConfigService {
   // ------------------------------------------------------------- models.json
   // 自定义模型供应商（pi 的 models.json），供桌面端「模型供应商」页读写
 
-  /** 设置/清除内置模型的覆盖配置（写入 models.json providers[id].modelOverrides，运行时实时应用） */
-  modelOverrideSet(params: { provider: string; model: string; override: Json | null }): { ok: true } {
+  /**
+   * 设置/清除内置模型的覆盖配置（写入 models.json providers[id].modelOverrides）。
+   * 写盘后重建 ModelRuntime（写进程内只建一次、不监听磁盘），返回 runtime 摘要
+   * 或 runtime_error（保存的配置本身非法时 ModelRuntime.create 会抛）。
+   */
+  async modelOverrideSet(params: { provider: string; model: string; override: Json | null }): Promise<{ ok: true; runtime?: Json; runtime_error?: string }> {
     const provider = (params.provider ?? "").trim();
     const model = (params.model ?? "").trim();
     if (!provider || !model) throw new RpcError("bad_request", "provider and model are required");
@@ -563,7 +567,7 @@ export class ConfigService {
       config.providers[provider] = entry;
     }
     writeJson(path, config);
-    return { ok: true };
+    return { ok: true, ...(await this.reloadRuntimeSafe()) };
   }
 
   customProvidersGet(): { config: Json | null; path: string } {
@@ -571,7 +575,7 @@ export class ConfigService {
     return { config: readJson(path), path };
   }
 
-  customProvidersSet(params: { id: string; entry: Json }): { ok: true } {
+  async customProvidersSet(params: { id: string; entry: Json }): Promise<{ ok: true; runtime?: Json; runtime_error?: string }> {
     const id = (params.id ?? "").trim();
     if (!id || /\s/.test(id)) throw new RpcError("bad_request", "provider id is required and must not contain whitespace");
     if (!params.entry || typeof params.entry !== "object" || Array.isArray(params.entry)) {
@@ -582,19 +586,30 @@ export class ConfigService {
     if (!config.providers || typeof config.providers !== "object") config.providers = {};
     config.providers[id] = params.entry;
     writeJson(path, config);
-    return { ok: true };
+    return { ok: true, ...(await this.reloadRuntimeSafe()) };
   }
 
-  customProvidersRemove(params: { id: string }): { ok: true } {
+  async customProvidersRemove(params: { id: string }): Promise<{ ok: true; runtime?: Json; runtime_error?: string }> {
     const id = (params.id ?? "").trim();
     if (!id) throw new RpcError("bad_request", "id is required");
     const path = join(getAgentDir(), "models.json");
+    let removed = false;
     const config = readJson(path);
     if (config?.providers && typeof config.providers === "object" && id in config.providers) {
       delete config.providers[id];
       writeJson(path, config);
+      removed = true;
     }
-    return { ok: true };
+    return { ok: true, ...(removed ? await this.reloadRuntimeSafe() : {}) };
+  }
+
+  /** 重建 ModelRuntime；失败不抛（写盘已成功），错误随 runtime_error 返回给 UI 展示 */
+  private async reloadRuntimeSafe(): Promise<{ runtime?: Json; runtime_error?: string }> {
+    try {
+      return { runtime: (await this.pool.reloadRuntime()) as Json };
+    } catch (err) {
+      return { runtime_error: String(err instanceof Error ? err.message : err) };
+    }
   }
 
   /** 获取供应商的模型列表（OpenAI 兼容 /models，anthropic 走 /v1/models） */

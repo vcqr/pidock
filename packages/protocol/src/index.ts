@@ -369,6 +369,8 @@ export const Method = {
   CONFIG_PROVIDER_REMOVE_KEY: "config.providers.remove_key",
   CONFIG_MODELS_LIST: "config.models.list",
   CONFIG_MODELS_SET_DEFAULT: "config.models.set_default",
+  /** 重建 ModelRuntime（models.json 被外部修改后手动触发；配置页写盘后自动触发） */
+  CONFIG_RELOAD_RUNTIME: "config.reload_runtime",
   CONFIG_EXTENSIONS_LIST: "config.extensions.list",
   CONFIG_EXTENSIONS_TOGGLE: "config.extensions.toggle",
   CONFIG_EXTENSION_READ: "config.extensions.read",
