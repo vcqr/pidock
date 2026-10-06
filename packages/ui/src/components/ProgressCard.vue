@@ -95,14 +95,8 @@ function copyPath(): void {
   <aside v-if="expanded" class="pcol">
     <header class="head">
       <template v-if="expert">
-        <span
-          class="head-avatar"
-          :style="!expert.avatar && expert.avatar_color ? { background: expert.avatar_color, color: '#fff' } : undefined"
-        >
-          <img v-if="expert.avatar" :src="expert.avatar" alt="" />
-          <Icon v-else :name="expert.icon || 'user-star-line'" :size="14" />
-        </span>
-        <span class="title">{{ expert.name }}</span>
+        <Icon name="user-star-line" :size="14" />
+        <span class="title">专家</span>
       </template>
       <template v-else>
         <Icon name="check-double-line" :size="14" />
@@ -115,16 +109,31 @@ function copyPath(): void {
       </button>
     </header>
 
-    <!-- 专家段：绑定专家的角色与资源配置摘要 -->
-    <div v-if="expert" class="expert">
-      <div class="e-name" :title="expert.description">{{ expert.name }}</div>
-      <div v-if="expert.description" class="e-desc">{{ expert.description }}</div>
-      <p class="e-prompt" :title="expert.prompt">{{ expert.prompt || "（未填写角色提示词）" }}</p>
-      <div class="e-tags">
-        <span class="tag" :title="expert.skills.join('、')">技能 {{ expert.skills.length || "不限" }}</span>
-        <span class="tag" :title="expert.extensions.join('、')">MCP {{ expert.extensions.length || "不限" }}</span>
-        <span v-if="expert.exclude_tools?.length" class="tag">禁 {{ expert.exclude_tools.join("/") }}</span>
-        <span v-if="expert.knowledge_dirs.length" class="tag">知识库 {{ expert.knowledge_dirs.length }}</span>
+    <!-- 专家档案卡：人物介绍式排版（居中头像 + 名称/简介 + 角色提示词 + 资源标签） -->
+    <div v-if="expert" class="expert-card">
+      <div class="e-hero">
+        <span
+          class="e-avatar"
+          :style="!expert.avatar && expert.avatar_color ? { background: expert.avatar_color, color: '#fff', borderColor: expert.avatar_color } : undefined"
+        >
+          <img v-if="expert.avatar" :src="expert.avatar" alt="" />
+          <Icon v-else :name="expert.icon || 'user-star-line'" :size="28" />
+        </span>
+        <div class="e-name">{{ expert.name }}</div>
+        <div class="e-desc">{{ expert.description || "专家智能体" }}</div>
+      </div>
+      <div class="e-sec">
+        <div class="e-label">角色定位</div>
+        <p class="e-prompt" :title="expert.prompt">{{ expert.prompt || "（未填写角色提示词）" }}</p>
+      </div>
+      <div class="e-sec">
+        <div class="e-label">资源配置</div>
+        <div class="e-tags">
+          <span class="tag" :title="expert.skills.join('、')">技能 {{ expert.skills.length || "不限" }}</span>
+          <span class="tag" :title="expert.extensions.join('、')">MCP {{ expert.extensions.length || "不限" }}</span>
+          <span v-if="expert.exclude_tools?.length" class="tag warn">禁 {{ expert.exclude_tools.join("/") }}</span>
+          <span v-if="expert.knowledge_dirs.length" class="tag">知识库 {{ expert.knowledge_dirs.length }}</span>
+        </div>
       </div>
     </div>
 
@@ -215,50 +224,60 @@ function copyPath(): void {
 }
 .hbtn:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 
-.head-avatar {
-  width: 20px;
-  height: 20px;
+/* 专家档案卡：人物介绍式排版 */
+.expert-card {
+  margin-top: 10px;
+  padding: 18px 12px 12px;
+  background: var(--pd-bg);
+  border: 1px solid var(--pd-border-soft);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  flex: none;
+}
+.e-hero { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.e-avatar {
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
   overflow: hidden;
   display: grid;
   place-items: center;
   background: var(--pd-bg-hover);
   color: var(--pd-accent);
+  border: 2px solid var(--pd-border);
   flex: none;
 }
-.head-avatar img { width: 100%; height: 100%; object-fit: cover; }
-
-/* 专家段：与项目段同款卡片，头像行 + 描述 + 提示词摘要 + 资源标签 */
-.expert {
-  margin-top: 10px;
-  padding: 9px 10px;
-  background: var(--pd-bg);
-  border: 1px solid var(--pd-border-soft);
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  flex: none;
-}
-.e-name { font-size: 13px; font-weight: 600; color: var(--pd-accent); }
+.e-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.e-name { font-size: 14px; font-weight: 700; color: var(--pd-text); text-align: center; }
 .e-desc {
   font-size: 11.5px;
   color: var(--pd-text-3);
+  text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 100%;
+}
+.e-sec { border-top: 1px dashed var(--pd-border-soft); margin-top: 14px; padding-top: 10px; }
+.e-label {
+  font-size: 10.5px;
+  color: var(--pd-text-4);
+  letter-spacing: 1px;
+  margin-bottom: 5px;
 }
 .e-prompt {
   margin: 0;
-  font-size: 11.5px;
-  color: var(--pd-text-3);
-  line-height: 1.55;
+  font-size: 12px;
+  color: var(--pd-text-2);
+  line-height: 1.65;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.e-tags { display: flex; gap: 5px; flex-wrap: wrap; }
+.e-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.tag.warn { color: var(--pd-red); border-color: color-mix(in srgb, var(--pd-red) 35%, transparent); }
 
 .proj {
   margin-top: 10px;
