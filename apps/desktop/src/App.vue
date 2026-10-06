@@ -43,12 +43,21 @@ const newTaskMode = ref(false);
 const newTaskExpert = ref<{ id: string; name: string } | null>(null);
 /** 新建任务预选的项目目录（侧栏项目分组点击）；seq 自增让重复点击同一目录也能重新应用选中 */
 const newTaskCwd = ref<{ cwd: string; seq: number } | null>(null);
+/** 项目文件浏览面板（侧栏项目右键「查看项目文件」）；seq 自增支持同项目重复触发刷新 */
+const browseCwd = ref<{ cwd: string; seq: number } | null>(null);
 const bus = createTauriBus();
 
 function startNewTask(cwd?: string, expert?: { id: string; name: string } | null): void {
   newTaskMode.value = true;
   newTaskExpert.value = expert ?? null;
   newTaskCwd.value = cwd ? { cwd, seq: (newTaskCwd.value?.seq ?? 0) + 1 } : null;
+}
+
+/** 移除项目：把该 cwd 下全部会话从列表移除（注册表条目；磁盘文件保留，确认弹窗在侧栏） */
+function removeProject(cwd: string): void {
+  const s = store.value;
+  if (!s) return;
+  void s.removeSessions(s.sessions.filter((x) => x.cwd === cwd).map((x) => x.session_id));
 }
 
 /** 专家页「对话」：立即创建绑定该专家的会话并进入聊天。
@@ -252,6 +261,9 @@ onMounted(async () => {
         @select="(id) => { showAutomation = false; showExperts = false; store?.openSession(id); }"
         @new-task="() => { showAutomation = false; showExperts = false; startNewTask(); }"
         @open-project="(cwd) => { showAutomation = false; showExperts = false; startNewTask(cwd); }"
+        @browse-project="(cwd) => { showAutomation = false; showExperts = false; browseCwd = { cwd, seq: (browseCwd?.seq ?? 0) + 1 }; }"
+        @remove-project="removeProject"
+        @remove-session="(id) => store?.removeSessions([id])"
         @rename="(id, name) => store?.renameSession(id, name)"
         @open-settings="(tab) => openSettings(tab)"
         @open-automation="() => { showAutomation = !showAutomation; if (showAutomation) showExperts = false; }"
@@ -293,6 +305,8 @@ onMounted(async () => {
           :new-task="newTaskMode"
           :new-task-cwd="newTaskCwd"
           :new-task-expert="newTaskExpert"
+          :files-cwd="browseCwd"
+          @close-files="browseCwd = null"
           :model="store.sessions.find((s) => s.session_id === store?.activeId)?.model"
           @open-settings="(tab) => openSettings(tab)"
           @open-providers="() => openSettings('providers')"

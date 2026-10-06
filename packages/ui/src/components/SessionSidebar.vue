@@ -28,6 +28,12 @@ const emit = defineEmits<{
   "new-task": [];
   /** 点击项目分组目录行：右侧打开默认输入页并预选该目录 */
   "open-project": [cwd: string];
+  /** 项目右键「查看项目文件」：右侧停靠文件浏览面板 */
+  "browse-project": [cwd: string];
+  /** 项目右键「移除项目」：移除该项目全部会话的列表记录（已确认过） */
+  "remove-project": [cwd: string];
+  /** 会话右键「删除会话」：移除该会话的列表记录（已确认过） */
+  "remove-session": [sessionId: string];
   /** 重命名会话（host 写注册表 name） */
   rename: [sessionId: string, name: string];
   "open-settings": [tab?: string];
@@ -47,19 +53,41 @@ const collapsed = ref(new Set<string>());
 const expanded = ref(new Set<string>());
 const PREVIEW = 5;
 
-// ---- 会话右键菜单 ----
+// ---- 右键菜单（会话行 / 项目行共用关闭机制与样式） ----
 const revealPath = inject(REVEAL_PATH, null);
 const ctxMenu = ref<{ x: number; y: number; s: SessionSummaryUi } | null>(null);
 function openCtxMenu(e: MouseEvent, s: SessionSummaryUi): void {
-  // 菜单尺寸约 224×330，贴边时向内收
+  // 菜单尺寸约 224×370，贴边时向内收
   ctxMenu.value = {
     x: Math.min(e.clientX, window.innerWidth - 232),
-    y: Math.min(e.clientY, window.innerHeight - 338),
+    y: Math.min(e.clientY, window.innerHeight - 378),
     s,
+  };
+}
+const projMenu = ref<{ x: number; y: number; g: Group } | null>(null);
+function openProjMenu(e: MouseEvent, g: Group): void {
+  // 菜单尺寸约 208×240，贴边时向内收
+  projMenu.value = {
+    x: Math.min(e.clientX, window.innerWidth - 216),
+    y: Math.min(e.clientY, window.innerHeight - 250),
+    g,
   };
 }
 function closeCtxMenu(): void {
   ctxMenu.value = null;
+  projMenu.value = null;
+}
+
+// ---- 移除项目 / 删除会话（host 只删注册表条目，磁盘上的会话文件保留） ----
+function confirmRemoveProject(g: Group): void {
+  projMenu.value = null;
+  const msg = `移除项目「${g.project}」？\n\n将把它的 ${g.sessions.length} 个会话从列表移除（不删除项目目录；磁盘上的会话记录文件保留，但界面中将无法再打开）。`;
+  if (window.confirm(msg)) emit("remove-project", g.cwd);
+}
+function confirmRemoveSession(s: SessionSummaryUi): void {
+  ctxMenu.value = null;
+  const msg = `删除会话「${s.name || basename(s.cwd)}」？\n\n将从列表移除该会话记录（磁盘上的会话文件保留）。`;
+  if (window.confirm(msg)) emit("remove-session", s.session_id);
 }
 
 // ---- 置顶（UI 本地偏好，localStorage 持久化） ----
@@ -325,7 +353,12 @@ onBeforeUnmount(() => {
           </button>
           <template v-if="!projectsCollapsed">
             <template v-for="g in groups" :key="g.cwd + g.project">
-              <div class="folder-row" :title="g.cwd" @click="emit('open-project', g.cwd)">
+              <div
+                class="folder-row"
+                :title="g.cwd"
+                @click="emit('open-project', g.cwd)"
+                @contextmenu.prevent="openProjMenu($event, g)"
+              >
                 <span
                   class="chev"
                   :class="{ fold: collapsed.has(g.project) }"
@@ -480,6 +513,29 @@ onBeforeUnmount(() => {
         <div class="ctx-sep"></div>
         <button class="ctx-item" @click="emit('open-settings'); closeCtxMenu()">前往配置</button>
       </template>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item danger" @click="confirmRemoveSession(ctxMenu!.s)">删除会话</button>
+    </div>
+
+    <!-- 项目右键菜单 -->
+    <div
+      v-if="projMenu"
+      class="ctx-menu"
+      :style="{ left: projMenu.x + 'px', top: projMenu.y + 'px' }"
+      @click.stop
+      @contextmenu.prevent
+    >
+      <button class="ctx-item" @click="emit('open-project', projMenu!.g.cwd); closeCtxMenu()">新建任务</button>
+      <button class="ctx-item" @click="emit('browse-project', projMenu!.g.cwd); closeCtxMenu()">查看项目文件</button>
+      <div class="ctx-sep"></div>
+      <button
+        v-if="revealPath"
+        class="ctx-item"
+        @click="revealPath(projMenu!.g.cwd); closeCtxMenu()"
+      >在资源管理器中打开</button>
+      <button class="ctx-item" @click="copyText(projMenu!.g.cwd)">复制项目路径</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item danger" @click="confirmRemoveProject(projMenu!.g)">移除项目</button>
     </div>
 
     <div class="sb-foot">
@@ -739,6 +795,8 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 .ctx-item:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+.ctx-item.danger { color: var(--pd-red); }
+.ctx-item.danger:hover { background: var(--pd-bg-hover); color: var(--pd-red); }
 .ctx-sep { height: 1px; background: var(--pd-border-soft); margin: 4px 6px; }
 .dot.busy { background: var(--pd-yellow); animation: pulse 1.6s ease-in-out infinite; }
 .dot.err { background: var(--pd-red); }

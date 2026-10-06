@@ -4,6 +4,7 @@ import { NSplit } from "naive-ui";
 import type { AgentStore, ExpertInfo, UiItem } from "../store.js";
 import { formatSpan, greeting } from "../utils/time.js";
 import FileIcon from "./FileIcon.vue";
+import FilesPanel from "./FilesPanel.vue";
 import MdContent from "./MdContent.vue";
 import ReviewPanel from "./ReviewPanel.vue";
 import Composer from "./Composer.vue";
@@ -23,11 +24,18 @@ const props = withDefaults(
     newTaskCwd?: { cwd: string; seq: number } | null;
     /** 新任务预雇佣的专家（专家页「雇佣」按钮进入）；雇佣后随首条消息绑定到新会话 */
     newTaskExpert?: { id: string; name: string } | null;
+    /** 项目文件浏览面板（侧栏项目右键「查看项目文件」）；seq 支持同项目重复触发刷新 */
+    filesCwd?: { cwd: string; seq: number } | null;
   }>(),
   { disabled: false },
 );
 
-const emit = defineEmits<{ "open-settings": [tab?: string]; "open-providers": [] }>();
+const emit = defineEmits<{
+  "open-settings": [tab?: string];
+  "open-providers": [];
+  /** 关闭项目文件浏览面板 */
+  "close-files": [];
+}>();
 
 const scroller = ref<HTMLElement | null>(null);
 const preset = ref("");
@@ -522,6 +530,7 @@ watch(
 
 <template>
   <div ref="chatEl" class="chat" :class="{ home }">
+    <div class="chat-body">
     <!-- home: watermark + greeting + composer -->
     <div v-if="home" class="home-wrap">
       <div class="watermark">π</div>
@@ -570,8 +579,7 @@ watch(
     </div>
 
     <!-- conversation -->
-    <template v-else>
-      <div class="conv-row">
+    <div v-else class="conv-row">
       <n-split
         direction="horizontal"
         class="chat-split"
@@ -709,7 +717,16 @@ watch(
       <!-- 任务进度第三栏（TodoWrite 推送或雇佣专家时停靠展开；收起为悬浮小圆标） -->
       <ProgressCard :store="store" :expert="activeExpert" />
       </div>
-    </template>
+      <!-- 项目文件浏览面板（侧栏项目右键「查看项目文件」停靠；首页新建任务模式下同样可用） -->
+      <FilesPanel
+        v-if="filesCwd"
+        :key="filesCwd.seq"
+        :cwd="filesCwd.cwd"
+        :load-files="store.listWorkspaceFiles"
+        :read-file="store.readWorkspaceFile"
+        @close="emit('close-files')"
+      />
+    </div>
   </div>
 </template>
 
@@ -767,6 +784,14 @@ export default { components: { ToolCard, MessageItem } };
   min-height: 0;
 }
 .chat.home { background: var(--pd-bg); }
+/* 对话主体行：home 页 / 会话区 与 项目文件面板 的水平容器 */
+.chat-body {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
 .home-wrap {
   flex: 1;
   position: relative;

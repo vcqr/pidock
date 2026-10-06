@@ -546,6 +546,50 @@ export function createAgentStore(bus: DataBus) {
     }
   }
 
+  /**
+   * 从列表移除会话（host 只删注册表条目，磁盘 JSONL 保留）。
+   * 同步清理各组件的 UI 本地偏好（侧栏置顶、第三栏收起记忆、输入卡自定义项目），
+   * 活动会话在删除之列时复位回首页。
+   */
+  async function removeSessions(ids: string[]): Promise<void> {
+    const valid = [...new Set(ids.filter((x) => typeof x === "string" && x))];
+    if (!valid.length) return;
+    const cwds = new Set(
+      sessions.value.filter((s) => valid.includes(s.session_id)).map((s) => s.cwd).filter(Boolean),
+    );
+    try {
+      await bus.request("session.remove", { session_ids: valid });
+    } catch (err) {
+      lastError.value = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    const idSet = new Set(valid);
+    const scrub = (key: string, drop: (v: string) => boolean): void => {
+      try {
+        const raw = JSON.parse(localStorage.getItem(key) ?? "[]");
+        if (!Array.isArray(raw)) return;
+        const next = raw.filter((x) => typeof x === "string" && !drop(x));
+        if (next.length !== raw.length) localStorage.setItem(key, JSON.stringify(next));
+      } catch {
+        // localStorage 不可用时忽略
+      }
+    };
+    scrub("pidock.pinnedSessions", (v) => idSet.has(v));
+    scrub("pidock.progressChips", (v) => idSet.has(v));
+    if (cwds.size) scrub("pidock.customProjects", (v) => cwds.has(v));
+    if (activeId.value && idSet.has(activeId.value)) {
+      activeId.value = null;
+      items.value = [];
+      liveTools = new Map();
+      streaming = null;
+      agentState.value = "idle";
+      lastError.value = null;
+      pendingApproval.value = null;
+      pendingAsk.value = null;
+    }
+    await refreshSessions();
+  }
+
   /** 回复工具审批请求 */
   async function resolveApproval(approved: boolean): Promise<void> {
     const p = pendingApproval.value;
@@ -610,6 +654,14 @@ export function createAgentStore(bus: DataBus) {
     } catch {
       return [];
     }
+  }
+
+  /** 读取工作区内文本文件（文件浏览预览）；失败抛错由调用方展示 */
+  async function readWorkspaceFile(
+    cwd: string,
+    path: string,
+  ): Promise<{ text: string; truncated: boolean; binary: boolean; size: number }> {
+    return bus.request("workspace.read_file", { cwd, path });
   }
 
   /** 设置/清除内置模型覆盖配置（写入 models.json modelOverrides，null 清除） */
@@ -761,11 +813,13 @@ export function createAgentStore(bus: DataBus) {
     abort,
     setPermissionMode,
     renameSession,
+    removeSessions,
     listSkills,
     listExperts,
     getExpert,
     setModelOverride,
     listWorkspaceFiles,
+    readWorkspaceFile,
     resolveApproval,
     resolveAsk,
     setThinkingLevel,

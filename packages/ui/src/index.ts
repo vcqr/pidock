@@ -8,6 +8,7 @@ export { default as AutomationView } from "./components/AutomationView.vue";
 export { default as ExpertsView } from "./components/ExpertsView.vue";
 export { default as Composer } from "./components/Composer.vue";
 export { default as FileIcon } from "./components/FileIcon.vue";
+export { default as FilesPanel } from "./components/FilesPanel.vue";
 export { default as Icon } from "./components/Icon.vue";
 export { fileIconName, FILE_ICON_SVGS } from "./fileIcons.js";
 export { default as MessageItem } from "./components/MessageItem.vue";

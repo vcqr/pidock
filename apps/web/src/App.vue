@@ -81,6 +81,16 @@ async function selectMachine(machineId: string): Promise<void> {
   await store.value?.refreshSessions();
 }
 
+/** 项目文件浏览面板（侧栏项目右键「查看项目文件」）；seq 自增支持同项目重复触发刷新 */
+const browseCwd = ref<{ cwd: string; seq: number } | null>(null);
+
+/** 移除项目：把该 cwd 下全部会话从列表移除（注册表条目；磁盘文件保留，确认弹窗在侧栏） */
+function removeProject(cwd: string): void {
+  const s = store.value;
+  if (!s) return;
+  void s.removeSessions(s.sessions.filter((x) => x.cwd === cwd).map((x) => x.session_id));
+}
+
 async function doLogin(): Promise<void> {
   loginBusy.value = true;
   loginError.value = null;
@@ -231,6 +241,9 @@ const sessionsEmpty = computed(() => {
         :home-dir="store.homeDir"
         :show-settings-btn="false"
         @select="(id) => store?.openSession(id)"
+        @browse-project="(cwd) => { browseCwd = { cwd, seq: (browseCwd?.seq ?? 0) + 1 }; }"
+        @remove-project="removeProject"
+        @remove-session="(id) => store?.removeSessions([id])"
         @rename="(id, name) => store?.renameSession(id, name)"
       />
     </div>
@@ -247,6 +260,8 @@ const sessionsEmpty = computed(() => {
         :store="store"
         :disabled="!activeMachine?.online"
         :disabled-hint="'机器离线，无法远程控制'"
+        :files-cwd="browseCwd"
+        @close-files="browseCwd = null"
       />
     </main>
   </div>
