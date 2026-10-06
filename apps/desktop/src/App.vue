@@ -51,15 +51,16 @@ function startNewTask(cwd?: string, expert?: { id: string; name: string } | null
   newTaskCwd.value = cwd ? { cwd, seq: (newTaskCwd.value?.seq ?? 0) + 1 } : null;
 }
 
-/** 专家页「对话」：立即创建绑定该专家的会话并进入聊天（工作区沿用最近会话，无则主目录） */
+/** 专家页「对话」：立即创建绑定该专家的会话并进入聊天。
+ * 工作目录不传（host 落主目录）——测试会话保持纯净：只有全局资源 + 专家配置，
+ * 不被最近项目的 AGENTS.md/项目技能/项目插件污染；要选项目走「雇佣」流。 */
 async function testExpert(e: { id: string; name: string }): Promise<void> {
   showExperts.value = false;
   showAutomation.value = false;
   const s = store.value;
   if (!s) return;
-  const last = s.sessions[0];
   try {
-    await s.newSession(last?.cwd, undefined, e.id);
+    await s.newSession(undefined, undefined, e.id);
   } catch (err) {
     // 标题栏已有 lastError 展示通道，这里不吞异常即可
     s.lastError = err instanceof Error ? err.message : String(err);
