@@ -133,7 +133,7 @@ pub fn run() {
         .run(|app_handle, event| match event {
             tauri::RunEvent::Exit => {
                 if let Some(state) = app_handle.try_state::<Supervisor>() {
-                    state.kill();
+                    state.shutdown();
                 }
             }
             _ => {}

@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{Duration, Local, Utc};
 use croner::parser::{CronParser, Seconds};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -134,10 +134,6 @@ fn parse_cron(expr: &str) -> Result<croner::Cron, String> {
         .build()
         .parse(expr.trim())
         .map_err(|e| format!("无效的 cron 表达式「{expr}」: {e}"))
-}
-
-fn next_fire_ms(cron: &croner::Cron, after: DateTime<Local>) -> Option<i64> {
-    cron.find_next_occurrence(&after, false).ok().map(|t| t.timestamp_millis())
 }
 
 fn next_n_fire_ms(cron: &croner::Cron, count: usize) -> Option<Vec<i64>> {

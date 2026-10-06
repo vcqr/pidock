@@ -22,7 +22,8 @@ type PendingMap = Arc<Mutex<HashMap<Uuid, oneshot::Sender<Result<Value, String>>
 
 struct Running {
     child: Mutex<Child>,
-    stdin: Arc<tokio::sync::Mutex<ChildStdin>>,
+    /// None = 管道已关闭（优雅关闭第一步），后续请求直接失败
+    stdin: Arc<tokio::sync::Mutex<Option<ChildStdin>>>,
     pending: PendingMap,
 }
 
@@ -179,7 +180,7 @@ impl Supervisor {
 
         *guard = Some(Arc::new(Running {
             child: Mutex::new(child),
-            stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
+            stdin: Arc::new(tokio::sync::Mutex::new(Some(stdin))),
             pending,
         }));
         eprintln!("[supervisor] pi-host spawned: {host_cmd} {}", host_args.join(" "));
@@ -207,7 +208,10 @@ impl Supervisor {
             .insert(id, tx);
 
         {
-            let mut stdin = running.stdin.lock().await;
+            let mut slot = running.stdin.lock().await;
+            let Some(stdin) = slot.as_mut() else {
+                return Err("pi-host is shutting down".into());
+            };
             stdin
                 .write_all(line.as_bytes())
                 .await
@@ -225,30 +229,53 @@ impl Supervisor {
         }
     }
 
-    /// Kill the host process tree (Windows: taskkill /T /F, else SIGKILL).
-    pub fn kill(&self) {
-        let guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(_) => return,
+    /// 平滑关闭：① 关闭 host stdin（EOF → host 的 readline 'close' →
+    /// disposeAll → 进程自退）② 宽限期内轮询等待 ③ 超时 taskkill /T /F 兜底。
+    /// 在 RunEvent::Exit（主线程、非 tokio runtime 上下文）同步调用。
+    pub fn shutdown(&self) {
+        let running = self.inner.lock().ok().and_then(|mut g| g.take());
+        let Some(running) = running else { return };
+
+        // ① 尽力关闭 stdin：写请求正持有锁时放弃优雅路径，直接走兜底
+        let closed = match running.stdin.try_lock() {
+            Ok(mut slot) => {
+                slot.take(); // drop ChildStdin = 管道 EOF
+                true
+            }
+            Err(_) => false,
         };
-        if let Some(running) = guard.as_ref() {
-            #[cfg(target_os = "windows")]
-            if let Ok(child) = running.child.lock() {
-                if let Some(pid) = child.id() {
-                    use std::os::windows::process::CommandExt;
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/PID", &pid.to_string(), "/T", "/F"])
-                        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-                        .status();
+
+        // ② 宽限期轮询（host disposeAll + 50ms flush 后自退，通常 <200ms）
+        if closed {
+            let deadline = std::time::Instant::now() + Duration::from_millis(1200);
+            while std::time::Instant::now() < deadline {
+                match running.child.lock().ok().and_then(|mut c| c.try_wait().ok()) {
+                    Some(Some(_)) => return, // host 已自行退出
+                    Some(None) => std::thread::sleep(Duration::from_millis(50)),
+                    None => break,
                 }
             }
-            #[cfg(not(target_os = "windows"))]
-            if let Ok(mut child) = running.child.lock() {
-                let _ = child.start_kill();
+        }
+
+        // ③ 兜底强杀
+        Self::force_kill(&running.child);
+    }
+
+    /// Force kill the host process tree (Windows: taskkill /T /F, else SIGKILL).
+    fn force_kill(child: &Mutex<Child>) {
+        #[cfg(target_os = "windows")]
+        if let Ok(c) = child.lock() {
+            if let Some(pid) = c.id() {
+                use std::os::windows::process::CommandExt;
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                    .status();
             }
         }
-        if let Ok(mut g) = self.inner.lock() {
-            *g = None;
+        #[cfg(not(target_os = "windows"))]
+        if let Ok(mut c) = child.lock() {
+            let _ = c.start_kill();
         }
     }
 }
