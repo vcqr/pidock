@@ -722,12 +722,12 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   align-items: center;
   gap: 9px;
   margin: 0;
-  font-size: 19px;
+  font-size: calc(19px * var(--pd-font-scale));
   color: var(--pd-text);
 }
 .head-text p {
   margin: 6px 0 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   line-height: 1.6;
 }
@@ -739,7 +739,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   margin: 0 auto 12px;
   padding: 8px 12px;
   border-radius: 9px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   background: var(--pd-bg-raised);
   border: 1px solid var(--pd-border);
   color: var(--pd-text-2);
@@ -753,7 +753,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   align-items: center;
   gap: 12px;
   color: var(--pd-text-4);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   text-align: center;
   max-width: 460px;
   line-height: 1.7;
@@ -794,8 +794,8 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 .avatar.lg { width: 64px; height: 64px; }
 .avatar-edit { display: flex; align-items: center; gap: 14px; }
 .avatar-ops { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.avatar-hint { font-size: 11.5px; color: var(--pd-text-4); }
-.sub-label { margin: 12px 0 0; font-size: 12px; color: var(--pd-text-4); }
+.avatar-hint { font-size: calc(11.5px * var(--pd-font-scale)); color: var(--pd-text-4); }
+.sub-label { margin: 12px 0 0; font-size: calc(12px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .color-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .color-pick {
   width: 26px;
@@ -811,10 +811,10 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 }
 .color-pick.on { border-color: var(--pd-text); }
 .card-id { min-width: 0; }
-.card-id strong { display: block; color: var(--pd-text); font-size: 15px; }
+.card-id strong { display: block; color: var(--pd-text); font-size: calc(15px * var(--pd-font-scale)); }
 .card-id .subtitle {
   display: block;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-3);
   margin-top: 2px;
   overflow: hidden;
@@ -823,7 +823,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 }
 .card-desc {
   margin: 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   line-height: 1.65;
   display: -webkit-box;
@@ -834,7 +834,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag {
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   padding: 3px 9px;
   border-radius: 20px;
   background: var(--pd-bg-hover);
@@ -856,7 +856,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   border: 1px solid var(--pd-border);
   background: var(--pd-bg-raised);
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
 }
 .btn:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
@@ -866,7 +866,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   color: #fff;
 }
 .btn.primary:hover { opacity: 0.92; }
-.btn.sm { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
+.btn.sm { padding: 5px 10px; font-size: calc(12px * var(--pd-font-scale)); border-radius: 8px; }
 .icon-btn {
   width: 30px;
   height: 30px;
@@ -902,8 +902,8 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 }
 .dialog.narrow { width: min(560px, calc(100vw - 48px)); }
 .d-head { display: flex; align-items: center; gap: 12px; }
-.d-head h2 { margin: 0; font-size: 17px; font-weight: 700; color: var(--pd-text); flex: 1; }
-.d-sub { margin: 6px 0 0; font-size: 12.5px; color: var(--pd-text-3); line-height: 1.6; }
+.d-head h2 { margin: 0; font-size: calc(17px * var(--pd-font-scale)); font-weight: 700; color: var(--pd-text); flex: 1; }
+.d-sub { margin: 6px 0 0; font-size: calc(12.5px * var(--pd-font-scale)); color: var(--pd-text-3); line-height: 1.6; }
 
 /* 对话框分组标签 */
 .tabs {
@@ -914,7 +914,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 }
 .tab {
   padding: 8px 14px 9px;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -929,7 +929,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 .field { margin-top: 15px; }
 .field label {
   display: block;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   color: var(--pd-text-2);
   margin-bottom: 7px;
 }
@@ -942,7 +942,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   border: 1px solid var(--pd-border);
   background: var(--pd-bg);
   color: var(--pd-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-family: inherit;
 }
 .field input[type="checkbox"] {
@@ -992,7 +992,7 @@ label.opt {
   gap: 9px;
   padding: 6px 8px;
   border-radius: 6px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-2);
   cursor: pointer;
 }
@@ -1001,14 +1001,14 @@ label.opt:hover { background: var(--pd-bg-hover); }
   flex: 1;
   min-width: 0;
   font-style: normal;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--pd-font-scale));
   color: var(--pd-text-4);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
 }
-.opt-empty { margin: 4px 6px; font-size: 12px; color: var(--pd-text-4); }
+.opt-empty { margin: 4px 6px; font-size: calc(12px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .check-row { display: flex; gap: 18px; }
 
 .kb-list { display: flex; flex-direction: column; gap: 7px; }
@@ -1016,7 +1016,7 @@ label.opt:hover { background: var(--pd-bg-hover); }
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-2);
   padding: 7px 10px;
   border: 1px solid var(--pd-border);
@@ -1031,7 +1031,7 @@ label.opt:hover { background: var(--pd-bg-hover); }
   border: 1px solid var(--pd-border);
   background: var(--pd-bg);
   color: var(--pd-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
 }
 
 .priv-col {
@@ -1046,14 +1046,14 @@ label.opt:hover { background: var(--pd-bg-hover); }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-2);
 }
 .priv-item {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-2);
   padding: 5px 6px;
   border-radius: 6px;
@@ -1070,7 +1070,7 @@ label.opt:hover { background: var(--pd-bg-hover); }
 .seg { display: inline-flex; gap: 0; margin-top: 14px; border: 1px solid var(--pd-border); border-radius: 9px; overflow: hidden; }
 .seg-btn {
   padding: 7px 16px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   border: none;
   background: none;
   color: var(--pd-text-3);

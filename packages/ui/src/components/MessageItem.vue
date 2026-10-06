@@ -268,7 +268,7 @@ const expertOpen = ref(false);
   max-width: 86%;
   border-radius: var(--pd-radius);
   padding: 9px 13px;
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--pd-font-scale));
   min-width: 0;
 }
 .user-bubble {
@@ -280,7 +280,7 @@ const expertOpen = ref(false);
   word-break: break-word;
 }
 .user-bubble.pending { opacity: 0.65; }
-.pending-mark { font-size: 11px; opacity: 0.75; margin-left: 6px; }
+.pending-mark { font-size: calc(11px * var(--pd-font-scale)); opacity: 0.75; margin-left: 6px; }
 
 /* 文档附件 chip（发送中的乐观气泡只有名字，历史消息可展开全文） */
 .att-row { display: flex; flex-direction: column; gap: 5px; margin-top: 7px; align-items: flex-end; }
@@ -292,13 +292,13 @@ const expertOpen = ref(false);
   background: var(--pd-bg-card);
   border: 1px solid var(--pd-border);
   border-radius: 7px;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   padding: 4px 9px;
   cursor: pointer;
   text-align: left;
 }
 .att-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pd-text); font-weight: 500; }
-.att-size { flex: none; font-size: 11px; color: var(--pd-text-4); }
+.att-size { flex: none; font-size: calc(11px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .att-body {
   margin: 0;
   max-height: 260px;
@@ -307,8 +307,8 @@ const expertOpen = ref(false);
   border: 1px solid var(--pd-border-soft);
   border-radius: 8px;
   padding: 10px 12px;
-  font-family: Consolas, monospace;
-  font-size: 11.5px;
+  font-family: var(--pd-mono);
+  font-size: calc(11.5px * var(--pd-font-scale));
   line-height: 1.65;
   color: var(--pd-text-2);
   white-space: pre-wrap;
@@ -325,7 +325,7 @@ const expertOpen = ref(false);
   color: var(--pd-accent-text);
   border: none;
   border-radius: 7px;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   font-weight: 600;
   padding: 3px 9px;
   cursor: pointer;
@@ -339,8 +339,8 @@ const expertOpen = ref(false);
   border: 1px solid var(--pd-border-soft);
   border-radius: 8px;
   padding: 10px 12px;
-  font-family: Consolas, monospace;
-  font-size: 11.5px;
+  font-family: var(--pd-mono);
+  font-size: calc(11.5px * var(--pd-font-scale));
   line-height: 1.65;
   color: var(--pd-text-2);
   white-space: pre-wrap;
@@ -396,7 +396,7 @@ const expertOpen = ref(false);
   border-radius: 8px;
   background: var(--pd-red-soft);
   color: var(--pd-red-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
 }
 .msg-error svg { flex: none; color: var(--pd-red); }
 </style>

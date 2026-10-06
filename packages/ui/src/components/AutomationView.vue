@@ -683,7 +683,7 @@ function copyRunId(sid: string): void {
 .title-block { flex: 1; min-width: 0; }
 h2 {
   margin: 0;
-  font-size: 19px;
+  font-size: calc(19px * var(--pd-font-scale));
   font-weight: 700;
   color: var(--pd-text);
   display: flex;
@@ -691,7 +691,7 @@ h2 {
   gap: 10px;
 }
 .count {
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   font-weight: 600;
   color: var(--pd-text-3);
   background: var(--pd-bg-card);
@@ -701,7 +701,7 @@ h2 {
 }
 .sub {
   margin: 5px 0 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   line-height: 1.5;
 }
@@ -727,7 +727,7 @@ h2 {
   border: none;
   border-radius: 9px;
   padding: 7px 14px;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-weight: 600;
   cursor: pointer;
 }
@@ -768,14 +768,14 @@ h2 {
 }
 .name-row b {
   color: var(--pd-text);
-  font-size: 14px;
+  font-size: calc(14px * var(--pd-font-scale));
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .state-badge {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--pd-font-scale));
   border-radius: 5px;
   padding: 1.5px 8px;
   flex: none;
@@ -786,7 +786,7 @@ h2 {
 .state-badge.pending { color: var(--pd-yellow-text); background: var(--pd-yellow-soft); }
 .state-badge.expired { color: var(--pd-red-text); background: var(--pd-red-soft); }
 .last-run {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--pd-font-scale));
   border-radius: 5px;
   padding: 1.5px 7px;
   flex: none;
@@ -798,7 +798,7 @@ h2 {
 .last-run.skip { color: var(--pd-text-3); background: var(--pd-bg-hover); }
 .sub-text {
   margin-top: 4px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   line-height: 1.55;
   overflow: hidden;
@@ -863,14 +863,14 @@ h2 {
 
 .state {
   color: var(--pd-text-4);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   padding: 28px 4px;
   line-height: 1.7;
 }
 
 .notice {
   margin-top: 14px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-accent-text);
   background: var(--pd-accent-soft);
   border-radius: 8px;
@@ -903,7 +903,7 @@ h2 {
 }
 .d-head h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: calc(17px * var(--pd-font-scale));
   font-weight: 700;
   color: var(--pd-text);
   flex: 1;
@@ -922,14 +922,14 @@ h2 {
 .d-close:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 .d-sub {
   margin: 6px 0 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   line-height: 1.55;
 }
 .field { margin-top: 16px; }
 .field label {
   display: block;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   color: var(--pd-text-2);
   margin-bottom: 7px;
 }
@@ -945,7 +945,7 @@ h2 {
   border: 1px solid var(--pd-border);
   border-radius: 9px;
   color: var(--pd-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-family: inherit;
   padding: 9px 12px;
 }
@@ -963,7 +963,7 @@ h2 {
 }
 
 .freq-row { display: flex; align-items: center; gap: 8px; }
-.freq-row .lbl { font-size: 12.5px; color: var(--pd-text-3); flex: none; }
+.freq-row .lbl { font-size: calc(12.5px * var(--pd-font-scale)); color: var(--pd-text-3); flex: none; }
 .freq-row input,
 .freq-row select {
   width: auto;
@@ -972,11 +972,11 @@ h2 {
 .freq-row input[type="time"] { width: 120px; }
 .freq-row input[type="number"] { width: 84px; }
 .freq-row select.dow { width: 100px; }
-.freq-row .cron-input { flex: 1; min-width: 0; font-family: Consolas, monospace; }
+.freq-row .cron-input { flex: 1; min-width: 0; font-family: var(--pd-mono); }
 
 .peek {
   margin-top: 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-3);
   background: var(--pd-bg-card);
   border: 1px solid var(--pd-border-soft);
@@ -1003,7 +1003,7 @@ h2 {
   border: none;
   border-radius: 7px;
   color: var(--pd-text-3);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   padding: 5px 12px;
   cursor: pointer;
 }
@@ -1016,7 +1016,7 @@ h2 {
 .composer-slot { margin-top: 16px; }
 .field-hint {
   margin: 7px 0 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-4);
   line-height: 1.5;
 }
@@ -1030,7 +1030,7 @@ h2 {
 }
 .foot-hint {
   flex: 1;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-4);
 }
 .cancel {
@@ -1039,7 +1039,7 @@ h2 {
   color: var(--pd-text-2);
   border-radius: 9px;
   padding: 7px 16px;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
 }
 .cancel:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
@@ -1063,7 +1063,7 @@ h2 {
   width: 20px;
   text-align: center;
   flex: none;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   padding-top: 1px;
 }
 .hist-ic.ok { color: var(--pd-green); }
@@ -1072,7 +1072,7 @@ h2 {
 .hist-ic.skipped { color: var(--pd-text-4); }
 .hist-main { flex: 1; min-width: 0; }
 .hist-line {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-2);
   display: flex;
   align-items: center;
@@ -1080,19 +1080,19 @@ h2 {
   flex-wrap: wrap;
 }
 .hist-sid {
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   color: var(--pd-accent-text);
   cursor: pointer;
 }
 .hist-sid:hover { text-decoration: underline; }
 .hist-err {
   margin-top: 3px;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-red-text);
   word-break: break-all;
 }
 .hist-st {
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   color: var(--pd-text-4);
   flex: none;
   padding-top: 2px;

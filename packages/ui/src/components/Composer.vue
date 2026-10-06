@@ -1021,12 +1021,12 @@ function onKeydown(e: KeyboardEvent): void {
   background: none;
   border: none;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
 }
 .mention-group {
   padding: 6px 10px 2px;
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   color: var(--pd-text-4);
   user-select: none;
 }
@@ -1045,7 +1045,7 @@ function onKeydown(e: KeyboardEvent): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-4);
 }
 
@@ -1054,7 +1054,7 @@ function onKeydown(e: KeyboardEvent): void {
   align-items: center;
   gap: 8px;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   margin-bottom: 10px;
   cursor: pointer;
   position: relative;
@@ -1102,7 +1102,7 @@ function onKeydown(e: KeyboardEvent): void {
   border: none;
   outline: none;
   color: var(--pd-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
 }
 .c-search input::placeholder { color: var(--pd-text-4); }
 .c-list { max-height: 220px; overflow-y: auto; }
@@ -1117,7 +1117,7 @@ function onKeydown(e: KeyboardEvent): void {
   background: none;
   border: none;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
 }
 .c-item:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
@@ -1130,7 +1130,7 @@ function onKeydown(e: KeyboardEvent): void {
   white-space: nowrap;
 }
 .c-check { color: var(--pd-accent); flex: none; }
-.c-empty { padding: 10px; font-size: 12px; color: var(--pd-text-4); }
+.c-empty { padding: 10px; font-size: calc(12px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .c-sep { height: 1px; background: var(--pd-border-soft); margin: 4px; }
 .c-action svg { color: var(--pd-text-3); }
 .c-addrow {
@@ -1145,7 +1145,7 @@ function onKeydown(e: KeyboardEvent): void {
   border: 1px solid var(--pd-border);
   border-radius: 8px;
   color: var(--pd-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   padding: 6px 9px;
 }
 .c-addrow input:focus { outline: none; border-color: var(--pd-accent); }
@@ -1155,7 +1155,7 @@ function onKeydown(e: KeyboardEvent): void {
   border: none;
   border-radius: 8px;
   padding: 6px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   font-weight: 600;
   cursor: pointer;
 }
@@ -1168,7 +1168,7 @@ textarea {
   color: var(--pd-text);
   border: none;
   padding: 2px 2px 6px;
-  font-size: 14px;
+  font-size: calc(14px * var(--pd-font-scale));
   font-family: inherit;
   line-height: 1.7;
 }
@@ -1210,18 +1210,18 @@ textarea:disabled { opacity: 0.45; }
   background: none;
   border: none;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
 }
 .plus-item:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 .plus-item svg { color: var(--pd-text-3); flex: none; }
-.plus-hint { margin-left: auto; font-size: 11px; color: var(--pd-text-4); }
+.plus-hint { margin-left: auto; font-size: calc(11px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .plus-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 7px 10px 3px;
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   color: var(--pd-text-4);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1235,10 +1235,10 @@ textarea:disabled { opacity: 0.45; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-4);
 }
-.plus-empty { padding: 10px; font-size: 12px; color: var(--pd-text-4); }
+.plus-empty { padding: 10px; font-size: calc(12px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .plus-sep { height: 1px; background: var(--pd-border-soft); margin: 4px; }
 .files-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
 .file-chip {
@@ -1251,7 +1251,7 @@ textarea:disabled { opacity: 0.45; }
   border-radius: 8px;
   border: 1px solid var(--pd-border);
   background: var(--pd-bg-card);
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
 }
 .file-name {
   overflow: hidden;
@@ -1260,7 +1260,7 @@ textarea:disabled { opacity: 0.45; }
   color: var(--pd-text);
   font-weight: 500;
 }
-.file-size { flex: none; font-size: 11px; color: var(--pd-text-4); }
+.file-size { flex: none; font-size: calc(11px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .file-x {
   position: absolute;
   top: 4px;
@@ -1296,7 +1296,7 @@ textarea:disabled { opacity: 0.45; }
   border-radius: 8px;
   background: var(--pd-yellow-soft);
   color: var(--pd-yellow-text);
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
 }
 .img-x {
   position: absolute;
@@ -1326,7 +1326,7 @@ textarea:disabled { opacity: 0.45; }
   border-radius: 8px;
   padding: 6px 8px;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1365,7 +1365,7 @@ textarea:disabled { opacity: 0.45; }
 .m-list { max-height: 280px; overflow-y: auto; }
 .m-group {
   padding: 7px 10px 3px;
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   color: var(--pd-text-4);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1390,11 +1390,11 @@ textarea:disabled { opacity: 0.45; }
 .perm-icon { color: var(--pd-text-3); margin-top: 1px; flex: none; }
 .perm-item.on .perm-icon { color: var(--pd-accent); }
 .perm-text { flex: 1; min-width: 0; }
-.perm-text b { display: block; font-size: 13.5px; font-weight: 600; color: var(--pd-text); }
+.perm-text b { display: block; font-size: calc(13.5px * var(--pd-font-scale)); font-weight: 600; color: var(--pd-text); }
 .perm-text i {
   display: block;
   font-style: normal;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-3);
   margin-top: 2px;
 }

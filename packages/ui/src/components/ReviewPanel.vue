@@ -213,7 +213,7 @@ onBeforeUnmount(() => {
   border: none;
   border-radius: 8px;
   color: var(--pd-text-3);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   cursor: pointer;
   flex: none;
 }
@@ -257,19 +257,19 @@ onBeforeUnmount(() => {
   flex: none;
 }
 .rv-name {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   font-weight: 600;
   color: var(--pd-text);
 }
 .rv-dir {
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-4);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rv-add { color: var(--pd-green); font-size: 12px; font-family: Consolas, monospace; }
-.rv-del { color: var(--pd-red); font-size: 12px; font-family: Consolas, monospace; }
+.rv-add { color: var(--pd-green); font-size: calc(12px * var(--pd-font-scale)); font-family: var(--pd-mono); }
+.rv-del { color: var(--pd-red); font-size: calc(12px * var(--pd-font-scale)); font-family: var(--pd-mono); }
 .rv-editor {
   flex: 1;
   min-height: 0;

@@ -247,7 +247,7 @@ onMounted(load);
   gap: 7px;
   padding: 10px 10px 8px 12px;
   color: var(--pd-text);
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--pd-font-scale));
   font-weight: 600;
 }
 .fp-title {
@@ -279,7 +279,7 @@ onMounted(load);
   color: var(--pd-text);
   border-radius: 8px;
   padding: 6px 10px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
 }
 .fp-search input:focus { outline: none; border-color: var(--pd-accent); }
 
@@ -297,7 +297,7 @@ onMounted(load);
   gap: 6px;
   padding: 10px 6px;
   color: var(--pd-text-4);
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
 }
 .row {
   display: flex;
@@ -307,7 +307,7 @@ onMounted(load);
   padding-right: 6px;
   border-radius: 6px;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
   white-space: nowrap;
   user-select: none;

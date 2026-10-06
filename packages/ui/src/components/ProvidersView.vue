@@ -818,7 +818,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   border: none;
   outline: none;
   color: var(--pd-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
 }
 .search-box input::placeholder { color: var(--pd-text-4); }
 .provider-list {
@@ -837,7 +837,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   border-radius: 8px;
   padding: 7px 8px;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
   text-align: left;
 }
@@ -852,7 +852,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   place-items: center;
   background: var(--pd-accent-soft);
   color: var(--pd-accent);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   font-weight: 700;
 }
 .p-name {
@@ -883,7 +883,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   border-radius: 9px;
   padding: 8px;
   color: var(--pd-text-2);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   cursor: pointer;
 }
 .add-btn:hover { color: var(--pd-text); border-color: var(--pd-accent); }
@@ -905,12 +905,12 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
 }
 .det-head h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: calc(20px * var(--pd-font-scale));
   font-weight: 700;
   color: var(--pd-text);
 }
 .badge {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--pd-font-scale));
   color: var(--pd-accent-text);
   background: var(--pd-accent-soft);
   border-radius: 5px;
@@ -928,7 +928,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   padding: 6px 10px;
   color: var(--pd-text-3);
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
 }
 .ghost-btn:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
 .ghost-btn.danger:hover { background: var(--pd-red-soft); color: var(--pd-red-text); border-color: var(--pd-red-soft); }
@@ -942,17 +942,17 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   padding: 6px 10px;
   color: var(--pd-text-3);
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
 }
 .danger-btn:hover { background: var(--pd-red-soft); color: var(--pd-red-text); border-color: var(--pd-red-soft); }
-.key-status { margin: 10px 0 0; font-size: 13px; color: var(--pd-text-2); }
-.key-models { color: var(--pd-text-4); font-size: 12px; }
+.key-status { margin: 10px 0 0; font-size: calc(13px * var(--pd-font-scale)); color: var(--pd-text-2); }
+.key-models { color: var(--pd-text-4); font-size: calc(12px * var(--pd-font-scale)); }
 
 /* 表单（图 2） */
 .form { margin-top: 18px; display: flex; flex-direction: column; gap: 14px; }
 .field label {
   display: block;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-2);
   margin-bottom: 6px;
 }
@@ -966,12 +966,12 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   border: 1px solid var(--pd-border);
   border-radius: 9px;
   color: var(--pd-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-family: inherit;
   padding: 9px 12px;
 }
 .field select option { background: var(--pd-bg-raised); }
-.field textarea { font-family: Consolas, monospace; font-size: 12.5px; resize: vertical; }
+.field textarea { font-family: var(--pd-mono); font-size: calc(12.5px * var(--pd-font-scale)); resize: vertical; }
 .field input:focus,
 .field select:focus,
 .field textarea:focus { outline: none; border-color: var(--pd-accent); }
@@ -1006,7 +1006,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   border: 1px solid var(--pd-border);
   border-radius: 8px;
   color: var(--pd-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
 }
 .mr-filter:focus { outline: none; border-color: var(--pd-accent); }
 .mr-filter::placeholder { color: var(--pd-text-4); }
@@ -1018,7 +1018,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   padding: 5px 8px;
   border: 1px solid var(--pd-border);
   border-radius: 7px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
 }
 /* 覆盖 .field label 的块级样式，能力标签保持行内紧凑 */
 .model-row label.mr-cap,
@@ -1033,7 +1033,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--pd-text);
-  font-family: Consolas, "JetBrains Mono", monospace;
+  font-family: var(--pd-mono);
 }
 .mr-cap {
   display: inline-flex;
@@ -1062,7 +1062,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   flex: none;
 }
 .mr-del:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
-.mr-empty { padding: 8px; font-size: 12px; color: var(--pd-text-4); }
+.mr-empty { padding: 8px; font-size: calc(12px * var(--pd-font-scale)); color: var(--pd-text-4); }
 
 .fetch-btn {
   align-self: flex-start;
@@ -1074,7 +1074,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   border-radius: 9px;
   padding: 8px 14px;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
 }
 .fetch-btn:hover { color: var(--pd-text); border-color: var(--pd-accent); }
@@ -1086,7 +1086,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   border: none;
   border-radius: 9px;
   padding: 8px 18px;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-weight: 600;
   cursor: pointer;
 }
@@ -1097,7 +1097,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
 .models-head { margin-top: 22px; }
 .models-head h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--pd-font-scale));
   font-weight: 700;
   color: var(--pd-text);
   display: flex;
@@ -1105,7 +1105,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   gap: 8px;
 }
 .count {
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   font-weight: 600;
   color: var(--pd-text-3);
   background: var(--pd-bg);
@@ -1124,15 +1124,15 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
 .m-id {
   flex: 1;
   min-width: 0;
-  font-family: Consolas, monospace;
-  font-size: 12.5px;
+  font-family: var(--pd-mono);
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .type-badge {
-  font-size: 10px;
+  font-size: calc(10px * var(--pd-font-scale));
   color: var(--pd-text-3);
   background: var(--pd-bg-hover);
   border-radius: 5px;
@@ -1142,14 +1142,14 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
 
 .state {
   color: var(--pd-text-4);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   padding: 28px 4px;
   line-height: 1.7;
 }
-.state.small { padding: 8px 4px; font-size: 12px; }
+.state.small { padding: 8px 4px; font-size: calc(12px * var(--pd-font-scale)); }
 .notice {
   margin-top: 14px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-accent-text);
   background: var(--pd-accent-soft);
   border-radius: 8px;
@@ -1166,14 +1166,14 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   border: 1px solid var(--pd-border);
   background: none;
   color: var(--pd-text-2);
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   cursor: pointer;
   flex: none;
 }
 .edit-btn:hover { background: var(--pd-bg-hover); color: var(--pd-text); border-color: var(--pd-accent); }
 .mr-badge {
   flex: none;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--pd-font-scale));
   padding: 1px 7px;
   border-radius: 99px;
   background: var(--pd-bg-hover);
@@ -1194,7 +1194,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   flex-direction: column;
 }
 .me-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.me-head b { font-size: 14.5px; color: var(--pd-text); }
+.me-head b { font-size: calc(14.5px * var(--pd-font-scale)); color: var(--pd-text); }
 .me-x {
   background: none;
   border: none;
@@ -1213,7 +1213,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   background: none;
   border: none;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
   padding: 6px 2px;
 }
@@ -1232,7 +1232,7 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   border: 1px solid var(--pd-border);
   background: var(--pd-bg);
   color: var(--pd-text-3);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   cursor: pointer;
   user-select: none;
   margin-bottom: 0;
@@ -1245,13 +1245,13 @@ async function setDefault(m: { provider: string; id: string }): Promise<void> {
   accent-color: var(--pd-accent);
 }
 .me-card .cap-chip.locked { color: var(--pd-text-4); cursor: default; }
-.mono { font-family: Consolas, monospace; font-size: 12px; }
+.mono { font-family: var(--pd-mono); font-size: calc(12px * var(--pd-font-scale)); }
 .me-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .me-cancel {
   background: none;
   border: none;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
   padding: 7px 12px;
   border-radius: 8px;

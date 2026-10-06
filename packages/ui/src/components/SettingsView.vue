@@ -5,7 +5,7 @@ import { REVEAL_PATH, WINDOW_CONTROLS } from "../databus.js";
 import Icon from "./Icon.vue";
 import ProvidersView from "./ProvidersView.vue";
 import ToolsView from "./ToolsView.vue";
-import { applyTheme, themePref, type ThemePref } from "../theme.js";
+import { applyTheme, themePref, applyFontSettings, fontSettings, type ThemePref } from "../theme.js";
 
 /**
  * 设置中心：左侧分组导航 + 右侧内容页（参考主流 AI 客户端布局）。
@@ -467,6 +467,14 @@ watch(
   { immediate: true },
 );
 
+/** 外观页字号档位（写入 --pd-font-scale） */
+const FONT_SCALE_OPTIONS: Array<{ label: string; value: number }> = [
+  { label: "小", value: 0.9 },
+  { label: "标准", value: 1 },
+  { label: "大", value: 1.12 },
+  { label: "特大", value: 1.25 },
+];
+
 function switchTheme(m: ThemePref): void {
   applyTheme(m);
 }
@@ -707,6 +715,60 @@ function openFolder(): void {
                 <span>重置会话侧栏宽度</span>
               </div>
               <button class="ghost-btn" @click="resetSidebarWidth">重置</button>
+            </div>
+          </div>
+
+          <h3 class="grp-title">字体</h3>
+          <div class="group">
+            <div class="row col">
+              <div class="row-text">
+                <b>字号</b>
+                <span>全局缩放界面文字，立即生效（当前 {{ Math.round(fontSettings.scale * 100) }}%）</span>
+              </div>
+              <div class="theme-cards">
+                <button
+                  v-for="o in FONT_SCALE_OPTIONS"
+                  :key="o.label"
+                  class="theme-card"
+                  :class="{ on: fontSettings.scale === o.value }"
+                  @click="applyFontSettings({ scale: o.value })"
+                >
+                  <span>{{ o.label }}</span>
+                </button>
+              </div>
+            </div>
+            <div class="row">
+              <div class="row-text">
+                <b>界面字体</b>
+                <span>留空使用默认；填 CSS font-family 值，如 "Microsoft YaHei"</span>
+              </div>
+              <input
+                class="txt"
+                :value="fontSettings.family"
+                placeholder="默认"
+                spellcheck="false"
+                @change="applyFontSettings({ family: ($event.target as HTMLInputElement).value })"
+              />
+            </div>
+            <div class="row">
+              <div class="row-text">
+                <b>等宽字体</b>
+                <span>代码、diff 与文件预览使用；留空默认 Consolas</span>
+              </div>
+              <input
+                class="txt"
+                :value="fontSettings.monoFamily"
+                placeholder="默认"
+                spellcheck="false"
+                @change="applyFontSettings({ monoFamily: ($event.target as HTMLInputElement).value })"
+              />
+            </div>
+            <div class="row">
+              <div class="row-text">
+                <b>恢复默认字体</b>
+                <span>字号 100%，清空自定义字体族</span>
+              </div>
+              <button class="ghost-btn" @click="applyFontSettings({ scale: 1, family: '', monoFamily: '' })">重置</button>
             </div>
           </div>
         </template>
@@ -979,7 +1041,7 @@ function openFolder(): void {
   background: none;
   border: none;
   color: var(--pd-text-3);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
   padding: 6px 8px;
   border-radius: 8px;
@@ -987,14 +1049,14 @@ function openFolder(): void {
 .back-btn:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
 .head h1 {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--pd-font-scale));
   font-weight: 700;
   color: var(--pd-text);
 }
 .agent-dir {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--pd-font-scale));
   color: var(--pd-text-4);
-  font-family: Consolas, monospace;
+  font-family: var(--pd-mono);
   cursor: pointer;
   max-width: 40%;
   overflow: hidden;
@@ -1039,7 +1101,7 @@ function openFolder(): void {
 }
 .nav-sec { margin-bottom: 14px; }
 .nav-sec-title {
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   color: var(--pd-text-4);
   padding: 0 10px 6px;
 }
@@ -1052,7 +1114,7 @@ function openFolder(): void {
   border: none;
   border-radius: 8px;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   padding: 7px 10px;
   cursor: pointer;
   text-align: left;
@@ -1067,7 +1129,7 @@ function openFolder(): void {
 .nav-item.on svg { color: var(--pd-accent); }
 .nav-label { flex: 1; min-width: 0; }
 .nav-count {
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   color: var(--pd-text-4);
   background: var(--pd-bg-card);
   border-radius: 999px;
@@ -1095,13 +1157,13 @@ function openFolder(): void {
 }
 .content > h2 {
   margin: 0;
-  font-size: 19px;
+  font-size: calc(19px * var(--pd-font-scale));
   font-weight: 700;
   color: var(--pd-text);
 }
 .pane-sub {
   margin: 6px 0 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   line-height: 1.6;
 }
@@ -1113,7 +1175,7 @@ function openFolder(): void {
 }
 .grp-title {
   margin: 26px 0 10px;
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--pd-font-scale));
   font-weight: 600;
   color: var(--pd-text-2);
   display: flex;
@@ -1145,29 +1207,29 @@ function openFolder(): void {
   gap: 3px;
 }
 .row-text b {
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--pd-font-scale));
   font-weight: 600;
   color: var(--pd-text);
 }
 .row-text span {
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-3);
   line-height: 1.5;
 }
-.row-text span.mono { font-family: Consolas, monospace; font-size: 11.5px; word-break: break-all; }
+.row-text span.mono { font-family: var(--pd-mono); font-size: calc(11.5px * var(--pd-font-scale)); word-break: break-all; }
 .clamp {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mono { font-family: Consolas, monospace; }
+.mono { font-family: var(--pd-mono); }
 
 .sel {
   background: var(--pd-bg-raised);
   border: 1px solid var(--pd-border);
   border-radius: 8px;
   color: var(--pd-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   padding: 6px 10px;
   cursor: pointer;
 }
@@ -1188,7 +1250,7 @@ function openFolder(): void {
   border: none;
   border-radius: 7px;
   color: var(--pd-text-3);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   padding: 5px 12px;
   cursor: pointer;
 }
@@ -1203,8 +1265,8 @@ function openFolder(): void {
   border: 1px solid var(--pd-border);
   border-radius: 9px;
   color: var(--pd-text);
-  font-size: 12.5px;
-  font-family: Consolas, monospace;
+  font-size: calc(12.5px * var(--pd-font-scale));
+  font-family: var(--pd-mono);
   padding: 7px 10px;
 }
 .txt:focus { outline: none; border-color: var(--pd-accent); }
@@ -1218,7 +1280,7 @@ function openFolder(): void {
   border: 1px solid var(--pd-border);
   border-radius: 8px;
   color: var(--pd-text-2);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   padding: 6px 12px;
   cursor: pointer;
   flex: none;
@@ -1233,7 +1295,7 @@ function openFolder(): void {
   border: none;
   border-radius: 9px;
   padding: 7px 14px;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-weight: 600;
   cursor: pointer;
   flex: none;
@@ -1242,7 +1304,7 @@ function openFolder(): void {
 .dark-btn:disabled { opacity: 0.6; cursor: default; }
 
 .badge {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--pd-font-scale));
   border-radius: 5px;
   padding: 1.5px 7px;
   flex: none;
@@ -1253,13 +1315,13 @@ function openFolder(): void {
 .badge.ok2 { color: var(--pd-green-text); background: var(--pd-green-soft); }
 .badge.warn { color: var(--pd-yellow-text); background: var(--pd-yellow-soft); }
 .type-badge {
-  font-size: 10px;
+  font-size: calc(10px * var(--pd-font-scale));
   color: var(--pd-text-3);
   background: var(--pd-bg-hover);
   border-radius: 5px;
   padding: 1.5px 7px;
   flex: none;
-  font-family: Consolas, monospace;
+  font-family: var(--pd-mono);
 }
 
 /* 开关（与 ToolsView 一致） */
@@ -1312,7 +1374,7 @@ function openFolder(): void {
   border: 1.5px solid var(--pd-border);
   border-radius: 12px;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   padding: 18px 0 14px;
   cursor: pointer;
 }
@@ -1338,7 +1400,7 @@ function openFolder(): void {
   border: none;
   outline: none;
   color: var(--pd-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
 }
 .search-row input::placeholder { color: var(--pd-text-4); }
 .model-list {
@@ -1369,19 +1431,19 @@ function openFolder(): void {
   gap: 8px;
 }
 .model-name b {
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   color: var(--pd-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.model-name span { font-size: 11.5px; color: var(--pd-text-4); flex: none; }
+.model-name span { font-size: calc(11.5px * var(--pd-font-scale)); color: var(--pd-text-4); flex: none; }
 
 /* 快捷键 */
 .kbd-row { display: inline-flex; gap: 6px; }
 kbd {
-  font-family: Consolas, monospace;
-  font-size: 11.5px;
+  font-family: var(--pd-mono);
+  font-size: calc(11.5px * var(--pd-font-scale));
   color: var(--pd-text-2);
   background: var(--pd-bg-raised);
   border: 1px solid var(--pd-border);
@@ -1403,8 +1465,8 @@ kbd {
   border: 1px solid var(--pd-border);
   border-radius: 12px;
   color: var(--pd-text);
-  font-family: Consolas, monospace;
-  font-size: 12.5px;
+  font-family: var(--pd-mono);
+  font-size: calc(12.5px * var(--pd-font-scale));
   line-height: 1.7;
   padding: 14px 16px;
 }
@@ -1427,8 +1489,8 @@ kbd {
   flex-direction: column;
   gap: 4px;
 }
-.stat-num { font-size: 20px; font-weight: 700; color: var(--pd-text); }
-.stat-label { font-size: 11.5px; color: var(--pd-text-3); }
+.stat-num { font-size: calc(20px * var(--pd-font-scale)); font-weight: 700; color: var(--pd-text); }
+.stat-label { font-size: calc(11.5px * var(--pd-font-scale)); color: var(--pd-text-3); }
 .chart {
   display: flex;
   align-items: flex-end;
@@ -1456,12 +1518,12 @@ kbd {
   opacity: 0.75;
 }
 .bar-col:hover .bar { opacity: 1; }
-.bar-day { font-size: 9px; color: var(--pd-text-4); }
+.bar-day { font-size: calc(9px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .tok {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   font-weight: 600;
   color: var(--pd-text-2);
-  font-family: Consolas, monospace;
+  font-family: var(--pd-mono);
   flex: none;
 }
 
@@ -1489,26 +1551,26 @@ kbd {
 }
 .step.done .step-dot { background: var(--pd-green-soft); color: var(--pd-green-text); }
 .step-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.step-text b { font-size: 13.5px; color: var(--pd-text); }
-.step-text span { font-size: 12px; color: var(--pd-text-3); line-height: 1.5; }
+.step-text b { font-size: calc(13.5px * var(--pd-font-scale)); color: var(--pd-text); }
+.step-text span { font-size: calc(12px * var(--pd-font-scale)); color: var(--pd-text-3); line-height: 1.5; }
 
 .state {
   color: var(--pd-text-4);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   padding: 18px 4px;
   line-height: 1.7;
 }
 .notice {
   margin-bottom: 14px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-accent-text);
   background: var(--pd-accent-soft);
   border-radius: 8px;
   padding: 8px 12px;
 }
 code {
-  font-family: Consolas, monospace;
-  font-size: 11.5px;
+  font-family: var(--pd-mono);
+  font-size: calc(11.5px * var(--pd-font-scale));
   background: var(--pd-bg-hover);
   border-radius: 5px;
   padding: 1px 5px;

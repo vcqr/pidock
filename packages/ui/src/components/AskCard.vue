@@ -114,7 +114,7 @@ function submit(): void {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
 }
 .ask-head svg { color: var(--pd-accent); flex: none; }
 .ask-header { color: var(--pd-accent); flex: none; }
@@ -122,7 +122,7 @@ function submit(): void {
 .ask-multi {
   flex: none;
   margin-left: auto;
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   color: var(--pd-text-3);
   border: 1px solid var(--pd-border);
   border-radius: 999px;
@@ -131,7 +131,7 @@ function submit(): void {
 .ask-timer {
   flex: none;
   margin-left: auto;
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   font-variant-numeric: tabular-nums;
   color: var(--pd-text-3);
 }
@@ -151,7 +151,7 @@ function submit(): void {
   background: transparent;
   border-radius: 8px;
   padding: 7px 10px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   cursor: pointer;
   color: var(--pd-text);
 }
@@ -166,7 +166,7 @@ function submit(): void {
   border-radius: 50%;
   border: 1px solid var(--pd-border);
   color: var(--pd-text-3);
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   font-weight: 600;
   line-height: 1;
   display: inline-flex;
@@ -179,14 +179,14 @@ function submit(): void {
 .opt-label { font-weight: 600; flex: none; }
 .opt-rec {
   flex: none;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--pd-font-scale));
   line-height: 1;
   color: var(--pd-accent);
   border: 1px solid var(--pd-accent);
   border-radius: 999px;
   padding: 2px 6px;
 }
-.opt-desc { color: var(--pd-text-3); font-size: 11.5px; min-width: 0; }
+.opt-desc { color: var(--pd-text-3); font-size: calc(11.5px * var(--pd-font-scale)); min-width: 0; }
 .ask-foot {
   display: flex;
   align-items: center;
@@ -200,7 +200,7 @@ function submit(): void {
   background: transparent;
   border-radius: 8px;
   padding: 6px 10px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text);
   outline: none;
 }
@@ -211,7 +211,7 @@ function submit(): void {
   border: none;
   border-radius: 8px;
   padding: 7px 14px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   font-weight: 600;
   cursor: pointer;
 }

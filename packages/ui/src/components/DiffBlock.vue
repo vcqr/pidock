@@ -80,7 +80,7 @@ const stats = computed(() => {
   border-radius: 8px;
   overflow: hidden;
   background: var(--pd-code-bg);
-  font-family: Consolas, "JetBrains Mono", monospace;
+  font-family: var(--pd-mono);
 }
 .diff-head {
   display: flex;
@@ -88,17 +88,17 @@ const stats = computed(() => {
   justify-content: space-between;
   padding: 5px 10px;
   border-bottom: 1px solid var(--pd-border);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--pd-font-scale));
 }
 .file { color: var(--pd-accent-text); font-family: inherit; }
-.stats { display: flex; gap: 8px; font-size: 11px; }
+.stats { display: flex; gap: 8px; font-size: calc(11px * var(--pd-font-scale)); }
 .add { color: var(--pd-diff-add-text); }
 .del { color: var(--pd-diff-del-text); }
 .diff-body {
   margin: 0;
   padding: 6px 0;
   overflow-x: auto;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--pd-font-scale));
   line-height: 1.55;
 }
 .line { display: block; padding: 0 10px; white-space: pre-wrap; word-break: break-all; }

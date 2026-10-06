@@ -108,20 +108,20 @@ const stats = computed(() => {
   background: var(--pd-bg-hover);
 }
 .file {
-  font-family: Consolas, monospace;
-  font-size: 11.5px;
+  font-family: var(--pd-mono);
+  font-size: calc(11.5px * var(--pd-font-scale));
   color: var(--pd-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.stats { margin-left: auto; display: flex; gap: 8px; font-size: 11.5px; font-family: Consolas, monospace; }
+.stats { margin-left: auto; display: flex; gap: 8px; font-size: calc(11.5px * var(--pd-font-scale)); font-family: var(--pd-mono); }
 .stats .add { color: var(--pd-green); }
 .stats .del { color: var(--pd-red); }
 .diff-body {
   overflow-x: auto;
-  font-family: Consolas, monospace;
-  font-size: 12px;
+  font-family: var(--pd-mono);
+  font-size: calc(12px * var(--pd-font-scale));
   line-height: 1.65;
   max-height: 320px;
   overflow-y: auto;

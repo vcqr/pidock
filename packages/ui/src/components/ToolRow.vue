@@ -157,7 +157,7 @@ const expandable = computed(() => hasDiff.value || hasOutput.value);
   align-items: center;
   gap: 8px;
   padding: 4px 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   color: var(--pd-text-2);
   min-width: 0;
 }
@@ -185,18 +185,18 @@ const expandable = computed(() => hasDiff.value || hasOutput.value);
 }
 .t-dir {
   color: var(--pd-text-4);
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   flex: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 220px;
 }
-.t-add { color: var(--pd-green); font-size: 12px; flex: none; }
-.t-del { color: var(--pd-red); font-size: 12px; flex: none; }
+.t-add { color: var(--pd-green); font-size: calc(12px * var(--pd-font-scale)); flex: none; }
+.t-del { color: var(--pd-red); font-size: calc(12px * var(--pd-font-scale)); flex: none; }
 .flex-sp { flex: 1; }
 .t-ok { color: var(--pd-green); flex: none; display: grid; place-items: center; }
-.t-fail { color: var(--pd-red); font-size: 12px; flex: none; }
+.t-fail { color: var(--pd-red); font-size: calc(12px * var(--pd-font-scale)); flex: none; }
 .t-spin {
   width: 11px;
   height: 11px;
@@ -215,8 +215,8 @@ const expandable = computed(() => hasDiff.value || hasOutput.value);
   background: var(--pd-code-bg);
   border: 1px solid var(--pd-border-soft);
   border-radius: 8px;
-  font-family: Consolas, monospace;
-  font-size: 11.5px;
+  font-family: var(--pd-mono);
+  font-size: calc(11.5px * var(--pd-font-scale));
   line-height: 1.6;
   color: var(--pd-text-3);
   white-space: pre-wrap;

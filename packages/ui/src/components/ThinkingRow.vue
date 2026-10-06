@@ -67,13 +67,13 @@ const duration = computed(() => {
   border: none;
   padding: 4px 0;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
 }
 .think-head:hover { color: var(--pd-text); }
 .think-head svg { color: var(--pd-text-3); }
 .think-label { color: var(--pd-text-2); }
-.think-dur { color: var(--pd-text-4); font-size: 12px; }
+.think-dur { color: var(--pd-text-4); font-size: calc(12px * var(--pd-font-scale)); }
 .chev { display: grid; place-items: center; color: var(--pd-text-4); transition: transform 0.12s; }
 .chev.open { transform: rotate(180deg); }
 .think-body {
@@ -83,7 +83,7 @@ const duration = computed(() => {
   border-left: 2px solid var(--pd-border);
   border-radius: 0 8px 8px 0;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   line-height: 1.7;
   color: var(--pd-text-3);
   white-space: pre-wrap;

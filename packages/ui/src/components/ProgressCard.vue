@@ -202,7 +202,7 @@ function copyPath(): void {
   align-items: center;
   gap: 6px;
   color: var(--pd-text-2);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   font-weight: 600;
   flex: none;
 }
@@ -249,9 +249,9 @@ function copyPath(): void {
   flex: none;
 }
 .e-avatar img { width: 100%; height: 100%; object-fit: cover; }
-.e-name { font-size: 14px; font-weight: 700; color: var(--pd-text); text-align: center; }
+.e-name { font-size: calc(14px * var(--pd-font-scale)); font-weight: 700; color: var(--pd-text); text-align: center; }
 .e-desc {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   text-align: center;
   overflow: hidden;
@@ -261,14 +261,14 @@ function copyPath(): void {
 }
 .e-sec { border-top: 1px dashed var(--pd-border-soft); margin-top: 14px; padding-top: 10px; }
 .e-label {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--pd-font-scale));
   color: var(--pd-text-4);
   letter-spacing: 1px;
   margin-bottom: 5px;
 }
 .e-prompt {
   margin: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-2);
   line-height: 1.65;
   display: -webkit-box;
@@ -294,7 +294,7 @@ function copyPath(): void {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text);
   font-weight: 500;
   min-width: 0;
@@ -305,7 +305,7 @@ function copyPath(): void {
   border: none;
   background: none;
   padding: 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   color: var(--pd-text-4);
   cursor: pointer;
   overflow: hidden;
@@ -315,7 +315,7 @@ function copyPath(): void {
 .p-path:hover { color: var(--pd-accent); }
 .p-chips { display: flex; gap: 5px; flex-wrap: wrap; }
 .tag {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   border: 1px solid var(--pd-border-soft);
   border-radius: 4px;
@@ -356,7 +356,7 @@ function copyPath(): void {
   align-items: flex-start;
   gap: 7px;
   padding: 3px 2px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   line-height: 1.45;
   color: var(--pd-text-2);
   border-radius: 6px;
@@ -401,7 +401,7 @@ li.in_progress .st { color: var(--pd-accent); }
   border-radius: 13px;
   background: var(--pd-bg-panel);
   color: var(--pd-green);
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   cursor: pointer;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }

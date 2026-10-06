@@ -11,7 +11,7 @@ body,
 }
 
 body {
-  font-family:
+  font-family: var(--pd-font-ui,
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
@@ -19,7 +19,7 @@ body {
     "Hiragino Sans GB",
     "Microsoft YaHei",
     system-ui,
-    sans-serif;
+    sans-serif);
   background: var(--pd-bg);
   color: var(--pd-text);
   overflow: hidden;

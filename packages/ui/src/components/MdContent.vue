@@ -55,7 +55,7 @@ function onClick(ev: MouseEvent): void {
 <style>
 /* markdown typography — global because content is v-html injected */
 .md-root {
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--pd-font-scale));
   line-height: 1.65;
   color: var(--pd-text);
   word-break: break-word;
@@ -90,13 +90,13 @@ function onClick(ev: MouseEvent): void {
   border-radius: 4px;
   padding: 1px 5px;
   font-size: 0.9em;
-  font-family: Consolas, "JetBrains Mono", monospace;
+  font-family: var(--pd-mono);
   color: var(--pd-accent-text);
 }
 .md-root table {
   border-collapse: collapse;
   margin: 8px 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   width: 100%;
 }
 .md-root th, .md-root td {
@@ -123,17 +123,17 @@ function onClick(ev: MouseEvent): void {
   border-bottom: 1px solid var(--pd-code-border);
 }
 .md-code-lang {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  font-family: Consolas, monospace;
+  font-family: var(--pd-mono);
 }
 .md-code-copy {
   background: transparent;
   border: none;
   color: var(--pd-text-3);
-  font-size: 11px;
+  font-size: calc(11px * var(--pd-font-scale));
   cursor: pointer;
   padding: 0 2px;
 }
@@ -146,9 +146,9 @@ function onClick(ev: MouseEvent): void {
 .md-code code.hljs {
   background: transparent;
   padding: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   line-height: 1.6;
-  font-family: Consolas, "JetBrains Mono", monospace;
+  font-family: var(--pd-mono);
   color: var(--pd-text);
 }
 </style>

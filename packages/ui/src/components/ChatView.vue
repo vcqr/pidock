@@ -934,7 +934,7 @@ export default { components: { ToolCard, MessageItem } };
   top: 2%;
   left: 50%;
   transform: translateX(-50%) skewX(-10deg);
-  font-size: 220px;
+  font-size: calc(220px * var(--pd-font-scale));
   font-weight: 800;
   font-style: italic;
   line-height: 1;
@@ -952,7 +952,7 @@ export default { components: { ToolCard, MessageItem } };
 }
 .greeting {
   text-align: center;
-  font-size: 26px;
+  font-size: calc(26px * var(--pd-font-scale));
   font-weight: 600;
   color: var(--pd-text);
   margin: 0 0 34px;
@@ -968,7 +968,7 @@ export default { components: { ToolCard, MessageItem } };
   padding: 9px 14px;
   margin-bottom: 16px;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
 }
 .errbar svg { color: var(--pd-text-3); flex: none; }
 .err-text {
@@ -1005,7 +1005,7 @@ export default { components: { ToolCard, MessageItem } };
   border: 1px solid var(--pd-border);
   background: var(--pd-bg-card);
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
   transition: border-color 0.15s, color 0.15s;
 }
@@ -1019,7 +1019,7 @@ export default { components: { ToolCard, MessageItem } };
   color: var(--pd-text-4);
   text-align: center;
   margin-top: 40vh;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
 }
 .dock { padding: 10px 16px 14px; }
 
@@ -1045,7 +1045,7 @@ export default { components: { ToolCard, MessageItem } };
 }
 .turn-label {
   flex: none;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-3);
 }
 .turn-line {
@@ -1063,7 +1063,7 @@ export default { components: { ToolCard, MessageItem } };
   background: none;
   border: none;
   color: var(--pd-text-3);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
   padding: 4px 0;
   user-select: none;
@@ -1092,7 +1092,7 @@ export default { components: { ToolCard, MessageItem } };
   border: none;
   padding: 10px 2px;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
 }
 .files-head:hover { color: var(--pd-text); }
@@ -1103,7 +1103,7 @@ export default { components: { ToolCard, MessageItem } };
   align-items: center;
   gap: 5px;
   color: var(--pd-text-3);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   padding: 4px 8px;
   border-radius: 7px;
 }
@@ -1115,7 +1115,7 @@ export default { components: { ToolCard, MessageItem } };
   gap: 9px;
   padding: 8px 2px;
   border-bottom: 1px solid var(--pd-border-soft);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
 }
 .file-row:last-child { border-bottom: none; }
 .tile {
@@ -1134,7 +1134,7 @@ export default { components: { ToolCard, MessageItem } };
 }
 .f-dir {
   color: var(--pd-text-4);
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1146,7 +1146,7 @@ export default { components: { ToolCard, MessageItem } };
   border-radius: 7px;
   padding: 4px 10px;
   color: var(--pd-text-3);
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   cursor: pointer;
 }
 .review-btn:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
@@ -1170,12 +1170,12 @@ export default { components: { ToolCard, MessageItem } };
 }
 .approval svg { color: var(--pd-accent); flex: none; }
 .approval-info { flex: 1; min-width: 0; }
-.approval-info b { display: block; font-size: 13px; color: var(--pd-text); }
+.approval-info b { display: block; font-size: calc(13px * var(--pd-font-scale)); color: var(--pd-text); }
 .approval-args {
   display: block;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
-  font-family: Consolas, monospace;
+  font-family: var(--pd-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1186,7 +1186,7 @@ export default { components: { ToolCard, MessageItem } };
   border: none;
   border-radius: 8px;
   padding: 7px 14px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   font-weight: 600;
   cursor: pointer;
 }

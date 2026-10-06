@@ -40,7 +40,7 @@ const colors: Record<string, string> = {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-2);
 }
 .dot {

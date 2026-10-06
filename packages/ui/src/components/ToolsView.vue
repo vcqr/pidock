@@ -801,7 +801,7 @@ async function removeServer(it: Row): Promise<void> {
 .title-block { flex: 1; min-width: 0; }
 h1 {
   margin: 0;
-  font-size: 21px;
+  font-size: calc(21px * var(--pd-font-scale));
   font-weight: 700;
   color: var(--pd-text);
   display: flex;
@@ -809,7 +809,7 @@ h1 {
   gap: 10px;
 }
 .count {
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   font-weight: 600;
   color: var(--pd-text-3);
   background: var(--pd-bg-card);
@@ -819,11 +819,11 @@ h1 {
 }
 .sub {
   margin: 6px 0 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   line-height: 1.5;
 }
-.sub.mono { font-family: Consolas, monospace; font-size: 11.5px; color: var(--pd-text-4); }
+.sub.mono { font-family: var(--pd-mono); font-size: calc(11.5px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .head-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 .ghost-btn {
   width: 30px;
@@ -846,7 +846,7 @@ h1 {
   border: none;
   border-radius: 9px;
   padding: 7px 14px;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-weight: 600;
   cursor: pointer;
 }
@@ -862,7 +862,7 @@ h1 {
   background: none;
   border: none;
   color: var(--pd-text-3);
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--pd-font-scale));
   padding: 8px 2px;
   cursor: pointer;
   border-bottom: 2px solid transparent;
@@ -892,7 +892,7 @@ h1 {
   border: none;
   outline: none;
   color: var(--pd-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
 }
 .search-row input::placeholder { color: var(--pd-text-4); }
 
@@ -938,11 +938,11 @@ h1 {
 }
 .name-row b {
   color: var(--pd-text);
-  font-size: 14px;
+  font-size: calc(14px * var(--pd-font-scale));
   font-weight: 600;
 }
 .badge {
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--pd-font-scale));
   color: var(--pd-accent-text);
   background: var(--pd-accent-soft);
   border-radius: 5px;
@@ -950,17 +950,17 @@ h1 {
   flex: none;
 }
 .type-badge {
-  font-size: 10px;
+  font-size: calc(10px * var(--pd-font-scale));
   color: var(--pd-text-3);
   background: var(--pd-bg-hover);
   border-radius: 5px;
   padding: 1.5px 7px;
   flex: none;
-  font-family: Consolas, monospace;
+  font-family: var(--pd-mono);
 }
 .sub-text {
   margin-top: 4px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   line-height: 1.55;
   display: -webkit-box;
@@ -1027,7 +1027,7 @@ h1 {
 
 .state {
   color: var(--pd-text-4);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   padding: 28px 4px;
   line-height: 1.7;
 }
@@ -1057,13 +1057,13 @@ h1 {
 .back-btn:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
 .det-title {
   margin: 0;
-  font-size: 20px;
+  font-size: calc(20px * var(--pd-font-scale));
   font-weight: 700;
   color: var(--pd-text);
 }
 .det-desc {
   margin: 12px 0 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   color: var(--pd-text-2);
   line-height: 1.6;
   display: -webkit-box;
@@ -1095,7 +1095,7 @@ h1 {
   padding: 8px;
 }
 .files-title {
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-4);
   padding: 4px 8px 8px;
 }
@@ -1110,9 +1110,9 @@ h1 {
   border-radius: 8px;
   padding: 7px 9px;
   color: var(--pd-text-2);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   cursor: pointer;
-  font-family: Consolas, monospace;
+  font-family: var(--pd-mono);
 }
 .file-item:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 .file-item.on { background: var(--pd-bg-active); color: var(--pd-text); }
@@ -1137,25 +1137,25 @@ h1 {
   padding: 10px 16px;
   border-bottom: 1px solid var(--pd-border-soft);
   color: var(--pd-text-2);
-  font-size: 13px;
-  font-family: Consolas, monospace;
+  font-size: calc(13px * var(--pd-font-scale));
+  font-family: var(--pd-mono);
 }
 .content-head svg { color: var(--pd-text-3); }
-.loading-mark { font-size: 11.5px; color: var(--pd-text-4); font-family: inherit; }
+.loading-mark { font-size: calc(11.5px * var(--pd-font-scale)); color: var(--pd-text-4); font-family: inherit; }
 .content-body { padding: 18px 22px; overflow-x: auto; }
 .binary-note {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--pd-text-4);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   padding: 20px 0;
 }
-.file-item .type-badge { flex: none; margin-left: auto; font-size: 9.5px; }
+.file-item .type-badge { flex: none; margin-left: auto; font-size: calc(9.5px * var(--pd-font-scale)); }
 .raw {
   margin: 0;
-  font-family: Consolas, monospace;
-  font-size: 12.5px;
+  font-family: var(--pd-mono);
+  font-size: calc(12.5px * var(--pd-font-scale));
   line-height: 1.7;
   color: var(--pd-text-2);
   white-space: pre-wrap;
@@ -1164,7 +1164,7 @@ h1 {
 
 .notice {
   margin-top: 14px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-accent-text);
   background: var(--pd-accent-soft);
   border-radius: 8px;
@@ -1187,7 +1187,7 @@ h1 {
   border: none;
   border-radius: 7px;
   color: var(--pd-text-3);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   padding: 5px 12px;
   cursor: pointer;
 }
@@ -1202,8 +1202,8 @@ h1 {
   border: 1px solid var(--pd-border);
   border-radius: 9px;
   color: var(--pd-text-2);
-  font-size: 12.5px;
-  font-family: Consolas, monospace;
+  font-size: calc(12.5px * var(--pd-font-scale));
+  font-family: var(--pd-mono);
   padding: 9px 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1241,7 +1241,7 @@ h1 {
 }
 .d-head h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: calc(17px * var(--pd-font-scale));
   font-weight: 700;
   color: var(--pd-text);
   flex: 1;
@@ -1260,14 +1260,14 @@ h1 {
 .d-close:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 .d-sub {
   margin: 6px 0 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   color: var(--pd-text-3);
   line-height: 1.55;
 }
 .field { margin-top: 16px; }
 .field label {
   display: block;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   color: var(--pd-text-2);
   margin-bottom: 7px;
 }
@@ -1284,7 +1284,7 @@ h1 {
   border: 1px solid var(--pd-border);
   border-radius: 9px;
   color: var(--pd-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-family: inherit;
   padding: 9px 12px;
 }
@@ -1303,7 +1303,7 @@ h1 {
 }
 .field input::placeholder,
 .field textarea::placeholder { color: var(--pd-text-4); }
-.field textarea { font-family: Consolas, monospace; font-size: 12.5px; }
+.field textarea { font-family: var(--pd-mono); font-size: calc(12.5px * var(--pd-font-scale)); }
 
 .advanced { margin-top: 16px; border-top: 1px solid var(--pd-border-soft); padding-top: 12px; }
 .adv-head {
@@ -1314,7 +1314,7 @@ h1 {
   background: none;
   border: none;
   color: var(--pd-text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   font-weight: 600;
   cursor: pointer;
   padding: 2px 0;
@@ -1335,7 +1335,7 @@ h1 {
   color: var(--pd-text-2);
   border-radius: 9px;
   padding: 7px 16px;
-  font-size: 13px;
+  font-size: calc(13px * var(--pd-font-scale));
   cursor: pointer;
 }
 .cancel:hover { background: var(--pd-bg-hover); color: var(--pd-text); }

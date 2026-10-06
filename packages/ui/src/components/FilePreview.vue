@@ -133,7 +133,7 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
   border-bottom: none;
   border-radius: 8px 8px 0 0;
   color: var(--pd-text-3);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
@@ -186,7 +186,7 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
   align-items: center;
   gap: 5px;
   padding: 6px 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-3);
   border-bottom: 1px solid var(--pd-border-soft);
   white-space: nowrap;
@@ -218,7 +218,7 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
 .pv-gutter, .pv-code {
   margin: 0;
   font-family: var(--pd-mono, ui-monospace, Consolas, monospace);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
   line-height: 1.6;
 }
 .pv-gutter {
@@ -247,7 +247,7 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
   gap: 6px;
   padding: 10px 14px;
   color: var(--pd-text-4);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--pd-font-scale));
 }
 .pv-note.err { color: var(--pd-red); }
 .pv-foot { flex: none; border-top: 1px solid var(--pd-border-soft); }

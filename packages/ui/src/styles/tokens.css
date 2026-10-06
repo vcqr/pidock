@@ -4,6 +4,12 @@
  * Dark palette mirrors demo/ui.html (ZCode-style neutral gray + orange accent).
  */
 
+:root {
+  /* 字体缩放（外观页设置）与等宽字体族；--pd-font-ui 由 body 的 font-family var 消费 */
+  --pd-font-scale: 1;
+  --pd-mono: Consolas, ui-monospace, monospace;
+}
+
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
