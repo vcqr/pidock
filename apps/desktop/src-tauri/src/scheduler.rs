@@ -447,6 +447,20 @@ impl SchedulerManager {
         push_event(app, auto_envelope(session_id.unwrap_or(""), "automation.run_finished", payload));
     }
 
+    /// 托盘通知用：按任务 id 取名字
+    pub async fn job_name_of(app: &AppHandle, job_id: &str) -> Option<String> {
+        let mgr = app.state::<SchedulerManager>();
+        // 先落局部变量再返回：尾表达式的 MutexGuard 临时值会活到 mgr 之后触发 E0597
+        let name = mgr
+            .jobs
+            .lock()
+            .await
+            .iter()
+            .find(|j| j.id == job_id)
+            .map(|j| j.name.clone());
+        name
+    }
+
     /// 订阅 host 事件广播：agent 空闲 = 成功，error = 失败
     async fn handle_event(&self, app: &AppHandle, env: Envelope) {
         if env.session_id.is_empty() {

@@ -1,9 +1,10 @@
 mod host;
 mod scheduler;
 mod sync;
+mod tray;
 
 use host::Supervisor;
-use tauri::Manager;
+use tauri::{Manager, WindowEvent};
 use tokio::sync::{broadcast, mpsc};
 
 fn default_sync_cfg_path() -> std::path::PathBuf {
@@ -102,6 +103,15 @@ pub fn run() {
     let (sync_tx, sync_rx) = mpsc::channel::<sync::SyncControl>(8);
 
     tauri::Builder::default()
+        // 单实例必须最先注册：二次启动（含托盘通知点击唤起的进程）改为聚焦已有窗口
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::show_main(app);
+        }))
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--tray"]),
+        ))
         .manage(supervisor)
         .manage(event_tx.clone())
         .manage(sync::SyncManager::new(default_sync_cfg_path(), sync_tx))
@@ -112,13 +122,28 @@ pub fn run() {
             sync::sync_configure,
             sync::sync_status,
             sync::sync_disable,
+            tray::tray_update,
+            tray::desktop_config_get,
+            tray::desktop_config_set,
             pick_folder,
             pick_file,
             reveal_path
         ])
         .setup(move |app| {
+            tray::init(app.handle())?;
+            tray::spawn_watcher(app.handle());
             sync::spawn(app.handle().clone(), event_rx, sync_rx);
             scheduler::SchedulerManager::spawn_event_watcher(app.handle().clone());
+            // 开机自启以 --tray 启动：窗口显示后立刻收进托盘
+            if std::env::args().any(|a| a == "--tray") {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    if let Some(win) = handle.get_webview_window("main") {
+                        let _ = win.hide();
+                    }
+                });
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mgr = handle.state::<scheduler::SchedulerManager>();
@@ -128,10 +153,18 @@ pub fn run() {
             });
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" && tray::handle_close_request(window.app_handle()) {
+                    api.prevent_close();
+                }
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| match event {
             tauri::RunEvent::Exit => {
+                tray::remove_tray(app_handle);
                 if let Some(state) = app_handle.try_state::<Supervisor>() {
                     state.shutdown();
                 }

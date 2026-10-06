@@ -78,6 +78,17 @@ export interface UiToolItem {
 
 export type UiItem = UiMessageItem | UiToolItem;
 
+/** 会话待用户处理的交互（审批 / AskUserQuestion 提问），见 pendingBySession */
+export interface PendingInteraction {
+  kind: "approval" | "ask";
+  approvalId?: string;
+  askId?: string;
+  toolName?: string;
+  args?: string;
+  question?: AskQuestion;
+  timeoutSec?: number;
+}
+
 export interface SessionSummaryUi {
   session_id: string;
   file: string;
@@ -198,6 +209,9 @@ export function createAgentStore(bus: DataBus) {
   const pendingApproval = ref<{ approvalId: string; toolName: string; args: string } | null>(null);
   /** 待用户回答的 AskUserQuestion 问题卡（仅活动会话展示；timeoutSec=倒计时秒数，0/缺省不限时） */
   const pendingAsk = ref<{ askId: string; question: AskQuestion; timeoutSec?: number } | null>(null);
+  /** 每会话待处理交互（审批/提问），不分活动/后台——后台会话等待确认的托盘提醒与
+   * 切会话恢复都依赖它；host 对离开 waiting 状态会补发 agent_state_changed，据此清除 */
+  const pendingBySession = ref<Record<string, PendingInteraction>>({});
   /** 当前回合开始时间；结束后保留并写入 turnEndedAt（「已工作 · 耗时」折叠行用） */
   const turnStartedAt = ref<number | null>(null);
   const turnEndedAt = ref<number | null>(null);
@@ -377,6 +391,46 @@ export function createAgentStore(bus: DataBus) {
         },
       };
       return;
+    }
+    // ---- 全局层：不依赖活动会话（后台会话等待确认不再丢失） ----
+    if (e.kind === "agent_state_changed") {
+      const st = e.payload?.state;
+      if (st !== "waiting_approval" && st !== "waiting_ask" && pendingBySession.value[e.session_id]) {
+        const next = { ...pendingBySession.value };
+        delete next[e.session_id];
+        pendingBySession.value = next;
+      }
+    }
+    if (e.kind === "tool_approval") {
+      pendingBySession.value = {
+        ...pendingBySession.value,
+        [e.session_id]: {
+          kind: "approval",
+          approvalId: e.payload?.approval_id ?? "",
+          toolName: e.payload?.tool_name ?? "",
+          args: e.payload?.args ?? "",
+        },
+      };
+      if (e.session_id !== activeId.value) return;
+    }
+    if (e.kind === "ask_user_question") {
+      const q = e.payload?.question;
+      const valid = !!(e.payload?.ask_id && q && Array.isArray(q.options) && q.options.length);
+      const next = { ...pendingBySession.value };
+      if (valid) {
+        next[e.session_id] = {
+          kind: "ask",
+          askId: e.payload.ask_id,
+          question: q as AskQuestion,
+          ...(Number(e.payload.timeout_sec) > 0
+            ? { timeoutSec: Number(e.payload.timeout_sec) }
+            : {}),
+        };
+      } else {
+        delete next[e.session_id];
+      }
+      pendingBySession.value = next;
+      if (e.session_id !== activeId.value) return;
     }
     if (e.session_id !== activeId.value) return;
     switch (e.kind) {
@@ -576,6 +630,32 @@ export function createAgentStore(bus: DataBus) {
   }
 
   async function openSession(sessionId: string): Promise<void> {
+    // 切走前把当前会话未处理的审批/提问存回全局表（托盘跳回时可恢复）
+    const prev = activeId.value;
+    if (prev && prev !== sessionId) {
+      if (pendingApproval.value) {
+        pendingBySession.value = {
+          ...pendingBySession.value,
+          [prev]: {
+            kind: "approval",
+            approvalId: pendingApproval.value.approvalId,
+            toolName: pendingApproval.value.toolName,
+            args: pendingApproval.value.args,
+          },
+        };
+      }
+      if (pendingAsk.value) {
+        pendingBySession.value = {
+          ...pendingBySession.value,
+          [prev]: {
+            kind: "ask",
+            askId: pendingAsk.value.askId,
+            question: pendingAsk.value.question,
+            ...(pendingAsk.value.timeoutSec ? { timeoutSec: pendingAsk.value.timeoutSec } : {}),
+          },
+        };
+      }
+    }
     const summary = sessions.value.find((s) => s.session_id === sessionId);
     if (summary && !summary.open && summary.file) {
       try {
@@ -592,6 +672,7 @@ export function createAgentStore(bus: DataBus) {
     streaming = null;
     agentState.value = "idle";
     lastError.value = null;
+    pendingApproval.value = null;
     pendingAsk.value = null;
     // 清掉旧清单，等 host 重开补发（老 host 无此事件 → 面板隐藏）
     delete todosBySession.value[sessionId];
@@ -607,6 +688,21 @@ export function createAgentStore(bus: DataBus) {
     // 上下文用量 + 模型思考能力（事件兜底之外的主动拉取，web 链路依赖此处）
     void fetchContextUsage();
     void fetchThinkingInfo();
+    // 恢复该会话未处理的审批/提问（后台等待时切走又切回；host 不重放这类事件）
+    const rec = pendingBySession.value[sessionId];
+    if (rec?.kind === "approval" && rec.approvalId) {
+      pendingApproval.value = {
+        approvalId: rec.approvalId,
+        toolName: rec.toolName ?? "",
+        args: rec.args ?? "",
+      };
+    } else if (rec?.kind === "ask" && rec.askId && rec.question) {
+      pendingAsk.value = {
+        askId: rec.askId,
+        question: rec.question,
+        ...(rec.timeoutSec ? { timeoutSec: rec.timeoutSec } : {}),
+      };
+    }
   }
 
   async function newSession(cwd?: string, model?: string, expertId?: string): Promise<void> {
@@ -760,6 +856,11 @@ export function createAgentStore(bus: DataBus) {
     const p = pendingApproval.value;
     if (!p) return;
     pendingApproval.value = null;
+    if (activeId.value && pendingBySession.value[activeId.value]?.approvalId === p.approvalId) {
+      const next = { ...pendingBySession.value };
+      delete next[activeId.value];
+      pendingBySession.value = next;
+    }
     try {
       await bus.request("session.resolve_approval", { approval_id: p.approvalId, approved });
     } catch (err) {
@@ -776,6 +877,11 @@ export function createAgentStore(bus: DataBus) {
     const p = pendingAsk.value;
     if (!p) return;
     pendingAsk.value = null;
+    if (activeId.value && pendingBySession.value[activeId.value]?.askId === p.askId) {
+      const next = { ...pendingBySession.value };
+      delete next[activeId.value];
+      pendingBySession.value = next;
+    }
     try {
       await bus.request("session.resolve_ask", {
         session_id: activeId.value,
@@ -1109,6 +1215,7 @@ export function createAgentStore(bus: DataBus) {
     thinkingLevels,
     pendingApproval,
     pendingAsk,
+    pendingBySession,
     turnStartedAt,
     turnEndedAt,
     turnFileChanges,

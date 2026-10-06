@@ -14,9 +14,15 @@ import { applyTheme, themePref, applyFontSettings, fontSettings, type ThemePref 
  * 页面按 pi 的真实能力取舍：常规 / 外观 / 模型 / 供应商 / 快捷键 /
  * 记忆(AGENTS.md) / 插件 / MCP / 技能 / 命令 / 使用统计 / 引导。
  */
-const props = withDefaults(defineProps<{ bus: DataBus; initialPane?: string }>(), {
-  initialPane: "general",
-});
+const props = withDefaults(
+  defineProps<{
+    bus: DataBus;
+    initialPane?: string;
+    /** 宿主注入的额外页面（如桌面端的「桌面」）：内容经 `pane-<id>` 具名插槽提供 */
+    extraPanes?: Array<{ id: string; label: string; icon: string }>;
+  }>(),
+  { initialPane: "general", extraPanes: () => [] },
+);
 const emit = defineEmits<{
   close: [];
   resetLayout: [];
@@ -35,7 +41,8 @@ type PaneId =
   | "commands"
   | "usage"
   | "sync"
-  | "guide";
+  | "guide"
+  | (string & {});
 
 const PANE_IDS = new Set<PaneId>([
   "general", "appearance", "models", "providers", "shortcuts", "memory",
@@ -52,7 +59,25 @@ const LEGACY_PANE: Record<string, PaneId> = {
 };
 
 const initial = LEGACY_PANE[props.initialPane] ?? (props.initialPane as PaneId);
-const pane = ref<PaneId>(initial && PANE_IDS.has(initial) ? initial : "general");
+const pane = ref<PaneId>(
+  initial && (PANE_IDS.has(initial) || props.extraPanes.some((p) => p.id === initial))
+    ? initial
+    : "general",
+);
+
+/** 额外页面拼进「基础设置」分组（宿主静态传入，无需响应 props 变化） */
+const navSections = computed(() => {
+  if (!props.extraPanes.length) return staticNavSections;
+  const sections = staticNavSections.map((s) => ({ ...s, items: [...s.items] }));
+  const base = sections[0];
+  if (base) {
+    base.items.push(
+      ...props.extraPanes.map((p) => ({ id: p.id as PaneId, label: p.label, icon: p.icon })),
+    );
+  }
+  return sections;
+});
+const extraPaneIds = computed(() => new Set(props.extraPanes.map((p) => p.id)));
 
 interface NavItem {
   id: PaneId;
@@ -60,7 +85,7 @@ interface NavItem {
   icon: string;
   count?: () => number | undefined;
 }
-const navSections: Array<{ title: string; items: NavItem[] }> = [
+const staticNavSections: Array<{ title: string; items: NavItem[] }> = [
   {
     title: "基础设置",
     items: [
@@ -908,7 +933,7 @@ function openFolder(): void {
         <!-- ============ 插件 / MCP / 技能（内嵌完整管理页） ============ -->
         <ToolsView
           v-else-if="pane === 'plugins' || pane === 'mcp' || pane === 'skills'"
-          :kind="pane"
+          :kind="(pane as 'plugins' | 'mcp' | 'skills')"
           :bus="bus"
         />
 
@@ -1045,6 +1070,12 @@ function openFolder(): void {
               <button class="ghost-btn" @click="pane = 'sync'">去开启</button>
             </div>
           </div>
+        </template>
+        <!-- ============ 宿主注入的额外页面（如桌面端「桌面」） ============ -->
+        <template v-else-if="extraPaneIds.has(pane)">
+          <slot :name="`pane-${pane}`">
+            <div class="state">此页面在当前环境不可用</div>
+          </slot>
         </template>
       </section>
     </div>
