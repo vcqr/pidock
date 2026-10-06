@@ -737,7 +737,7 @@ function openFolder(): void {
                 </button>
               </div>
             </div>
-            <div class="row">
+            <div class="row col">
               <div class="row-text">
                 <b>界面字体</b>
                 <span>留空使用默认；填 CSS font-family 值，如 "Microsoft YaHei"</span>
@@ -750,7 +750,7 @@ function openFolder(): void {
                 @change="applyFontSettings({ family: ($event.target as HTMLInputElement).value })"
               />
             </div>
-            <div class="row">
+            <div class="row col">
               <div class="row-text">
                 <b>等宽字体</b>
                 <span>代码、diff 与文件预览使用；留空默认 Consolas</span>
