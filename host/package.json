@@ -15,6 +15,7 @@
     "smoke:extension": "bun run scripts/extension-smoke.ts",
     "smoke:config": "bun run scripts/config-smoke.ts",
     "smoke:experts": "bun run scripts/experts-smoke.ts",
+    "verify:experts-config": "bun run scripts/experts-config-verify.ts",
     "e2e:server": "bun run ../server/scripts/fake-desktop.ts"
   },
   "dependencies": {

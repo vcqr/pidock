@@ -52,16 +52,16 @@ function startNewTask(cwd?: string, expert?: { id: string; name: string } | null
 }
 
 /** 专家页「对话」：立即创建绑定该专家的会话并进入聊天。
- * 工作目录沿用最近会话的项目（无则主目录）：知识库/私有资源常是相对某项目的，
- * 且实际项目上下文里测试专家更贴近真实使用。 */
+ * 工作目录不传（host 落主目录）——测试环境纯净：只有全局资源 + 专家配置。
+ * 配置生效性已在 SDK 层验证（scripts/experts-config-verify.ts）：
+ * 角色提示词进系统提示词、excludeTools/技能过滤均真实生效。 */
 async function testExpert(e: { id: string; name: string }): Promise<void> {
   showExperts.value = false;
   showAutomation.value = false;
   const s = store.value;
   if (!s) return;
-  const last = s.sessions[0];
   try {
-    await s.newSession(last?.cwd, undefined, e.id);
+    await s.newSession(undefined, undefined, e.id);
   } catch (err) {
     // 标题栏已有 lastError 展示通道，这里不吞异常即可
     s.lastError = err instanceof Error ? err.message : String(err);
