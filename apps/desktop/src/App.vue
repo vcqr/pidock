@@ -338,7 +338,13 @@ onMounted(async () => {
         </template>
       </n-split>
     </div>
-    <div v-else class="boot-error">正在启动 pi-host…</div>
+    <div v-else class="boot-splash">
+      <div class="splash-mark">π</div>
+      <div class="splash-line">
+        <Icon name="loader-2-line" :size="15" class="splash-spin" />
+        <span>正在启动 pi-host…</span>
+      </div>
+    </div>
   </n-config-provider>
 </template>
 
@@ -424,4 +430,38 @@ onMounted(async () => {
   color: var(--pd-red);
 }
 .boot-error pre { color: var(--pd-text-2); white-space: pre-wrap; }
+
+/* 启动过渡页：居中 π 水印 + 旋转指示，与错误态（.boot-error 红色）区分 */
+.boot-splash {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background: var(--pd-bg);
+  user-select: none;
+}
+.splash-mark {
+  font-size: 72px;
+  line-height: 1;
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  color: var(--pd-text-3);
+  opacity: 0.3;
+}
+.splash-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--pd-text-2);
+  font-size: calc(13px * var(--pd-font-scale));
+}
+.splash-line svg {
+  display: block;
+  animation: splash-spin 0.9s linear infinite;
+}
+@keyframes splash-spin {
+  to { transform: rotate(360deg); }
+}
 </style>
