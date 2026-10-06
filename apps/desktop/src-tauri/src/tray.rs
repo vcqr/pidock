@@ -10,9 +10,9 @@ use std::sync::Mutex;
 
 use pidock_protocol::{ephemeral, event, Envelope};
 use serde::{Deserialize, Serialize};
-use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{image::Image, AppHandle, Manager};
+use tauri::{image::Image, AppHandle, Manager, Wry};
 use tokio::sync::broadcast;
 
 /// 桌面端本地偏好（%APPDATA%/app.pidock.desktop/desktop.json），与 host 的 settings.json 无关
@@ -75,7 +75,7 @@ fn save_config(app: &AppHandle, cfg: &DesktopConfig) {
     }
 }
 
-fn build_menu(app: &AppHandle) -> tauri::Result<()> {
+fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let state = app.state::<TrayState>();
     let cfg = state.config.lock().unwrap().clone();
 
@@ -105,7 +105,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, "quit", "退出 PiDock", true, None::<&str>)?;
-    let menu = MenuBuilder::new(app)
+    MenuBuilder::new(app)
         .item(&show)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&notify)
@@ -113,12 +113,21 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         .item(&autostart)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&quit)
-        .build()?;
+        .build()
+}
 
-    if let Some(tray) = state.tray.lock().unwrap().as_ref() {
-        let _ = tray.set_menu(Some(menu));
+/// 重建并替换托盘菜单（开关勾选态烤在菜单项里，配置变化后需整体重建）
+fn refresh_menu(app: &AppHandle) {
+    match build_menu(app) {
+        Ok(menu) => {
+            let state = app.state::<TrayState>();
+            let tray_guard = state.tray.lock().unwrap();
+            if let Some(tray) = tray_guard.as_ref() {
+                let _ = tray.set_menu(Some(menu));
+            }
+        }
+        Err(e) => eprintln!("[tray] 重建托盘菜单失败: {e}"),
     }
-    Ok(())
 }
 
 /// 按等待集合刷新角标图标与 tooltip
@@ -213,10 +222,12 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         icon_attention,
     });
 
-    build_menu(app)?;
+    // 菜单必须挂在 builder 上：build_menu 返回 Menu，set_menu 要等 tray 存在后才能用
+    let menu = build_menu(app)?;
     let tray = TrayIconBuilder::with_id("pidock-tray")
         .icon(initial_icon)
         .tooltip("PiDock")
+        .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
             match event.id().0.as_str() {
@@ -230,7 +241,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
                         c.clone()
                     };
                     save_config(app, &cfg);
-                    let _ = build_menu(app);
+                    refresh_menu(app);
                 }
                 "close-hide" => {
                     let cfg = {
@@ -241,7 +252,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
                         c.clone()
                     };
                     save_config(app, &cfg);
-                    let _ = build_menu(app);
+                    refresh_menu(app);
                 }
                 "toggle-autostart" => {
                     let (cfg, enable) = {
@@ -252,7 +263,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
                     };
                     apply_autostart(app, enable);
                     save_config(app, &cfg);
-                    let _ = build_menu(app);
+                    refresh_menu(app);
                 }
                 _ => {}
             }
@@ -369,7 +380,8 @@ pub fn desktop_config_set(app: AppHandle, config: DesktopConfig) -> Result<(), S
     }
     save_config(&app, &config);
     *app.state::<TrayState>().config.lock().unwrap() = config;
-    build_menu(&app).map_err(|e| e.to_string())
+    refresh_menu(&app);
+    Ok(())
 }
 
 /// 进程退出前显式移除托盘图标（Windows 上强退后死图标要悬停才消失）
