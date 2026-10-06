@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { REVEAL_PATH } from "../databus.js";
+import { highlightCode } from "../fileHighlight.js";
 import FileIcon from "./FileIcon.vue";
 import Icon from "./Icon.vue";
 
 /**
  * 项目文件浏览面板（第三栏最右停靠）：workspace.files 建树 + 搜索过滤 +
- * 点击文件预览文本内容。数据经回调注入（store.listWorkspaceFiles / readWorkspaceFile），
- * 组件自身不依赖 store 实例。
+ * 点击文件在下方编辑器式预览区打开（多标签页 / 面包屑路径 / 行号 + 语法高亮）。
+ * 数据经回调注入（store.listWorkspaceFiles / readWorkspaceFile），组件自身不依赖 store 实例。
  */
 
 interface FileEntry {
@@ -20,6 +21,10 @@ interface FileReadResult {
   truncated: boolean;
   binary: boolean;
   size: number;
+}
+/** 一个打开的预览标签 */
+interface PreviewTab extends FileReadResult {
+  path: string;
 }
 
 interface TreeNode {
@@ -52,13 +57,12 @@ const entries = ref<FileEntry[]>([]);
 const loading = ref(false);
 const loadError = ref<string | null>(null);
 const query = ref("");
-/** 展开的目录（key = 相对路径）；加载后默认展开第一层 */
+/** 展开的目录（key = 相对路径）；目录默认全部折叠，点展开 */
 const expandedDirs = ref<Set<string>>(new Set());
 
 async function load(): Promise<void> {
   loading.value = true;
   loadError.value = null;
-  preview.value = null;
   try {
     entries.value = await props.loadFiles(props.cwd);
     if (!entries.value.length) loadError.value = "目录为空";
@@ -121,33 +125,68 @@ function toggleDir(n: TreeNode): void {
   expandedDirs.value = next;
 }
 
-// ---- 预览 ----
-const preview = ref<(FileReadResult & { path: string }) | null>(null);
-const previewLoading = ref(false);
-const previewError = ref<string | null>(null);
+// ---- 预览标签页 ----
+const MAX_TABS = 12;
+const tabs = ref<PreviewTab[]>([]);
+const activePath = ref<string | null>(null);
+const tabLoading = ref(false);
+const tabError = ref<string | null>(null);
 
-async function openPreview(n: TreeNode): Promise<void> {
-  previewLoading.value = true;
-  previewError.value = null;
-  try {
-    const r = await props.readFile(props.cwd, n.path);
-    preview.value = { ...r, path: n.path };
-  } catch (err) {
-    preview.value = null;
-    previewError.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    previewLoading.value = false;
+const activeTab = computed(() => tabs.value.find((t) => t.path === activePath.value) ?? null);
+
+function activate(path: string): void {
+  activePath.value = path;
+}
+
+function closeTab(path: string): void {
+  const idx = tabs.value.findIndex((t) => t.path === path);
+  if (idx < 0) return;
+  tabs.value.splice(idx, 1);
+  if (activePath.value === path) {
+    const next = tabs.value[Math.min(idx, tabs.value.length - 1)];
+    activePath.value = next?.path ?? null;
   }
 }
-function closePreview(): void {
-  preview.value = null;
-  previewError.value = null;
+
+async function openPreview(n: TreeNode): Promise<void> {
+  if (n.dir) {
+    toggleDir(n);
+    return;
+  }
+  if (tabs.value.some((t) => t.path === n.path)) {
+    activate(n.path);
+    return;
+  }
+  tabLoading.value = true;
+  tabError.value = null;
+  try {
+    const r = await props.readFile(props.cwd, n.path);
+    tabs.value.push({ ...r, path: n.path });
+    if (tabs.value.length > MAX_TABS) tabs.value.shift();
+    activate(n.path);
+  } catch (err) {
+    tabError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    tabLoading.value = false;
+  }
 }
 
 function onRowClick(n: TreeNode): void {
-  if (n.dir) toggleDir(n);
-  else void openPreview(n);
+  void openPreview(n);
 }
+
+/** 高亮后的代码（span 可能跨行，整体放进 <pre>）；行号列独立对齐 */
+const highlighted = computed(() => {
+  const t = activeTab.value;
+  if (!t || t.binary) return "";
+  return highlightCode(t.path, t.text);
+});
+const gutterText = computed(() => {
+  const t = activeTab.value;
+  if (!t || t.binary) return "";
+  return Array.from({ length: t.text.split("\n").length }, (_, i) => i + 1).join("\n");
+});
+const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.split("/") : []));
 
 // ---- 复制路径（WebView 剪贴板失败退回 execCommand） ----
 async function copyText(text: string): Promise<void> {
@@ -170,6 +209,9 @@ watch(
   () => {
     query.value = "";
     expandedDirs.value = new Set();
+    tabs.value = [];
+    activePath.value = null;
+    tabError.value = null;
     void load();
   },
 );
@@ -204,12 +246,13 @@ onMounted(load);
           v-for="e in searchRows"
           :key="e.path"
           class="row"
+          :class="{ active: !e.dir && e.path === activePath }"
           :title="e.path"
           @click="!e.dir && onRowClick({ name: e.name, path: e.path, dir: e.dir, children: [] })"
         >
           <span class="tile"><FileIcon :path="e.path" :dir="e.dir" :size="14" /></span>
           <span class="row-name">{{ e.name }}</span>
-          <button class="row-copy" :title="'复制路径'" @click.stop="copyText(joinAbs(e.path))">
+          <button class="row-copy" title="复制路径" @click.stop="copyText(joinAbs(e.path))">
             <Icon name="file-copy-line" :size="13" />
           </button>
         </div>
@@ -220,6 +263,7 @@ onMounted(load);
           v-for="{ node, depth } in visibleRows"
           :key="node.path"
           class="row"
+          :class="{ active: !node.dir && node.path === activePath }"
           :style="{ paddingLeft: 8 + depth * 13 + 'px' }"
           :title="node.path"
           @click="onRowClick(node)"
@@ -237,30 +281,56 @@ onMounted(load);
       </template>
     </div>
 
-    <!-- 文件预览（下半区） -->
-    <div v-if="preview || previewLoading || previewError" class="fp-preview">
-      <div class="pv-head">
-        <FileIcon v-if="preview" :path="preview.path" :size="14" />
-        <span class="pv-name" :title="preview ? joinAbs(preview.path) : ''">{{ preview?.path ?? "预览" }}</span>
-        <span class="flex-sp"></span>
-        <button
-          v-if="preview"
-          class="icon-btn"
-          title="复制路径"
-          @click="copyText(joinAbs(preview.path))"
-        ><Icon name="file-copy-line" :size="13" /></button>
-        <button class="icon-btn" title="关闭预览" @click="closePreview"><Icon name="close-line" :size="14" /></button>
+    <!-- 预览区：标签页 + 面包屑 + 行号代码 -->
+    <template v-if="tabs.length || tabLoading || tabError">
+      <div v-if="tabs.length" class="fp-tabs">
+        <div
+          v-for="t in tabs"
+          :key="t.path"
+          class="fp-tab"
+          :class="{ on: t.path === activePath }"
+          :title="t.path"
+          @click="activate(t.path)"
+        >
+          <FileIcon :path="t.path" :size="13" />
+          <span class="tab-name">{{ t.path.split("/").pop() }}</span>
+          <button class="tab-close" title="关闭标签" @click.stop="closeTab(t.path)">
+            <Icon name="close-line" :size="11" />
+          </button>
+        </div>
       </div>
-      <div v-if="previewLoading" class="pv-note"><Icon name="loader-2-line" :size="14" />加载中…</div>
-      <div v-else-if="previewError" class="pv-note err"><Icon name="error-warning-line" :size="14" />{{ previewError }}</div>
-      <template v-else-if="preview">
-        <div v-if="preview.binary" class="pv-note">二进制文件，无法预览文本内容</div>
+      <div v-if="tabLoading" class="pv-note"><Icon name="loader-2-line" :size="14" />加载中…</div>
+      <div v-else-if="tabError" class="pv-note err"><Icon name="error-warning-line" :size="14" />{{ tabError }}</div>
+      <div v-else-if="activeTab" class="fp-preview">
+        <div class="pv-crumb">
+          <span class="crumb-root">{{ title }}</span>
+          <template v-for="(seg, i) in crumbSegments" :key="i">
+            <span class="crumb-sep">›</span>
+            <span v-if="i === crumbSegments.length - 1" class="crumb-last">
+              <FileIcon :path="activeTab.path" :size="12" />{{ seg }}
+            </span>
+            <span v-else class="crumb-seg">{{ seg }}</span>
+          </template>
+          <span class="flex-sp"></span>
+          <button
+            class="icon-btn"
+            title="复制路径"
+            @click="copyText(joinAbs(activeTab.path))"
+          ><Icon name="file-copy-line" :size="13" /></button>
+          <button class="icon-btn" title="关闭标签" @click="closeTab(activeTab.path)">
+            <Icon name="close-line" :size="14" />
+          </button>
+        </div>
+        <div v-if="activeTab.binary" class="pv-note">二进制文件，无法预览文本内容</div>
         <template v-else>
-          <pre class="pv-body">{{ preview.text }}</pre>
-          <div v-if="preview.truncated" class="pv-note">文件过大，仅显示前 256 KB</div>
+          <div class="pv-scroll">
+            <pre class="pv-gutter">{{ gutterText }}</pre>
+            <pre class="pv-code" v-html="highlighted"></pre>
+          </div>
+          <div v-if="activeTab.truncated" class="pv-note">文件过大，仅显示前 256 KB</div>
         </template>
-      </template>
-    </div>
+      </div>
+    </template>
   </aside>
 </template>
 
@@ -349,6 +419,7 @@ onMounted(load);
   user-select: none;
 }
 .row:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+.row.active { background: var(--pd-bg-active); color: var(--pd-text); }
 .row .chev {
   display: grid;
   place-items: center;
@@ -384,45 +455,124 @@ onMounted(load);
   flex: none;
   opacity: 0;
 }
-.row:hover .row-copy { opacity: 1; }
+.row:hover .row-copy, .row.active .row-copy { opacity: 1; }
 .row-copy:hover { background: var(--pd-bg-active); color: var(--pd-text); }
 
+/* ---- 标签页 ---- */
+.fp-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 4px 8px 0 10px;
+  overflow-x: auto;
+  flex: none;
+  scrollbar-width: none;
+}
+.fp-tabs::-webkit-scrollbar { display: none; }
+.fp-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 5px 5px 9px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  color: var(--pd-text-3);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+.fp-tab:hover { color: var(--pd-text-2); background: var(--pd-bg-hover); }
+.fp-tab.on {
+  background: var(--pd-bg);
+  border-color: var(--pd-border-soft);
+  color: var(--pd-text);
+}
+.tab-name {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab-close {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  color: var(--pd-text-4);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  flex: none;
+}
+.tab-close:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+
+/* ---- 预览区 ---- */
 .fp-preview {
-  flex: 0 0 45%;
+  flex: 0 0 50%;
   border-top: 1px solid var(--pd-border-soft);
   display: flex;
   flex-direction: column;
   min-height: 100px;
 }
-.pv-head {
+.pv-crumb {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 8px 7px 12px;
-  font-size: 12px;
-  color: var(--pd-text-2);
+  gap: 5px;
+  padding: 6px 8px 6px 12px;
+  font-size: 11.5px;
+  color: var(--pd-text-3);
   border-bottom: 1px solid var(--pd-border-soft);
-}
-.pv-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
+  overflow: hidden;
 }
-.pv-body {
+.crumb-root { color: var(--pd-text-2); font-weight: 600; flex: none; }
+.crumb-sep { color: var(--pd-text-4); flex: none; }
+.crumb-seg { overflow: hidden; text-overflow: ellipsis; }
+.crumb-last {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--pd-text);
+  flex: none;
+}
+.pv-scroll {
   flex: 1;
   overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  background: var(--pd-bg);
+  min-height: 0;
+}
+.pv-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.pv-scroll::-webkit-scrollbar-thumb { background: var(--pd-scrollbar); border-radius: 4px; }
+.pv-gutter, .pv-code {
   margin: 0;
-  padding: 8px 12px;
   font-family: var(--pd-mono, ui-monospace, Consolas, monospace);
   font-size: 11.5px;
-  line-height: 1.55;
+  line-height: 1.6;
+}
+.pv-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex: none;
+  min-width: 36px;
+  padding: 8px 8px 12px 10px;
+  text-align: right;
+  color: var(--pd-text-4);
+  background: var(--pd-bg);
+  border-right: 1px solid var(--pd-border-soft);
+  user-select: none;
+}
+.pv-code {
+  flex: none;
+  padding: 8px 14px 12px 10px;
   color: var(--pd-text-2);
   white-space: pre;
-  user-select: text;
 }
-.pv-body::-webkit-scrollbar { width: 8px; height: 8px; }
-.pv-body::-webkit-scrollbar-thumb { background: var(--pd-scrollbar); border-radius: 4px; }
 .pv-note {
   display: flex;
   align-items: center;
@@ -430,6 +580,7 @@ onMounted(load);
   padding: 8px 12px;
   color: var(--pd-text-4);
   font-size: 11.5px;
+  border-top: 1px solid var(--pd-border-soft);
 }
-.pv-note.err { color: var(--pd-red); }
+.pv-note.err { color: var(--pd-red); border-top: none; }
 </style>
