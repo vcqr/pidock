@@ -7,7 +7,8 @@ import Icon from "./Icon.vue";
 /**
  * 专家（智能体编排）：主区右栏页面（侧栏保留，同自动化页模式）。
  * 专家 = 预编排的智能体档案：角色提示词（append 到 pi 默认系统提示词）、
- * 全局技能/插件白名单、内置工具增减、知识库目录、私有技能/插件、默认参数。
+ * 全局技能/插件白名单、内置工具增减、知识库目录、私有技能/插件。
+ * 模型不归属专家（跟随全局/会话选择），编辑器只保留思考等级与权限模式。
  * 雇佣 = 新建任务时绑定（host 在会话创建时应用全部配置）。
  */
 
@@ -39,18 +40,18 @@ interface PrivateResource {
 const experts = ref<Expert[]>([]);
 const loading = ref(true);
 const notice = ref("");
+const noticeErr = ref(false);
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
 function errText(e: unknown): string {
   return typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
 }
 function flash(msg: string, isErr = false): void {
-  notice.value = (isErr ? "" : "") + msg;
+  notice.value = msg;
   noticeErr.value = isErr;
   if (noticeTimer) clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => (notice.value = ""), 3200);
 }
-const noticeErr = ref(false);
 
 const ICON_CHOICES = [
   "user-star-line",
@@ -83,6 +84,14 @@ onMounted(load);
 
 // ---------------------------------------------------------------- 编辑器
 
+type EditorTab = "basic" | "skills" | "mcp" | "kb";
+const TABS: Array<{ id: EditorTab; label: string }> = [
+  { id: "basic", label: "基础信息" },
+  { id: "skills", label: "技能" },
+  { id: "mcp", label: "MCP 工具" },
+  { id: "kb", label: "知识库" },
+];
+const activeTab = ref<EditorTab>("basic");
 const showEditor = ref(false);
 const editingId = ref<string | null>(null);
 const saving = ref(false);
@@ -95,7 +104,6 @@ const form = ref({
   extensions: [] as string[],
   exclude_tools: [] as string[],
   knowledge_dirs: [] as string[],
-  model: "",
   thinking_level: "",
   permission_mode: "",
 });
@@ -113,11 +121,11 @@ function openCreate(): void {
     extensions: [],
     exclude_tools: [],
     knowledge_dirs: [],
-    model: "",
     thinking_level: "",
     permission_mode: "",
   };
   privates.value = { skills: [], extensions: [] };
+  activeTab.value = "basic";
   showEditor.value = true;
   void ensurePickers();
 }
@@ -132,10 +140,10 @@ function openEdit(e: Expert): void {
     extensions: [...(e.extensions ?? [])],
     exclude_tools: [...(e.exclude_tools ?? [])],
     knowledge_dirs: [...(e.knowledge_dirs ?? [])],
-    model: e.model ?? "",
     thinking_level: e.thinking_level ?? "",
     permission_mode: e.permission_mode ?? "",
   };
+  activeTab.value = "basic";
   showEditor.value = true;
   void ensurePickers();
   void loadPrivates(e.id);
@@ -144,6 +152,7 @@ function openEdit(e: Expert): void {
 async function save(): Promise<void> {
   if (saving.value) return;
   if (!form.value.name.trim()) {
+    activeTab.value = "basic";
     flash("请填写专家名称", true);
     return;
   }
@@ -159,7 +168,6 @@ async function save(): Promise<void> {
       extensions: form.value.extensions,
       exclude_tools: form.value.exclude_tools,
       knowledge_dirs: form.value.knowledge_dirs,
-      model: form.value.model || undefined,
       thinking_level: form.value.thinking_level || undefined,
       permission_mode: form.value.permission_mode || undefined,
     });
@@ -192,26 +200,20 @@ function hire(e: Expert): void {
 
 const skillOptions = ref<Array<{ name: string; description: string }>>([]);
 const extOptions = ref<Array<{ name: string; file: string }>>([]);
-const modelOptions = ref<Array<{ full: string; label: string }>>([]);
 const pickersLoaded = ref(false);
 
 async function ensurePickers(): Promise<void> {
   if (pickersLoaded.value) return;
   pickersLoaded.value = true;
   try {
-    const [skills, exts, models] = await Promise.all([
+    const [skills, exts] = await Promise.all([
       props.bus.request("config.skills.list", {}).catch(() => ({ skills: [] })),
       props.bus.request("config.extensions.list", {}).catch(() => ({ extensions: [] })),
-      props.bus.request("config.models.list", {}).catch(() => ({ models: [] })),
     ]);
     skillOptions.value = (skills?.skills ?? [])
       .filter((s: any) => s.enabled !== false)
       .map((s: any) => ({ name: String(s.name), description: String(s.description ?? "") }));
     extOptions.value = (exts?.extensions ?? []).map((x: any) => ({ name: String(x.name), file: String(x.file ?? "") }));
-    modelOptions.value = (models?.models ?? []).map((m: any) => ({
-      full: `${m.provider}/${m.id}`,
-      label: `${m.name ?? m.id}（${m.provider}）`,
-    }));
   } catch {
     // 选择项加载失败不阻塞编辑器，仅列表为空
   }
@@ -345,147 +347,95 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 
     <div v-else class="cards">
       <div v-for="e in experts" :key="e.id" class="card">
-        <div class="card-top">
-          <span class="card-icon"><Icon :name="e.icon || 'user-star-line'" :size="18" /></span>
-          <div class="card-title">
+        <div class="card-head">
+          <span class="avatar"><Icon :name="e.icon || 'user-star-line'" :size="20" /></span>
+          <div class="card-id">
             <strong>{{ e.name }}</strong>
-            <span v-if="e.description" class="desc">{{ e.description }}</span>
+            <span v-if="e.description" class="subtitle">{{ e.description }}</span>
           </div>
         </div>
-        <p class="prompt-hint" :title="e.prompt">{{ e.prompt || "（未填写角色提示词）" }}</p>
-        <div class="meta">
+        <p class="card-desc" :title="e.prompt">{{ e.prompt || "（未填写角色提示词）" }}</p>
+        <div class="tags">
           <span class="tag" :title="(e.skills ?? []).join('、')">技能 {{ (e.skills ?? []).length || "不限" }}</span>
           <span class="tag" :title="(e.extensions ?? []).join('、')">MCP {{ (e.extensions ?? []).length || "不限" }}</span>
-          <span class="tag" v-if="(e.exclude_tools ?? []).length">禁 {{ (e.exclude_tools ?? []).join("/") }}</span>
-          <span class="tag" v-if="(e.knowledge_dirs ?? []).length">知识 {{ (e.knowledge_dirs ?? []).length }} 目录</span>
-          <span class="tag" v-if="e.model">{{ e.model }}</span>
+          <span class="tag" v-if="(e.exclude_tools ?? []).length" :title="'禁用 ' + (e.exclude_tools ?? []).join('/')">
+            禁 {{ (e.exclude_tools ?? []).join("/") }}
+          </span>
+          <span class="tag" v-if="(e.knowledge_dirs ?? []).length">知识库 {{ (e.knowledge_dirs ?? []).length }}</span>
         </div>
         <div class="card-actions">
-          <button class="btn primary sm" @click="hire(e)"><Icon name="user-star-line" :size="14" />雇佣</button>
-          <button class="btn sm" @click="openEdit(e)"><Icon name="edit-2-line" :size="14" />编辑</button>
-          <button class="btn sm danger" @click="remove(e)"><Icon name="delete-bin-line" :size="14" />删除</button>
+          <button class="btn primary sm" title="新建任务并雇佣该专家" @click="hire(e)">
+            <Icon name="user-star-line" :size="14" />雇佣
+          </button>
+          <button class="icon-btn sm" title="编辑" @click="openEdit(e)">
+            <Icon name="edit-2-line" :size="15" />
+          </button>
+          <button class="icon-btn sm danger" title="删除" @click="remove(e)">
+            <Icon name="delete-bin-line" :size="15" />
+          </button>
         </div>
       </div>
     </div>
 
-    <!-- 编辑对话框 -->
+    <!-- 编辑对话框：分组标签页（基础信息 / 技能 / MCP 工具 / 知识库） -->
     <div v-if="showEditor" class="dialog-mask">
-      <div class="dialog wide">
+      <div class="dialog">
         <div class="d-head">
           <h2>{{ editingId ? "编辑专家" : "新建专家" }}</h2>
           <button class="icon-btn" title="关闭" @click="showEditor = false">
             <Icon name="close-line" :size="17" />
           </button>
         </div>
-        <p class="d-sub">专家配置在<b>会话创建时</b>生效：角色提示词追加在系统提示词之后，技能/MCP 白名单约束该会话可用资源。</p>
+        <p class="d-sub">专家配置在<b>会话创建时</b>生效：角色提示词追加在系统提示词之后，白名单约束该会话可用资源。</p>
 
-        <div class="grid2">
-          <div class="field">
-            <label>名称 <i>*</i></label>
-            <input v-model="form.name" placeholder="如 code-reviewer（也是 /expert: 的调用名，不含空格）" />
-          </div>
-          <div class="field">
-            <label>简介</label>
-            <input v-model="form.description" placeholder="一句话说明这个专家擅长什么" />
-          </div>
+        <div class="tabs">
+          <button
+            v-for="t in TABS"
+            :key="t.id"
+            class="tab"
+            :class="{ on: activeTab === t.id }"
+            @click="activeTab = t.id"
+          >
+            {{ t.label }}
+          </button>
         </div>
 
-        <div class="field">
-          <label>图标</label>
-          <div class="icon-row">
-            <button
-              v-for="ic in ICON_CHOICES"
-              :key="ic"
-              class="icon-pick"
-              :class="{ on: form.icon === ic }"
-              @click="form.icon = ic"
-            >
-              <Icon :name="ic" :size="17" />
-            </button>
-          </div>
-        </div>
-
-        <div class="field">
-          <label>角色定位提示词</label>
-          <textarea
-            v-model="form.prompt"
-            rows="5"
-            placeholder="你是……。你的职责是……。约束：……（追加在系统提示词之后，不影响基础编码能力）"
-          ></textarea>
-        </div>
-
-        <div class="grid2">
-          <div class="field">
-            <label>全局技能白名单（不选 = 全部可用）</label>
-            <div class="opt-list">
-              <label v-for="s in skillOptions" :key="s.name" class="opt" :title="s.description">
-                <input
-                  type="checkbox"
-                  :checked="form.skills.includes(s.name)"
-                  @change="toggle(form.skills, s.name)"
-                />
-                <span>{{ s.name }}</span>
-              </label>
-              <p v-if="!skillOptions.length" class="opt-empty">未安装全局技能</p>
+        <!-- 基础信息 -->
+        <div v-if="activeTab === 'basic'" class="tab-panel">
+          <div class="grid2">
+            <div class="field">
+              <label>名称 <i>*</i></label>
+              <input v-model="form.name" placeholder="如 code-reviewer（也是 /expert: 的调用名，不含空格）" />
+            </div>
+            <div class="field">
+              <label>简介</label>
+              <input v-model="form.description" placeholder="一句话说明这个专家擅长什么" />
             </div>
           </div>
           <div class="field">
-            <label>全局插件 / MCP 白名单（不选 = 全部可用）</label>
-            <div class="opt-list">
-              <label v-for="x in extOptions" :key="x.file" class="opt" :title="x.file">
-                <input
-                  type="checkbox"
-                  :checked="form.extensions.includes(x.name)"
-                  @change="toggle(form.extensions, x.name)"
-                />
-                <span>{{ x.name }}</span>
-              </label>
-              <p v-if="!extOptions.length" class="opt-empty">未安装全局插件</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="field">
-          <label>禁用的内置工具（只读专家可禁掉全部修改类工具）</label>
-          <div class="check-row">
-            <label v-for="t in EXCLUDE_TOOLS" :key="t.name" class="opt">
-              <input
-                type="checkbox"
-                :checked="form.exclude_tools.includes(t.name)"
-                @change="toggleExclude(t.name)"
-              />
-              <span>{{ t.name }} · {{ t.label }}</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="field">
-          <label>知识库目录（会话内注入文件清单，模型按需读取）</label>
-          <div class="kb-list">
-            <div v-for="(d, i) in form.knowledge_dirs" :key="d" class="kb-item">
-              <Icon name="folder-line" :size="15" />
-              <span :title="d">{{ d }}</span>
-              <button class="icon-btn sm" title="移除" @click="form.knowledge_dirs.splice(i, 1)">
-                <Icon name="close-line" :size="13" />
+            <label>图标</label>
+            <div class="icon-row">
+              <button
+                v-for="ic in ICON_CHOICES"
+                :key="ic"
+                class="icon-pick"
+                :class="{ on: form.icon === ic }"
+                @click="form.icon = ic"
+              >
+                <Icon :name="ic" :size="17" />
               </button>
             </div>
-            <div class="kb-add">
-              <input v-model="newKbDir" placeholder="输入目录绝对路径" @keydown.enter.prevent="addKbDir" />
-              <button class="btn sm" @click="addKbDir"><Icon name="folder-add-line" :size="14" />添加</button>
-            </div>
           </div>
-        </div>
-
-        <div class="grid2">
           <div class="field">
-            <label>默认模型</label>
-            <select v-model="form.model">
-              <option value="">跟随全局默认</option>
-              <option v-for="m in modelOptions" :key="m.full" :value="m.full">{{ m.label }}</option>
-            </select>
+            <label>角色定位提示词</label>
+            <textarea
+              v-model="form.prompt"
+              rows="7"
+              placeholder="你是……。你的职责是……。约束：……（追加在系统提示词之后，不影响基础编码能力）"
+            ></textarea>
           </div>
-          <div class="field row3">
-            <div>
+          <div class="grid2">
+            <div class="field">
               <label>思考等级</label>
               <select v-model="form.thinking_level">
                 <option value="">默认</option>
@@ -495,7 +445,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
                 <option value="high">高</option>
               </select>
             </div>
-            <div>
+            <div class="field">
               <label>权限模式</label>
               <select v-model="form.permission_mode">
                 <option value="">默认（计划模式）</option>
@@ -507,43 +457,100 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
           </div>
         </div>
 
-        <!-- 私有资源 -->
-        <template v-if="editingId">
+        <!-- 技能 -->
+        <div v-else-if="activeTab === 'skills'" class="tab-panel">
           <div class="field">
-            <label>私有资源（仅该专家可用；随专家删除）</label>
-            <div class="priv-grid">
-              <div class="priv-col">
-                <div class="priv-head">
-                  <span>私有技能（{{ privates.skills.length }}）</span>
-                  <button class="btn sm" @click="openInstall('skill')"><Icon name="download-cloud-2-line" :size="13" />安装</button>
-                </div>
-                <div v-for="s in privates.skills" :key="s.path" class="priv-item" :title="s.description || s.path">
-                  <Icon name="magic-line" :size="14" />
-                  <span>{{ s.name }}</span>
-                  <button class="icon-btn sm" title="移除" @click="removePrivate('skill', s.name)">
-                    <Icon name="close-line" :size="13" />
-                  </button>
-                </div>
-                <p v-if="!privates.skills.length" class="opt-empty">暂无</p>
-              </div>
-              <div class="priv-col">
-                <div class="priv-head">
-                  <span>私有插件 / MCP（{{ privates.extensions.length }}）</span>
-                  <button class="btn sm" @click="openInstall('extension')"><Icon name="download-cloud-2-line" :size="13" />安装</button>
-                </div>
-                <div v-for="x in privates.extensions" :key="x.path" class="priv-item" :title="x.path">
-                  <Icon name="plug-line" :size="14" />
-                  <span>{{ x.name }}</span>
-                  <button class="icon-btn sm" title="移除" @click="removePrivate('extension', x.name)">
-                    <Icon name="close-line" :size="13" />
-                  </button>
-                </div>
-                <p v-if="!privates.extensions.length" class="opt-empty">暂无</p>
-              </div>
+            <label>全局技能白名单（不选 = 全部可用）</label>
+            <div class="opt-list tall">
+              <label v-for="s in skillOptions" :key="s.name" class="opt" :title="s.description">
+                <input type="checkbox" :checked="form.skills.includes(s.name)" @change="toggle(form.skills, s.name)" />
+                <span>{{ s.name }}</span>
+                <em v-if="s.description" class="opt-desc">{{ s.description }}</em>
+              </label>
+              <p v-if="!skillOptions.length" class="opt-empty">未安装全局技能</p>
             </div>
           </div>
-        </template>
-        <p v-else class="d-sub">保存后可为该专家安装私有技能 / 插件。</p>
+          <div v-if="editingId" class="field">
+            <label>私有技能（仅该专家可用；随专家删除）</label>
+            <div class="priv-col">
+              <div class="priv-head">
+                <span>{{ privates.skills.length }} 个已安装</span>
+                <button class="btn sm" @click="openInstall('skill')"><Icon name="download-cloud-2-line" :size="13" />安装</button>
+              </div>
+              <div v-for="s in privates.skills" :key="s.path" class="priv-item" :title="s.description || s.path">
+                <Icon name="magic-line" :size="14" />
+                <span>{{ s.name }}</span>
+                <button class="icon-btn sm" title="移除" @click="removePrivate('skill', s.name)">
+                  <Icon name="close-line" :size="13" />
+                </button>
+              </div>
+              <p v-if="!privates.skills.length" class="opt-empty">暂无私有技能</p>
+            </div>
+          </div>
+          <p v-else class="d-sub">保存后可为该专家安装私有技能（zip/tgz，仅该专家可见）。</p>
+        </div>
+
+        <!-- MCP 工具 -->
+        <div v-else-if="activeTab === 'mcp'" class="tab-panel">
+          <div class="field">
+            <label>全局插件 / MCP 白名单（不选 = 全部可用）</label>
+            <div class="opt-list tall">
+              <label v-for="x in extOptions" :key="x.file" class="opt" :title="x.file">
+                <input type="checkbox" :checked="form.extensions.includes(x.name)" @change="toggle(form.extensions, x.name)" />
+                <span>{{ x.name }}</span>
+              </label>
+              <p v-if="!extOptions.length" class="opt-empty">未安装全局插件（MCP 也是插件）</p>
+            </div>
+          </div>
+          <div class="field">
+            <label>禁用的内置工具（只读专家可禁掉全部修改类工具）</label>
+            <div class="check-row">
+              <label v-for="t in EXCLUDE_TOOLS" :key="t.name" class="opt">
+                <input type="checkbox" :checked="form.exclude_tools.includes(t.name)" @change="toggleExclude(t.name)" />
+                <span>{{ t.name }} · {{ t.label }}</span>
+              </label>
+            </div>
+          </div>
+          <div v-if="editingId" class="field">
+            <label>私有插件 / MCP（仅该专家可用；随专家删除）</label>
+            <div class="priv-col">
+              <div class="priv-head">
+                <span>{{ privates.extensions.length }} 个已安装</span>
+                <button class="btn sm" @click="openInstall('extension')"><Icon name="download-cloud-2-line" :size="13" />安装</button>
+              </div>
+              <div v-for="x in privates.extensions" :key="x.path" class="priv-item" :title="x.path">
+                <Icon name="plug-line" :size="14" />
+                <span>{{ x.name }}</span>
+                <button class="icon-btn sm" title="移除" @click="removePrivate('extension', x.name)">
+                  <Icon name="close-line" :size="13" />
+                </button>
+              </div>
+              <p v-if="!privates.extensions.length" class="opt-empty">暂无私有插件</p>
+            </div>
+          </div>
+          <p v-else class="d-sub">保存后可为该专家安装私有插件 / MCP（单个 .ts/.js 文件）。</p>
+        </div>
+
+        <!-- 知识库 -->
+        <div v-else class="tab-panel">
+          <div class="field">
+            <label>知识库目录（会话内注入文件清单，模型按需读取）</label>
+            <div class="kb-list">
+              <div v-for="(d, i) in form.knowledge_dirs" :key="d" class="kb-item">
+                <Icon name="folder-line" :size="15" />
+                <span :title="d">{{ d }}</span>
+                <button class="icon-btn sm" title="移除" @click="form.knowledge_dirs.splice(i, 1)">
+                  <Icon name="close-line" :size="13" />
+                </button>
+              </div>
+              <div class="kb-add">
+                <input v-model="newKbDir" placeholder="输入目录绝对路径" @keydown.enter.prevent="addKbDir" />
+                <button class="btn sm" @click="addKbDir"><Icon name="folder-add-line" :size="14" />添加</button>
+              </div>
+              <p class="opt-empty">只注入文件路径清单，不读取内容——模型按相关性用 read 工具自取，避免撑爆上下文。</p>
+            </div>
+          </div>
+        </div>
 
         <div class="d-foot">
           <button class="btn" @click="showEditor = false">取消</button>
@@ -556,7 +563,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 
     <!-- 私有资源安装对话框 -->
     <div v-if="showInstall" class="dialog-mask">
-      <div class="dialog">
+      <div class="dialog narrow">
         <div class="d-head">
           <h2>安装私有{{ installKind === "skill" ? "技能" : "插件" }}</h2>
           <button class="icon-btn" title="关闭" @click="showInstall = false">
@@ -615,9 +622,9 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   display: flex;
   align-items: flex-start;
   gap: 16px;
-  max-width: 980px;
+  max-width: 1080px;
   width: 100%;
-  margin: 0 auto 18px;
+  margin: 0 auto 20px;
 }
 .head-text { flex: 1; }
 .head-text h1 {
@@ -637,7 +644,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 .head-actions { display: flex; align-items: center; gap: 8px; }
 
 .notice {
-  max-width: 980px;
+  max-width: 1080px;
   width: 100%;
   margin: 0 auto 12px;
   padding: 8px 12px;
@@ -662,58 +669,62 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   line-height: 1.7;
 }
 
+/* 卡片：参考市场页布局——圆形头像 + 名称/副标题 + 描述段落 + 标签胶囊 */
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 14px;
-  max-width: 980px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+  max-width: 1080px;
   width: 100%;
   margin: 0 auto;
 }
 .card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 16px;
+  gap: 11px;
+  padding: 18px;
   border: 1px solid var(--pd-border);
-  border-radius: 13px;
+  border-radius: 14px;
   background: var(--pd-bg-raised);
 }
-.card-top { display: flex; align-items: center; gap: 11px; }
-.card-icon {
-  width: 36px;
-  height: 36px;
+.card:hover { border-color: var(--pd-border-strong, var(--pd-border)); }
+.card-head { display: flex; align-items: center; gap: 12px; }
+.avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
   display: grid;
   place-items: center;
-  border-radius: 10px;
   background: var(--pd-bg-hover);
   color: var(--pd-accent);
   flex: none;
 }
-.card-title { min-width: 0; }
-.card-title strong { display: block; color: var(--pd-text); font-size: 14.5px; }
-.card-title .desc {
+.card-id { min-width: 0; }
+.card-id strong { display: block; color: var(--pd-text); font-size: 15px; }
+.card-id .subtitle {
   display: block;
   font-size: 12px;
   color: var(--pd-text-3);
+  margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.prompt-hint {
+.card-desc {
   margin: 0;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--pd-text-3);
-  line-height: 1.55;
+  line-height: 1.65;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  min-height: 2.6em;
 }
-.meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag {
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 3px 9px;
   border-radius: 20px;
   background: var(--pd-bg-hover);
   color: var(--pd-text-3);
@@ -722,7 +733,8 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.card-actions { display: flex; gap: 8px; margin-top: 2px; }
+.card-actions { display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+.card-actions .icon-btn:first-of-type { margin-left: auto; }
 
 .btn {
   display: inline-flex;
@@ -744,7 +756,6 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 }
 .btn.primary:hover { opacity: 0.92; }
 .btn.sm { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
-.btn.danger:hover { color: var(--pd-red); border-color: var(--pd-red); }
 .icon-btn {
   width: 30px;
   height: 30px;
@@ -757,7 +768,8 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   cursor: pointer;
 }
 .icon-btn:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
-.icon-btn.sm { width: 24px; height: 24px; }
+.icon-btn.sm { width: 28px; height: 28px; }
+.icon-btn.danger:hover { color: var(--pd-red); }
 
 .dialog-mask {
   position: fixed;
@@ -768,7 +780,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   z-index: 120;
 }
 .dialog {
-  width: min(560px, calc(100vw - 48px));
+  width: min(860px, calc(100vw - 48px));
   max-height: calc(100vh - 80px);
   overflow-y: auto;
   background: var(--pd-bg-raised);
@@ -777,10 +789,32 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   box-shadow: var(--pd-shadow);
   padding: 20px 22px 18px;
 }
-.dialog.wide { width: min(760px, calc(100vw - 48px)); }
+.dialog.narrow { width: min(560px, calc(100vw - 48px)); }
 .d-head { display: flex; align-items: center; gap: 12px; }
 .d-head h2 { margin: 0; font-size: 17px; font-weight: 700; color: var(--pd-text); flex: 1; }
 .d-sub { margin: 6px 0 0; font-size: 12.5px; color: var(--pd-text-3); line-height: 1.6; }
+
+/* 对话框分组标签 */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 16px;
+  border-bottom: 1px solid var(--pd-border);
+}
+.tab {
+  padding: 8px 14px 9px;
+  font-size: 13px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--pd-text-3);
+  cursor: pointer;
+}
+.tab:hover { color: var(--pd-text); }
+.tab.on { color: var(--pd-accent); border-bottom-color: var(--pd-accent); }
+.tab-panel { padding-top: 4px; }
+
 .field { margin-top: 15px; }
 .field label {
   display: block;
@@ -811,8 +845,6 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   border-color: var(--pd-accent);
 }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
-.row3 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
-.row3 > div { min-width: 0; }
 
 .icon-row { display: flex; flex-wrap: wrap; gap: 7px; }
 .icon-pick {
@@ -833,7 +865,6 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 }
 
 .opt-list {
-  max-height: 168px;
   overflow-y: auto;
   border: 1px solid var(--pd-border);
   border-radius: 9px;
@@ -842,17 +873,30 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   flex-direction: column;
   gap: 2px;
 }
-.opt {
+.opt-list.tall { max-height: 300px; }
+/* label.opt 提升元素选择器：scoped 下 .field label[data-v] (0,2,1) 会压过 .opt[data-v] (0,2,0) */
+label.opt {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
+  gap: 9px;
+  padding: 6px 8px;
   border-radius: 6px;
   font-size: 12.5px;
   color: var(--pd-text-2);
   cursor: pointer;
 }
-.opt:hover { background: var(--pd-bg-hover); }
+label.opt:hover { background: var(--pd-bg-hover); }
+.opt .opt-desc {
+  flex: 1;
+  min-width: 0;
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--pd-text-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
 .opt-empty { margin: 4px 6px; font-size: 12px; color: var(--pd-text-4); }
 .check-row { display: flex; gap: 18px; }
 
@@ -863,7 +907,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   gap: 8px;
   font-size: 12.5px;
   color: var(--pd-text-2);
-  padding: 6px 9px;
+  padding: 7px 10px;
   border: 1px solid var(--pd-border);
   border-radius: 8px;
 }
@@ -879,7 +923,6 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   font-size: 12.5px;
 }
 
-.priv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .priv-col {
   border: 1px solid var(--pd-border);
   border-radius: 10px;
@@ -901,7 +944,7 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   gap: 7px;
   font-size: 12.5px;
   color: var(--pd-text-2);
-  padding: 4px 6px;
+  padding: 5px 6px;
   border-radius: 6px;
 }
 .priv-item:hover { background: var(--pd-bg-hover); }
