@@ -257,7 +257,7 @@ async function pickAvatar(): Promise<void> {
   if (avatarUploading.value || !pickFile) return;
   let path: string | null = null;
   try {
-    path = await pickFile();
+    path = await pickFile("image");
   } catch {
     return;
   }

@@ -121,10 +121,10 @@ provide(FOLDER_PICKER, async () => {
   }
 });
 
-// 系统原生文件选择器（技能/插件安装对话框的本地导入）
-provide(FILE_PICKER, async () => {
+// 系统原生文件选择器（本地导入）：kind 决定过滤器（缺省技能/插件包，"image" = 头像图片）
+provide(FILE_PICKER, async (kind?: "install" | "image") => {
   try {
-    return await invoke<string | null>("pick_file");
+    return await invoke<string | null>("pick_file", { kind: kind ?? null });
   } catch {
     return null;
   }
