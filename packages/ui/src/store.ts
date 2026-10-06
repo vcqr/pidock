@@ -46,6 +46,16 @@ export interface UiMessageItem {
   ts?: string;
   /** 回合 id（本条用户消息的 session 条目官方 id，回合分组/变更卡片聚合键） */
   turnId?: string;
+  /** 消息的 session 条目官方 id（用户消息分叉锚点） */
+  entryId?: string;
+  /** 助手消息 token 用量与花费（message_complete 携带，元信息条展示） */
+  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; costTotal: number };
+  /** 助手消息模型（provider/model-id） */
+  model?: string;
+  /** 助手消息生成耗时（毫秒，host 从条目时间戳差值计算） */
+  durationMs?: number;
+  /** 助手消息停止原因（length=截断 / aborted=中止，异常值在元信息条出角标） */
+  stopReason?: string;
   /** 用户消息随附图片（data URL，发送时展示用） */
   imageUrls?: string[];
   /** 用户消息随附文档附件（仅名称与大小，乐观气泡展示用；全文由 host 注入消息文本） */
@@ -77,6 +87,8 @@ export interface SessionSummaryUi {
   /** 创建时雇佣的专家（重开由 host 按注册表重放） */
   expert_id?: string;
   expert_name?: string;
+  /** 分叉来源会话（fork 产生的会话带父会话 id，侧栏出分叉标识） */
+  parent_session_id?: string;
   created_at: string;
   updated_at?: string;
   open: boolean;
@@ -181,11 +193,29 @@ export function createAgentStore(bus: DataBus) {
     const itemTs = ts ?? new Date().toISOString();
     const role = p?.role;
     if (role === "assistant") {
+      const meta = {
+        ...(p.usage
+          ? {
+              usage: {
+                input: Number(p.usage.input) || 0,
+                output: Number(p.usage.output) || 0,
+                cacheRead: Number(p.usage.cacheRead) || 0,
+                cacheWrite: Number(p.usage.cacheWrite) || 0,
+                totalTokens: Number(p.usage.totalTokens) || 0,
+                costTotal: Number(p.usage.costTotal) || 0,
+              },
+            }
+          : {}),
+        ...(p.model ? { model: String(p.model) } : {}),
+        ...(Number(p.duration_ms) > 0 ? { durationMs: Number(p.duration_ms) } : {}),
+        ...(p.stopReason ? { stopReason: String(p.stopReason) } : {}),
+      };
       if (streaming && p.message_id && streaming.key === p.message_id) {
         streaming.blocks = asBlocks(p);
         streaming.ts = itemTs;
         streaming.streaming = false;
         streaming.errorMessage = p.errorMessage || undefined;
+        Object.assign(streaming, meta);
         streaming = null;
         return;
       }
@@ -203,6 +233,7 @@ export function createAgentStore(bus: DataBus) {
         streaming: false,
         ts: itemTs,
         ...(p.errorMessage ? { errorMessage: p.errorMessage } : {}),
+        ...meta,
       });
       return;
     }
@@ -218,6 +249,7 @@ export function createAgentStore(bus: DataBus) {
       if (pendingUser) {
         pendingUser.pending = false;
         pendingUser.turnId = p.entry_id || pendingUser.turnId;
+        pendingUser.entryId = p.entry_id || pendingUser.entryId;
         if (imageUrls.length) pendingUser.imageUrls = imageUrls;
         if (!pendingUser.ts) pendingUser.ts = itemTs;
         return;
@@ -232,6 +264,7 @@ export function createAgentStore(bus: DataBus) {
         streaming: false,
         ts: itemTs,
         turnId: p.entry_id || undefined,
+        entryId: p.entry_id || undefined,
         ...(imageUrls.length ? { imageUrls } : {}),
       });
       return;
@@ -425,6 +458,7 @@ export function createAgentStore(bus: DataBus) {
       name: summary.name,
       expert_id: summary.expert_id,
       expert_name: summary.expert_name,
+      parent_session_id: summary.parent_session_id,
       created_at: summary.created_at ?? new Date().toISOString(),
       open: summary.open ?? true,
       state: summary.state ?? "idle",
@@ -476,6 +510,22 @@ export function createAgentStore(bus: DataBus) {
     });
     await refreshSessions();
     await openSession(created.session_id);
+  }
+
+  /**
+   * 从指定用户消息条目分叉出新会话：历史保留到该条之前，消息原文随
+   * selected_text 返回（调用方回填输入框）；成功后自动切换到新会话。
+   */
+  async function forkSession(
+    entryId: string,
+    position: "before" | "at" = "before",
+  ): Promise<{ session_id: string; file: string; selected_text?: string }> {
+    const sid = activeId.value;
+    if (!sid) throw new Error("没有打开的会话");
+    const r = await bus.request("session.fork", { session_id: sid, entry_id: entryId, position });
+    await refreshSessions();
+    await openSession(r.session_id);
+    return r;
   }
 
   async function send(
@@ -809,6 +859,7 @@ export function createAgentStore(bus: DataBus) {
     upsertSessionSummary,
     openSession,
     newSession,
+    forkSession,
     send,
     abort,
     setPermissionMode,

@@ -134,6 +134,14 @@ export function entryToPayload(
     case "message": {
       const mapped = messageToPayload(entry.message, messageId);
       mapped.entry_id = typeof entry.id === "string" ? entry.id : "";
+      // 助手消息生成耗时：消息开始（msg.timestamp，ms epoch）到条目落盘（entry.timestamp）
+      if (entry.message?.role === "assistant") {
+        const start = typeof entry.message.timestamp === "number" ? entry.message.timestamp : NaN;
+        const end = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : NaN;
+        if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+          mapped.duration_ms = end - start;
+        }
+      }
       return { kind: "message_complete", payload: mapped };
     }
     case "model_change":

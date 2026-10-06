@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { UiMessageItem } from "../store.js";
-import { fmtBytes } from "../utils/time.js";
+import { fmtBytes, fmtClock, formatSpan } from "../utils/time.js";
+import { fmtCost, fmtTokens } from "../utils/format.js";
 import MdContent from "./MdContent.vue";
 import ToolRow from "./ToolRow.vue";
 import ThinkingRow from "./ThinkingRow.vue";
@@ -10,8 +11,9 @@ import Icon from "./Icon.vue";
 
 /**
  * 消息渲染（活动流风格）：
- * - user      右侧气泡
- * - assistant 按块顺序渲染：思考（可折叠）/ 工具活动行 / 纯文本 markdown
+ * - user      右侧气泡 + 下方元信息条（时间 / 复制 / 分叉）
+ * - assistant 按块顺序渲染：思考（可折叠）/ 工具活动行 / 纯文本 markdown，
+ *             下方元信息条（模型 / token 用量 / 花费 / 生成耗时 / 时间 / 复制）
  * - toolResult 独立结果（多数已被合并进 toolCall 行，ChatView 会跳过重复项）
  */
 const props = withDefaults(
@@ -28,18 +30,54 @@ const props = withDefaults(
   { dimmed: false, results: undefined },
 );
 
+const emit = defineEmits<{ fork: [] }>();
+
 const copied = ref(false);
 async function copyMessage(): Promise<void> {
   const it = props.item;
   const text =
-    it.text ||
-    (it.blocks ?? [])
-      .map((b) => b.text ?? b.output ?? "")
-      .join("\n");
+    it.role === "user"
+      ? copyableText.value || it.text
+      : it.text ||
+        (it.blocks ?? [])
+          .filter((b) => b.type === "text" && (b.text ?? "").trim() !== "")
+          .map((b) => b.text ?? "")
+          .join("\n\n");
   await navigator.clipboard.writeText(text);
   copied.value = true;
   setTimeout(() => (copied.value = false), 1500);
 }
+
+// ---- 消息元信息条 ----
+/** 用户消息展示正文（去附件块；复制与默认展示共用） */
+const copyableText = computed(() => props.item.text.replace(ATTACHMENT_BLOCK_RE, "").trim());
+
+const assistantMeta = computed(() => {
+  const it = props.item;
+  if (it.role !== "assistant" || it.streaming) return null;
+  const u = it.usage;
+  const usageShort = u && (u.input > 0 || u.output > 0) ? { input: fmtTokens(u.input), output: fmtTokens(u.output) } : null;
+  const usageTooltip = u
+    ? `输入 ${u.input.toLocaleString()} · 输出 ${u.output.toLocaleString()} · 缓存读 ${u.cacheRead.toLocaleString()} · 缓存写 ${u.cacheWrite.toLocaleString()} · 共 ${u.totalTokens.toLocaleString()} tokens`
+    : "";
+  const cost = fmtCost(u?.costTotal);
+  const duration = it.durationMs ? formatSpan(it.durationMs) : "";
+  const time = fmtClock(it.ts);
+  const modelShort = it.model ? it.model.slice(it.model.indexOf("/") + 1) : "";
+  const stopBadge = it.stopReason === "aborted" ? "已中止" : it.stopReason === "length" ? "已截断" : "";
+  const show = Boolean(stopBadge || modelShort || usageShort || cost || duration || time);
+  if (!show) return null;
+  return { usageShort, usageTooltip, cost, duration, time, modelShort, stopBadge };
+});
+
+/** 用户消息元信息条（发送确认后展示；分叉需要条目 id） */
+const userMeta = computed(() => {
+  const it = props.item;
+  if (it.role !== "user" || it.pending) return null;
+  const time = fmtClock(it.ts);
+  if (!time && !it.entryId) return null;
+  return { time, forkable: Boolean(it.entryId) };
+});
 
 type Entry =
   | { kind: "thinking"; text: string; startedAt?: number; durationMs?: number }
@@ -176,44 +214,56 @@ const expertOpen = ref(false);
 <template>
   <!-- user message -->
   <div v-if="item.role === 'user'" class="row user" :class="{ dimmed }">
-    <div class="bubble user-bubble" :class="{ pending: item.pending }">
-      <template v-if="skillExpansion">
-        <button class="skill-chip" :title="skillOpen ? '收起技能内容' : '展开技能内容'" @click="skillOpen = !skillOpen">
-          <Icon name="magic-line" :size="13" />
-          <span>技能 · {{ skillExpansion.name }}</span>
-          <Icon :name="skillOpen ? 'subtract-line' : 'add-line'" :size="12" />
-        </button>
-        <pre v-if="skillOpen" class="skill-body">{{ skillExpansion.body }}</pre>
-        <span v-if="skillExpansion.args" class="content">{{ skillExpansion.args }}</span>
-      </template>
-      <template v-else-if="expertBlock">
-        <button class="skill-chip" :title="expertOpen ? '收起专家提示词' : '展开专家提示词'" @click="expertOpen = !expertOpen">
-          <Icon name="user-star-line" :size="13" />
-          <span>专家 · {{ expertBlock.name }}</span>
-          <Icon :name="expertOpen ? 'subtract-line' : 'add-line'" :size="12" />
-        </button>
-        <pre v-if="expertOpen" class="skill-body">{{ expertBlock.body }}</pre>
-        <span v-if="expertBlock.args" class="content">{{ expertBlock.args }}</span>
-      </template>
-      <span v-else-if="cleanText" class="content">{{ cleanText }}</span>
-      <div v-if="userAttachments.length" class="att-row">
-        <template v-for="(a, i) in userAttachments" :key="i">
-          <button
-            class="att-chip"
-            :title="a.body ? (openAtt === i ? '收起附件内容' : '展开附件内容') : a.name"
-            @click="a.body && (openAtt = openAtt === i ? null : i)"
-          >
-            <FileIcon :path="a.name" :size="14" />
-            <span class="att-name">{{ a.name }}</span>
-            <span class="att-size">{{ fmtBytes(a.size) }}</span>
-            <Icon v-if="a.body" :name="openAtt === i ? 'subtract-line' : 'add-line'" :size="12" />
+    <div class="user-col">
+      <div class="bubble user-bubble" :class="{ pending: item.pending }">
+        <template v-if="skillExpansion">
+          <button class="skill-chip" :title="skillOpen ? '收起技能内容' : '展开技能内容'" @click="skillOpen = !skillOpen">
+            <Icon name="magic-line" :size="13" />
+            <span>技能 · {{ skillExpansion.name }}</span>
+            <Icon :name="skillOpen ? 'subtract-line' : 'add-line'" :size="12" />
           </button>
-          <pre v-if="a.body && openAtt === i" class="att-body">{{ a.body }}</pre>
+          <pre v-if="skillOpen" class="skill-body">{{ skillExpansion.body }}</pre>
+          <span v-if="skillExpansion.args" class="content">{{ skillExpansion.args }}</span>
         </template>
+        <template v-else-if="expertBlock">
+          <button class="skill-chip" :title="expertOpen ? '收起专家提示词' : '展开专家提示词'" @click="expertOpen = !expertOpen">
+            <Icon name="user-star-line" :size="13" />
+            <span>专家 · {{ expertBlock.name }}</span>
+            <Icon :name="expertOpen ? 'subtract-line' : 'add-line'" :size="12" />
+          </button>
+          <pre v-if="expertOpen" class="skill-body">{{ expertBlock.body }}</pre>
+          <span v-if="expertBlock.args" class="content">{{ expertBlock.args }}</span>
+        </template>
+        <span v-else-if="cleanText" class="content">{{ cleanText }}</span>
+        <div v-if="userAttachments.length" class="att-row">
+          <template v-for="(a, i) in userAttachments" :key="i">
+            <button
+              class="att-chip"
+              :title="a.body ? (openAtt === i ? '收起附件内容' : '展开附件内容') : a.name"
+              @click="a.body && (openAtt = openAtt === i ? null : i)"
+            >
+              <FileIcon :path="a.name" :size="14" />
+              <span class="att-name">{{ a.name }}</span>
+              <span class="att-size">{{ fmtBytes(a.size) }}</span>
+              <Icon v-if="a.body" :name="openAtt === i ? 'subtract-line' : 'add-line'" :size="12" />
+            </button>
+            <pre v-if="a.body && openAtt === i" class="att-body">{{ a.body }}</pre>
+          </template>
+        </div>
+        <span v-if="item.pending" class="pending-mark">· 发送中</span>
+        <div v-if="userImages.length" class="bubble-imgs">
+          <img v-for="(u, i) in userImages" :key="i" :src="u" alt="" />
+        </div>
       </div>
-      <span v-if="item.pending" class="pending-mark">· 发送中</span>
-      <div v-if="userImages.length" class="bubble-imgs">
-        <img v-for="(u, i) in userImages" :key="i" :src="u" alt="" />
+      <!-- 元信息条：时间 + 复制 / 分叉（悬停浮现） -->
+      <div v-if="userMeta" class="meta-row user-meta">
+        <span v-if="userMeta.time" class="meta-time">{{ userMeta.time }}</span>
+        <button class="act" :title="copied ? '已复制' : '复制'" @click="copyMessage">
+          <Icon :name="copied ? 'check-line' : 'file-copy-line'" :size="13" />
+        </button>
+        <button v-if="userMeta.forkable" class="act" title="从此条消息分叉新会话" @click="emit('fork')">
+          <Icon name="git-branch-line" :size="13" />
+        </button>
       </div>
     </div>
   </div>
@@ -243,9 +293,21 @@ const expertOpen = ref(false);
       <Icon name="error-warning-line" :size="14" />
       <span>{{ item.errorMessage }}</span>
     </div>
-    <button v-if="!item.streaming && item.text" class="copy" :title="copied ? '已复制' : '复制'" @click="copyMessage">
-      <Icon :name="copied ? 'check-line' : 'file-copy-line'" :size="13" />
-    </button>
+    <!-- 元信息条：模型 / token 用量 / 花费 / 生成耗时 / 时间 + 复制（悬停浮现） -->
+    <div v-if="assistantMeta" class="meta-row assistant-meta">
+      <span v-if="assistantMeta.stopBadge" class="stop-badge">{{ assistantMeta.stopBadge }}</span>
+      <span v-if="assistantMeta.modelShort" class="meta-model" :title="item.model">{{ assistantMeta.modelShort }}</span>
+      <span v-if="assistantMeta.usageShort" class="meta-usage" :title="assistantMeta.usageTooltip">
+        <Icon name="arrow-up-line" :size="11" />{{ assistantMeta.usageShort.input || 0 }}
+        <Icon name="arrow-down-line" :size="11" class="dn" />{{ assistantMeta.usageShort.output || 0 }}
+      </span>
+      <span v-if="assistantMeta.cost" class="meta-cost" :title="assistantMeta.usageTooltip">{{ assistantMeta.cost }}</span>
+      <span v-if="assistantMeta.duration" class="meta-time">{{ assistantMeta.duration }}</span>
+      <span v-if="assistantMeta.time" class="meta-time">{{ assistantMeta.time }}</span>
+      <button v-if="item.text || item.blocks?.some((b) => b.type === 'text' && (b.text ?? '').trim())" class="act" :title="copied ? '已复制' : '复制'" @click="copyMessage">
+        <Icon :name="copied ? 'check-line' : 'file-copy-line'" :size="13" />
+      </button>
+    </div>
   </div>
 
   <!-- toolResult 兜底（callId 未在上方出现过时） -->
@@ -264,8 +326,15 @@ const expertOpen = ref(false);
 <style scoped>
 .row { display: flex; margin: 10px 0; gap: 8px; align-items: flex-start; }
 .row.user { justify-content: flex-end; }
-.bubble {
+.user-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   max-width: 86%;
+  min-width: 0;
+}
+.bubble {
+  max-width: 100%;
   border-radius: var(--pd-radius);
   padding: 9px 13px;
   font-size: calc(13.5px * var(--pd-font-scale));
@@ -362,22 +431,55 @@ const expertOpen = ref(false);
   font-weight: 700;
 }
 @keyframes blink { 50% { opacity: 0; } }
-.copy {
-  position: absolute;
-  top: 6px;
-  right: 0;
+
+/* ---- 消息元信息条（时间 / 模型 / token 用量 / 花费 / 耗时 + 复制 / 分叉） ---- */
+.meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: calc(11px * var(--pd-font-scale));
+  color: var(--pd-text-4);
+  line-height: 1.2;
+  user-select: none;
+  min-width: 0;
+}
+.user-meta { justify-content: flex-end; padding-right: 2px; }
+.assistant-meta { padding-left: 2px; }
+.meta-model {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-usage, .meta-cost { font-variant-numeric: tabular-nums; }
+.meta-usage { display: inline-flex; align-items: center; gap: 2px; }
+.meta-usage svg { color: var(--pd-text-4); }
+.meta-usage .dn { margin-left: 4px; }
+.stop-badge {
+  font-size: calc(10.5px * var(--pd-font-scale));
+  color: var(--pd-text-3);
+  border: 1px solid var(--pd-border);
+  border-radius: 5px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.act {
   background: transparent;
   border: none;
   color: var(--pd-text-4);
   cursor: pointer;
-  padding: 2px 4px;
-  opacity: 0;
-  transition: opacity 0.15s;
+  padding: 2px;
   display: grid;
   place-items: center;
+  border-radius: 5px;
+  opacity: 0;
+  transition: opacity 0.15s;
 }
-.stream:hover .copy { opacity: 1; }
-.copy:hover { color: var(--pd-accent); }
+.row.user:hover .meta-row .act,
+.stream:hover .meta-row .act { opacity: 1; }
+.act:hover { color: var(--pd-accent); background: var(--pd-bg-hover); }
+
 .dimmed { opacity: 0.55; }
 .bubble-imgs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
 .bubble-imgs img {

@@ -47,3 +47,17 @@ export function fmtBytes(n: number | undefined): string {
   if (n >= 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
   return `${n} B`;
 }
+
+/** ISO 时间 → 消息时间戳：今天显示「HH:MM」，更早显示「M/D HH:MM」 */
+export function fmtClock(iso: string | undefined | null): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  const d = new Date(t);
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const now = new Date();
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+    return hm;
+  }
+  return `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}

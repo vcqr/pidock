@@ -543,6 +543,31 @@ function fillChip(text: string): void {
   requestAnimationFrame(() => (preset.value = text));
 }
 
+/**
+ * 会话分叉：从用户消息条目分叉出新会话（host 保留此前历史），原文回填输入框。
+ * 原会话保持不变；回填后清掉 preset，避免首页输入卡被旧文本预填。
+ */
+async function forkFromMessage(item: UiItem): Promise<void> {
+  if (item.kind !== "message" || item.role !== "user" || !item.entryId) return;
+  if (busy.value) return;
+  const ok = await appConfirm({
+    title: "从此条消息分叉新会话？",
+    message: "将创建一个包含此前历史的新会话，原会话保持不变；这条消息的内容会填入输入框，可修改后重新发送。",
+  });
+  if (!ok) return;
+  try {
+    const r = await props.store.forkSession(item.entryId);
+    if (r.selected_text) {
+      fillChip(r.selected_text);
+      setTimeout(() => {
+        if (preset.value === r.selected_text) preset.value = "";
+      }, 500);
+    }
+  } catch (err) {
+    props.store.lastError = err instanceof Error ? err.message : String(err);
+  }
+}
+
 async function sendFromHome(
   text: string,
   cwd?: string | null,
@@ -707,6 +732,7 @@ watch(
               :results="resultsMap"
               :args-map="argsMap"
               :text-only="textOnlyFor(index)"
+              @fork="forkFromMessage(item)"
             />
           </template>
           <div v-if="index === lastUserIndex && busy" class="turn-divider">
@@ -780,6 +806,7 @@ watch(
           :experts-loader="expertsLoader"
           :model-images-ok="modelSupportsImages"
           :models="modelOptions"
+          :preset="preset"
           @send="(t: string, _cwd: unknown, imgs?: Array<{ data: string; mime_type: string }>, files?: Array<{ name: string; mime_type: string; size: number; data: string }>) => store.send(t, imgs, files)"
           @abort="store.abort()"
           @set-permission-mode="setPermissionMode"

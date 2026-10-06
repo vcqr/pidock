@@ -417,6 +417,13 @@ onBeforeUnmount(() => {
                 />
                 <span v-else class="txt">{{ s.name || basename(s.cwd) }}</span>
                 <Icon
+                  v-if="s.parent_session_id && renaming !== s.session_id"
+                  class="fork-badge"
+                  name="git-branch-line"
+                  :size="12"
+                  title="分叉自其他会话"
+                />
+                <Icon
                   v-if="isPinned(s.session_id) && renaming !== s.session_id"
                   class="pin-badge"
                   name="pushpin-2-fill"
@@ -461,6 +468,13 @@ onBeforeUnmount(() => {
               />
               <span v-else class="txt">{{ s.name || basename(s.cwd) }}</span>
               <Icon
+                v-if="s.parent_session_id && renaming !== s.session_id"
+                class="fork-badge"
+                name="git-branch-line"
+                :size="12"
+                title="分叉自其他会话"
+              />
+              <Icon
                 v-if="isPinned(s.session_id) && renaming !== s.session_id"
                 class="pin-badge"
                 name="pushpin-2-fill"
@@ -498,6 +512,13 @@ onBeforeUnmount(() => {
             @blur="commitRename(s)"
           />
           <span v-else class="txt">{{ s.name || basename(s.cwd) }}</span>
+          <Icon
+            v-if="s.parent_session_id && renaming !== s.session_id"
+            class="fork-badge"
+            name="git-branch-line"
+            :size="12"
+            title="分叉自其他会话"
+          />
           <Icon
             v-if="isPinned(s.session_id) && renaming !== s.session_id"
             class="pin-badge"
@@ -793,6 +814,7 @@ onBeforeUnmount(() => {
   background: var(--pd-text-4);
 }
 .pin-badge { color: var(--pd-accent); flex: none; }
+.fork-badge { color: var(--pd-text-4); flex: none; }
 .rename-input {
   flex: 1;
   min-width: 0;

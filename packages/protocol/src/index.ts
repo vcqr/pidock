@@ -88,6 +88,8 @@ export interface MessageCompletePayload {
   usage?: UsageInfo;
   stopReason?: string;
   errorMessage?: string;
+  /** 助手消息生成耗时（毫秒，条目落盘时间 − 消息开始时间） */
+  duration_ms?: number;
   /** stable pi entry id (also carried in the JSONL) */
   entry_id: string;
   /** streaming identity: matches the id used on message_delta / message_snapshot */
@@ -310,6 +312,8 @@ export const Method = {
   SESSION_CLOSE: "session.close",
   SESSION_EVENTS: "session.events",
   SESSION_RENAME: "session.rename",
+  /** 从指定用户消息条目分叉出新会话（历史保留到该条之前/该条，原会话不变） */
+  SESSION_FORK: "session.fork",
   /** 从注册表移除会话（UI 列表消失；磁盘 JSONL 保留） */
   SESSION_REMOVE: "session.remove",
   MODEL_OVERRIDE_SET: "config.model_override.set",

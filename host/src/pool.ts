@@ -90,6 +90,8 @@ interface RegistryEntry {
   name?: string;
   /** 创建时雇佣的专家（重开会话据此重放同样的 loader 覆盖） */
   expert_id?: string;
+  /** 分叉来源会话（fork 产生的会话记录其父会话，供侧栏标识） */
+  parent_session_id?: string;
   created_at: string;
 }
 
@@ -102,6 +104,7 @@ export interface SessionSummary {
   name?: string;
   expert_id?: string;
   expert_name?: string;
+  parent_session_id?: string;
   created_at: string;
   open: boolean;
   state: AgentState;
@@ -485,6 +488,7 @@ export class SessionPool {
       ...(entry.expert_id
         ? { expert_id: entry.expert_id, ...(expertNames.get(entry.expert_id) ? { expert_name: expertNames.get(entry.expert_id) } : {}) }
         : {}),
+      ...(entry.parent_session_id ? { parent_session_id: entry.parent_session_id } : {}),
       created_at: entry.created_at,
       open: openIds.has(entry.session_id),
       state: this.stateOf(entry.session_id),
@@ -797,6 +801,86 @@ export class SessionPool {
     else delete updated.name;
     this.writeRegistryEntry(updated);
     return { ok: true, name };
+  }
+
+  /**
+   * 从指定用户消息条目分叉出新会话（pi /fork 同源实现：SessionManager.createBranchedSession）。
+   * position "before"（缺省）：新会话含该条消息之前的全部历史，消息原文随 selected_text
+   * 返回供 UI 回填输入框；该条是首条用户消息时 parentId 为空 → 全新空白会话。
+   * position "at"：连该条消息一起带入新会话（从此处继续）。
+   * 原会话保持不变；分叉会话继承注册表元数据（名称/专家/模型）并记录 parent_session_id。
+   */
+  async forkSession(params: {
+    session_id: string;
+    entry_id: string;
+    position?: "before" | "at";
+  }): Promise<{ session_id: string; file: string; selected_text?: string }> {
+    const tracked = this.require(params.session_id);
+    if (this.stateOf(params.session_id) !== "idle") {
+      throw new RpcError("busy", "会话正在运行中，请先中止再分叉");
+    }
+    const sm = tracked.session.sessionManager;
+    const entry = sm.getEntry(params.entry_id) as unknown as Record<string, any> | undefined;
+    if (!entry || entry.type !== "message" || (entry.message as any)?.role !== "user") {
+      throw new RpcError("bad_request", "只能从用户消息条目分叉会话");
+    }
+    const position = params.position === "at" ? "at" : "before";
+    const targetLeafId: string | null = position === "at" ? entry.id : ((entry.parentId as string | null) ?? null);
+    const currentFile = tracked.session.sessionFile;
+    if (!currentFile) throw new RpcError("bad_request", "会话尚未落盘，无法分叉");
+    const sessionDir = sm.getSessionDir();
+
+    let newPath: string | undefined;
+    let newSessionId: string;
+    if (!targetLeafId) {
+      // 首条用户消息之前 → 全新空白会话（记录 parentSession 溯源，与 pi 一致）
+      const fresh = SessionManager.create(sm.getCwd(), sessionDir);
+      fresh.newSession({ parentSession: currentFile });
+      newSessionId = fresh.getSessionId();
+      newPath = fresh.getSessionFile() ?? undefined;
+    } else {
+      if (!existsSync(currentFile)) {
+        throw new RpcError("bad_request", "会话文件不存在，无法分叉");
+      }
+      const branch = SessionManager.open(currentFile, sessionDir);
+      newPath = branch.createBranchedSession(targetLeafId);
+      newSessionId = newPath ? SessionManager.open(newPath).getSessionId() : "";
+    }
+    if (!newPath || !newSessionId) throw new RpcError("fork_failed", "分叉会话失败：无法创建分支文件");
+
+    // 先写注册表再 openSession：openSession 按 file 匹配注册表重放专家配置
+    const src = this.readRegistry().find((e) => e.session_id === params.session_id);
+    this.writeRegistryEntry({
+      session_id: newSessionId,
+      file: newPath,
+      cwd: tracked.cwd,
+      ...(src?.model ? { model: src.model } : {}),
+      ...(src?.expert_id ? { expert_id: src.expert_id } : {}),
+      ...(src?.name ? { name: src.name } : {}),
+      parent_session_id: params.session_id,
+      created_at: new Date().toISOString(),
+    });
+    const opened = await this.openSession({ file: newPath });
+    const selectedText =
+      position === "before" ? this.userMessageText(entry.message) : undefined;
+    return {
+      session_id: opened.session_id,
+      file: newPath,
+      ...(selectedText ? { selected_text: selectedText } : {}),
+    };
+  }
+
+  /** 用户消息文本（分叉回填用）：字符串内容直取，块数组取 text 部分拼接 */
+  private userMessageText(msg: unknown): string {
+    const c = (msg as Record<string, any>)?.content;
+    if (typeof c === "string") return c;
+    if (Array.isArray(c)) {
+      return c
+        .filter((p: any) => p?.type === "text")
+        .map((p: any) => String(p.text ?? ""))
+        .join("\n");
+    }
+    return "";
   }
 
   /**
