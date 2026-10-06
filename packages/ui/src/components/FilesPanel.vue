@@ -126,6 +126,18 @@ function toggleDir(n: TreeNode): void {
   expandedDirs.value = next;
 }
 
+/** 是否全部目录都已展开（头部按钮切换依据） */
+const allExpanded = computed(() => {
+  const dirs = entries.value.filter((e) => e.dir);
+  return dirs.length > 0 && dirs.every((d) => expandedDirs.value.has(d.path));
+});
+/** 展开/收起全部目录 */
+function toggleAllDirs(): void {
+  expandedDirs.value = allExpanded.value
+    ? new Set<string>()
+    : new Set(entries.value.filter((e) => e.dir).map((e) => e.path));
+}
+
 function onRowClick(n: TreeNode): void {
   if (n.dir) toggleDir(n);
   else emit("open-file", n.path);
@@ -164,6 +176,12 @@ onMounted(load);
       <Icon name="folder-open-line" :size="17" />
       <span class="fp-title" :title="cwd">{{ title }}</span>
       <span class="flex-sp"></span>
+      <button
+        class="icon-btn"
+        :title="allExpanded ? '收起全部' : '展开全部'"
+        :disabled="loading || !!loadError"
+        @click="toggleAllDirs"
+      ><Icon :name="allExpanded ? 'collapse-vertical-line' : 'expand-vertical-line'" :size="15" /></button>
       <button class="icon-btn" title="刷新" @click="load"><Icon name="refresh-line" :size="15" /></button>
       <button
         v-if="revealPath"
@@ -269,6 +287,7 @@ onMounted(load);
   flex: none;
 }
 .icon-btn:hover { background: var(--pd-bg-hover); color: var(--pd-text-2); }
+.icon-btn:disabled { opacity: 0.4; pointer-events: none; }
 
 .fp-search { padding: 0 10px 8px 12px; }
 .fp-search input {
