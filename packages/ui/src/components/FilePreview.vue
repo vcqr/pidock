@@ -5,8 +5,9 @@ import FileIcon from "./FileIcon.vue";
 import Icon from "./Icon.vue";
 
 /**
- * 文件预览分栏（编辑器式）：多标签页 + 面包屑 + 行号 + 语法高亮。
- * 由 ChatView 持有标签状态（文件树点击 → 主区打开/激活），本组件纯展示。
+ * 文件预览浮层（编辑器式）：多标签页 + 面包屑 + 行号 + 语法高亮。
+ * 覆盖在主对话区上方（定位由使用方的 class 决定），临时查看用；
+ * 标签状态由 ChatView 持有（文件树点击 → 打开/激活），本组件纯展示。
  */
 export interface PreviewFileTab {
   path: string;
@@ -27,8 +28,10 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   activate: [path: string];
-  /** 关闭标签（面包屑 × / 标签 ×） */
+  /** 关闭标签（标签 ×） */
   close: [path: string];
+  /** 关闭全部标签（浮层右上 ×，恢复对话） */
+  closeAll: [];
 }>();
 
 const activeTab = computed(() => props.tabs.find((t) => t.path === props.active) ?? null);
@@ -48,7 +51,7 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
 
 <template>
   <div class="file-preview">
-    <!-- 标签栏 -->
+    <!-- 标签栏（行末：关闭全部，恢复对话） -->
     <div class="pv-tabs">
       <div
         v-for="t in tabs"
@@ -64,6 +67,10 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
           <Icon name="close-line" :size="11" />
         </button>
       </div>
+      <span class="tabs-sp"></span>
+      <button class="pv-close-all" title="关闭预览" @click="emit('closeAll')">
+        <Icon name="close-line" :size="15" />
+      </button>
     </div>
 
     <template v-if="activeTab">
@@ -156,6 +163,22 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
   flex: none;
 }
 .tab-close:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+.tabs-sp { flex: 1; }
+.pv-close-all {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  color: var(--pd-text-3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  flex: none;
+  margin-bottom: 3px;
+}
+.pv-close-all:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 
 /* ---- 面包屑 ---- */
 .pv-crumb {

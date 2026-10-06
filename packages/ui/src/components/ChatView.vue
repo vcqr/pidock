@@ -369,38 +369,28 @@ function readReviewWidth(): number | null {
   const v = Number(localStorage.getItem(REVIEW_KEY));
   return Number.isFinite(v) && v >= REVIEW_MIN && v <= 1200 ? Math.round(v) : null;
 }
-/** pane1（对话区）flex-basis：右侧无分栏时占满；否则 = 容器 − 触发条 − 右侧组（预览/审查）宽 */
-const reviewPane1Size = computed(() => {
-  const right =
-    (previewTabs.value.length ? previewWidth.value + SPLIT_TRIGGER : 0) +
-    (reviewTabs.value.length ? (reviewWidth.value ?? Math.round(chatW.value * 0.42)) : 0);
-  return right > 0 ? `calc(100% - ${SPLIT_TRIGGER}px - ${right}px)` : "100%";
-});
+/** pane1（对话区）flex-basis：未开审查时占满；打开时 = 容器 − 触发条 − 面板宽 */
+const reviewPane1Size = computed(() =>
+  reviewTabs.value.length
+    ? `calc(100% - ${SPLIT_TRIGGER}px - ${(reviewWidth.value ?? Math.round(chatW.value * 0.42))}px)`
+    : "100%",
+);
 const reviewPane1Max = computed(() => `${Math.max(360, chatW.value - SPLIT_TRIGGER - REVIEW_MIN)}px`);
 function onReviewSplitSize(s: string | number): void {
   const usable = Math.max(0, chatW.value - SPLIT_TRIGGER);
   const px = typeof s === "string" ? parseFloat(s) : s * usable;
   if (!Number.isFinite(px)) return;
-  // 右侧组总宽 = 容器 − 对话区。组内含预览分栏时，拖 A 触发条调整的是组内
-  // 除预览外的部分（审查面板；审查关闭时即预览分栏自身宽度）
-  const group = Math.max(0, usable - Math.round(px));
-  if (previewTabs.value.length) {
-    previewWidth.value = Math.round(Math.min(usable - 280, Math.max(PREVIEW_MIN, group - SPLIT_TRIGGER)));
-  } else {
-    reviewWidth.value = Math.round(Math.min(usable - 360, Math.max(REVIEW_MIN, group)));
-  }
+  reviewWidth.value = Math.round(Math.min(usable - 360, Math.max(REVIEW_MIN, usable - px)));
 }
 function saveReview(): void {
   try {
-    // 右侧组含预览分栏时，A 触发条调整的是预览宽度
-    if (previewTabs.value.length) localStorage.setItem(PREVIEW_KEY, String(previewWidth.value));
-    else if (reviewWidth.value != null) localStorage.setItem(REVIEW_KEY, String(reviewWidth.value));
+    if (reviewWidth.value != null) localStorage.setItem(REVIEW_KEY, String(reviewWidth.value));
   } catch {
     // localStorage 不可用时忽略
   }
 }
 
-// ---- 主区文件预览（编辑器式多标签）：文件树点击 → 在对话旁的分栏打开/激活 ----
+// ---- 主区文件预览（临时浮层，覆盖在对话上方）：文件树点击 → 打开/激活标签 ----
 const previewTabs = ref<Array<{ path: string; text?: string; truncated?: boolean; binary?: boolean; size?: number; error?: string }>>([]);
 const activePreviewPath = ref<string | null>(null);
 const previewProjectName = computed(
@@ -437,28 +427,9 @@ function closePreviewTab(path: string): void {
     activePreviewPath.value = previewTabs.value[Math.min(i, previewTabs.value.length - 1)]?.path ?? null;
   }
 }
-
-// ---- 预览分栏宽度（嵌套 NSplit #1 = 预览），记忆 px ----
-const PREVIEW_KEY = "pidock.previewWidth";
-const PREVIEW_MIN = 320;
-const previewWrapEl = ref<HTMLElement | null>(null);
-const previewWidth = ref<number>(readPreviewWidth() ?? 560);
-function readPreviewWidth(): number | null {
-  const v = Number(localStorage.getItem(PREVIEW_KEY));
-  return Number.isFinite(v) && v >= PREVIEW_MIN && v <= 1600 ? Math.round(v) : null;
-}
-function onPreviewSplitSize(s: string | number): void {
-  const usable = Math.max(0, (previewWrapEl.value?.getBoundingClientRect().width ?? chatW.value) - SPLIT_TRIGGER);
-  const px = typeof s === "string" ? parseFloat(s) : s * usable;
-  if (!Number.isFinite(px)) return;
-  previewWidth.value = Math.round(Math.min(usable - 280, Math.max(PREVIEW_MIN, px)));
-}
-function savePreviewWidth(): void {
-  try {
-    localStorage.setItem(PREVIEW_KEY, String(previewWidth.value));
-  } catch {
-    // localStorage 不可用时忽略
-  }
+function closePreviewAll(): void {
+  previewTabs.value = [];
+  activePreviewPath.value = null;
 }
 
 // ---- 文件树面板宽度（chat-body 的 NSplit #2 = 文件树），记忆 px ----
@@ -644,6 +615,7 @@ watch(
       @drag-end="saveFilesWidth"
     >
     <template #1>
+    <div class="main-area">
     <!-- home: watermark + greeting + composer -->
     <div v-if="home" class="home-row">
     <div class="home-wrap">
@@ -691,17 +663,6 @@ watch(
         </div>
       </div>
     </div>
-    <!-- 首页文件预览分栏：会话未开时点文件树同样在主区预览 -->
-    <FilePreview
-      v-if="previewTabs.length"
-      class="home-preview"
-      :style="{ width: previewWidth + 'px' }"
-      :tabs="previewTabs"
-      :active="activePreviewPath"
-      :project-name="previewProjectName"
-      @activate="(p: string) => (activePreviewPath = p)"
-      @close="closePreviewTab"
-    />
     </div>
 
     <!-- conversation -->
@@ -713,7 +674,7 @@ watch(
         min="360px"
         :max="reviewPane1Max"
         :resize-trigger-size="6"
-        :disabled="!reviewTabs.length && !previewTabs.length"
+        :disabled="!reviewTabs.length"
         :pane1-style="{ display: 'flex' }"
         :pane2-style="{ flex: '1 1 0', minWidth: '0', overflow: 'hidden' }"
         @update:size="onReviewSplitSize"
@@ -829,45 +790,8 @@ watch(
       </div>
       </template>
         <template #2>
-          <!-- 主区文件预览（编辑器式多标签）与审查面板并排，分界可拖 -->
-          <div v-if="previewTabs.length" ref="previewWrapEl" class="preview-wrap">
-            <n-split
-              direction="horizontal"
-              class="preview-split"
-              :size="previewWidth + 'px'"
-              min="320px"
-              max="75%"
-              :resize-trigger-size="6"
-              :disabled="!reviewTabs.length"
-              :pane1-style="{ display: 'flex', minWidth: '0', overflow: 'hidden' }"
-              :pane2-style="{ flex: '1 1 0', minWidth: '0', overflow: 'hidden' }"
-              @update:size="onPreviewSplitSize"
-              @drag-end="savePreviewWidth"
-            >
-              <template #1>
-                <FilePreview
-                  :tabs="previewTabs"
-                  :active="activePreviewPath"
-                  :project-name="previewProjectName"
-                  @activate="(p: string) => (activePreviewPath = p)"
-                  @close="closePreviewTab"
-                />
-              </template>
-              <template #2>
-                <ReviewPanel
-                  v-if="reviewTabs.length"
-                  :tabs="reviewTabs"
-                  :active="reviewActive ?? reviewTabs[0]!.path"
-                  @select="(p: string) => (reviewActive = p)"
-                  @close-tab="closeReviewTab"
-                  @close="closeReviewAll"
-                />
-              </template>
-              <template #resize-trigger><div class="rz-line" /></template>
-            </n-split>
-          </div>
           <ReviewPanel
-            v-else-if="reviewTabs.length"
+            v-if="reviewTabs.length"
             :tabs="reviewTabs"
             :active="reviewActive ?? reviewTabs[0]!.path"
             @select="(p: string) => (reviewActive = p)"
@@ -880,9 +804,21 @@ watch(
       <!-- 任务进度第三栏（TodoWrite 推送或雇佣专家时停靠展开；收起为悬浮小圆标） -->
       <ProgressCard :store="store" :expert="activeExpert" />
       </div>
+    <!-- 临时文件预览浮层：覆盖在主对话区上方（home 与会话模式共用），关闭后恢复对话 -->
+    <FilePreview
+      v-if="previewTabs.length"
+      class="preview-overlay"
+      :tabs="previewTabs"
+      :active="activePreviewPath"
+      :project-name="previewProjectName"
+      @activate="(p: string) => (activePreviewPath = p)"
+      @close="closePreviewTab"
+      @close-all="closePreviewAll"
+    />
+    </div>
     </template>
     <template #2>
-      <!-- 项目文件浏览面板：宽度可拖；点击文件在主区预览分栏打开 -->
+      <!-- 项目文件浏览面板：宽度可拖；点击文件在主区打开预览浮层 -->
       <FilesPanel
         v-if="filesCwd"
         :key="filesCwd.seq"
@@ -960,7 +896,16 @@ export default { components: { ToolCard, MessageItem } };
   min-height: 0;
   overflow: hidden;
 }
-/* 首页：居中任务区与文件预览分栏的水平容器 */
+/* 主内容区（split #1）：文件预览浮层的定位参考 */
+.main-area {
+  position: relative;
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* 首页行：居中任务区铺满主内容区（预览浮层覆盖其上） */
 .home-row {
   flex: 1;
   display: flex;
@@ -968,20 +913,13 @@ export default { components: { ToolCard, MessageItem } };
   min-height: 0;
   overflow: hidden;
 }
-.home-preview { flex: none; min-width: 0; }
-/* 会话区：主预览+审查 嵌套分栏的容器 */
-.preview-wrap {
-  flex: 1;
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-.preview-split {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
+/* 临时文件预览浮层：覆盖在主对话区上方（home 与会话模式共用） */
+.preview-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  border-left: 1px solid var(--pd-border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
 }
 .home-wrap {
   flex: 1;
