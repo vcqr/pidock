@@ -237,8 +237,8 @@ onMounted(async () => {
         @open-project="(cwd) => { showAutomation = false; showExperts = false; startNewTask(cwd); }"
         @rename="(id, name) => store?.renameSession(id, name)"
         @open-settings="(tab) => openSettings(tab)"
-        @open-automation="showAutomation = !showAutomation"
-        @open-experts="showExperts = !showExperts"
+        @open-automation="() => { showAutomation = !showAutomation; if (showAutomation) showExperts = false; }"
+        @open-experts="() => { showExperts = !showExperts; if (showExperts) showAutomation = false; }"
       >
       </SessionSidebar>
       </template>
