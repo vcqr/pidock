@@ -736,6 +736,19 @@ function openFolder(): void {
                   <span>{{ o.label }}</span>
                 </button>
               </div>
+              <div class="font-slider-row">
+                <input
+                  class="font-slider"
+                  type="range"
+                  min="0.8"
+                  max="1.5"
+                  step="0.05"
+                  :value="fontSettings.scale"
+                  @input="applyFontSettings({ scale: Number(($event.target as HTMLInputElement).value) }, false)"
+                  @change="applyFontSettings({ scale: Number(($event.target as HTMLInputElement).value) })"
+                />
+                <span class="font-slider-val">{{ Math.round(fontSettings.scale * 100) }}%</span>
+              </div>
             </div>
             <div class="row col">
               <div class="row-text">
@@ -1359,6 +1372,27 @@ function openFolder(): void {
 .switch input:checked + .slider::before {
   transform: translateX(19px);
   background: #fff;
+}
+
+/** 字号滑杆 */
+.font-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+.font-slider {
+  flex: 1;
+  max-width: 420px;
+  height: 4px;
+  accent-color: var(--pd-accent);
+  cursor: pointer;
+}
+.font-slider-val {
+  min-width: 44px;
+  font-size: 12px;
+  color: var(--pd-text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 /* 外观主题卡片 */

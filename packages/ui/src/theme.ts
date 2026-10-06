@@ -96,13 +96,15 @@ function applyFonts(): void {
   else root.style.removeProperty("--pd-mono");
 }
 
-/** 更新并立即应用字体设置（设置中心外观页调用） */
-export function applyFontSettings(patch: Partial<FontSettings>): void {
+/** 更新并立即应用字体设置；persist=false 仅供拖动实时预览（不落盘） */
+export function applyFontSettings(patch: Partial<FontSettings>, persist = true): void {
   fontSettings.value = { ...fontSettings.value, ...patch };
-  try {
-    localStorage.setItem(FONT_KEY, JSON.stringify(fontSettings.value));
-  } catch {
-    // localStorage 不可用时仅本次会话生效
+  if (persist) {
+    try {
+      localStorage.setItem(FONT_KEY, JSON.stringify(fontSettings.value));
+    } catch {
+      // localStorage 不可用时仅本次会话生效
+    }
   }
   applyFonts();
 }
