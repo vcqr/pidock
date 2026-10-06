@@ -42,9 +42,58 @@ function writeExperts(list: Expert[]): void {
   writeFileSync(file, JSON.stringify(list, null, 2) + "\n");
 }
 
+/** 常见位图magic：头像上传只接受真正解码得动的格式 */
+function imageMime(buf: Buffer): string | null {
+  if (buf.length < 12) return null;
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.slice(0, 4).toString("ascii") === "GIF8") return "image/gif";
+  if (buf.slice(0, 4).toString("ascii") === "RIFF" && buf.slice(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  return null;
+}
+
+const AVATAR_MAX_BYTES = 8 * 1024 * 1024;
+/** data URL 存储上限（前端会缩到 128×128，正常几十 KB） */
+const AVATAR_DATA_URL_MAX_CHARS = 400_000;
+const AVATAR_DATA_URL_RE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+
+/** 读取本地图片为 data URL（头像上传第一步；前端 canvas 负责缩放） */
+export function readAvatarFile(srcPath: string): { data_url: string } {
+  const src = srcPath.trim();
+  if (!src || !existsSync(src) || !statSync(src).isFile()) {
+    throw new RpcError("bad_request", "文件不存在");
+  }
+  const buf = readFileSync(src);
+  if (buf.length > AVATAR_MAX_BYTES) {
+    throw new RpcError("too_large", "图片超过 8MB 上限");
+  }
+  const mime = imageMime(buf);
+  if (!mime) {
+    throw new RpcError("bad_request", "仅支持 png / jpg / webp / gif 图片");
+  }
+  return { data_url: `data:${mime};base64,${buf.toString("base64")}` };
+}
+
 const KB_MAX_DEPTH = 2;
 const KB_MAX_FILES_PER_DIR = 50;
 const KB_MAX_TOTAL_LINES = 120;
+
+/** 校验并规范头像 data URL；非法输入报错而不是静默丢弃 */
+function sanitizeAvatar(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  if (typeof raw !== "string" || !AVATAR_DATA_URL_RE.test(raw) || raw.length > AVATAR_DATA_URL_MAX_CHARS) {
+    throw new RpcError("bad_request", "头像数据非法（须为 data:image/* base64，且不超过约 300KB）");
+  }
+  return raw;
+}
+
+function sanitizeAvatarColor(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  if (typeof raw !== "string" || !/^#[0-9a-fA-F]{6}$/.test(raw)) {
+    throw new RpcError("bad_request", "头像底色须为 #rrggbb 十六进制");
+  }
+  return raw.toLowerCase();
+}
 
 function binaryExtension(file: string): boolean {
   const base = file.slice(file.lastIndexOf(".") + 1).toLowerCase();
@@ -163,6 +212,8 @@ export class ExpertsService {
       name,
       description: params.description?.trim() || undefined,
       icon: params.icon?.trim() || undefined,
+      avatar: sanitizeAvatar(params.avatar) ?? (params.avatar === undefined ? existing?.avatar : undefined),
+      avatar_color: sanitizeAvatarColor(params.avatar_color) ?? (params.avatar_color === undefined ? existing?.avatar_color : undefined),
       prompt: typeof params.prompt === "string" ? params.prompt : "",
       skills: Array.isArray(params.skills) ? params.skills.map(String) : [],
       extensions: Array.isArray(params.extensions) ? params.extensions.map(String) : [],

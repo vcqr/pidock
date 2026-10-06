@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import { ConfigService } from "./config.js";
 import { emitError, emitResponse } from "./emit.js";
-import { ExpertsService } from "./experts.js";
+import { ExpertsService, readAvatarFile } from "./experts.js";
 import { HOST_VERSION, RpcError, SessionPool } from "./pool.js";
 import { Method } from "@pidock/protocol";
 
@@ -70,6 +70,7 @@ const handlers: Record<string, Handler> = {
   [Method.EXPERTS_INSTALL_RESOURCE]: (p) => experts.installResource(p),
   [Method.EXPERTS_PRIVATE_LIST]: (p) => experts.privateList(p),
   [Method.EXPERTS_REMOVE_RESOURCE]: (p) => experts.removeResource(p),
+  [Method.EXPERTS_READ_AVATAR_FILE]: (p) => readAvatarFile(String(p?.srcPath ?? "")),
 };
 
 async function dispatch(line: string): Promise<void> {

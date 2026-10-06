@@ -20,6 +20,8 @@ interface Expert {
   name: string;
   description?: string;
   icon?: string;
+  avatar?: string;
+  avatar_color?: string;
   prompt: string;
   skills: string[];
   extensions: string[];
@@ -63,6 +65,8 @@ const ICON_CHOICES = [
   "rocket-line",
   "lightbulb-line",
 ];
+/** 字形头像底色盘（缺省 = 主题灰） */
+const AVATAR_COLORS = ["", "#f59e0b", "#10b981", "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#e04444"];
 const EXCLUDE_TOOLS = [
   { name: "bash", label: "执行命令" },
   { name: "edit", label: "编辑文件" },
@@ -99,6 +103,8 @@ const form = ref({
   name: "",
   description: "",
   icon: "user-star-line",
+  avatar: "",
+  avatar_color: "",
   prompt: "",
   skills: [] as string[],
   extensions: [] as string[],
@@ -114,6 +120,8 @@ function openCreate(): void {
     name: "",
     description: "",
     icon: "user-star-line",
+    avatar: "",
+    avatar_color: "",
     prompt: "",
     skills: [],
     extensions: [],
@@ -131,6 +139,8 @@ function openEdit(e: Expert): void {
     name: e.name,
     description: e.description ?? "",
     icon: e.icon ?? "user-star-line",
+    avatar: e.avatar ?? "",
+    avatar_color: e.avatar_color ?? "",
     prompt: e.prompt,
     skills: [...(e.skills ?? [])],
     extensions: [...(e.extensions ?? [])],
@@ -157,6 +167,8 @@ async function save(): Promise<void> {
       name: form.value.name.trim(),
       description: form.value.description.trim(),
       icon: form.value.icon,
+      avatar: form.value.avatar,
+      avatar_color: form.value.avatar_color,
       prompt: form.value.prompt,
       skills: form.value.skills,
       extensions: form.value.extensions,
@@ -219,6 +231,62 @@ function toggle(list: string[], v: string): void {
 
 function toggleExclude(name: string): void {
   toggle(form.value.exclude_tools, name);
+}
+
+// ---------------------------------------------------------------- 头像
+
+const avatarUploading = ref(false);
+
+/**
+ * 头像上传：host 读本地图片 → data URL → 前端 canvas 缩到 128×128（cover 裁剪）
+ * → 存 data URL（几十 KB，随 experts.json 落盘，免文件管理）。
+ */
+async function pickAvatar(): Promise<void> {
+  if (avatarUploading.value || !pickFile) return;
+  let path: string | null = null;
+  try {
+    path = await pickFile();
+  } catch {
+    return;
+  }
+  if (!path) return;
+  avatarUploading.value = true;
+  try {
+    const r = await props.bus.request("experts.read_avatar_file", { srcPath: path });
+    const src: string = r?.data_url;
+    if (!src) throw new Error("读取结果为空");
+    form.value.avatar = await resizeToAvatar(src);
+    flash("头像已就绪，保存后生效");
+  } catch (e) {
+    flash(errText(e), true);
+  } finally {
+    avatarUploading.value = false;
+  }
+}
+
+function resizeToAvatar(dataUrl: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const S = 128;
+      const canvas = document.createElement("canvas");
+      canvas.width = S;
+      canvas.height = S;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("canvas 不可用"));
+        return;
+      }
+      // cover 裁剪：短边贴满、居中裁掉长边
+      const scale = Math.max(S / img.width, S / img.height);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      ctx.drawImage(img, (S - w) / 2, (S - h) / 2, w, h);
+      resolve(canvas.toDataURL("image/webp", 0.9));
+    };
+    img.onerror = () => reject(new Error("图片解析失败"));
+    img.src = dataUrl;
+  });
 }
 
 async function addKbDir(): Promise<void> {
@@ -340,7 +408,13 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
     <div v-else class="cards">
       <div v-for="e in experts" :key="e.id" class="card">
         <div class="card-head">
-          <span class="avatar"><Icon :name="e.icon || 'user-star-line'" :size="20" /></span>
+          <span
+            class="avatar"
+            :style="!e.avatar && e.avatar_color ? { background: e.avatar_color, color: '#fff' } : undefined"
+          >
+            <img v-if="e.avatar" :src="e.avatar" alt="" />
+            <Icon v-else :name="e.icon || 'user-star-line'" :size="20" />
+          </span>
           <div class="card-id">
             <strong>{{ e.name }}</strong>
             <span v-if="e.description" class="subtitle">{{ e.description }}</span>
@@ -404,20 +478,50 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
               <input v-model="form.description" placeholder="一句话说明这个专家擅长什么" />
             </div>
           </div>
-          <div class="field">
-            <label>图标</label>
-            <div class="icon-row">
-              <button
-                v-for="ic in ICON_CHOICES"
-                :key="ic"
-                class="icon-pick"
-                :class="{ on: form.icon === ic }"
-                @click="form.icon = ic"
-              >
-                <Icon :name="ic" :size="17" />
+        <div class="field">
+          <label>头像</label>
+          <div class="avatar-edit">
+            <span
+              class="avatar lg"
+              :style="!form.avatar && form.avatar_color ? { background: form.avatar_color, color: '#fff' } : undefined"
+            >
+              <img v-if="form.avatar" :src="form.avatar" alt="头像预览" />
+              <Icon v-else :name="form.icon" :size="26" />
+            </span>
+            <div class="avatar-ops">
+              <button class="btn sm" :disabled="avatarUploading" @click="pickAvatar">
+                <Icon name="image-add-line" :size="14" />{{ avatarUploading ? "处理中…" : "上传图片" }}
               </button>
+              <button v-if="form.avatar" class="btn sm" @click="form.avatar = ''">移除图片</button>
+              <span class="avatar-hint">支持 png / jpg / webp / gif，自动裁成 128×128 圆形</span>
             </div>
           </div>
+          <p class="sub-label">或用图标 + 底色（未上传图片时生效）</p>
+          <div class="icon-row">
+            <button
+              v-for="ic in ICON_CHOICES"
+              :key="ic"
+              class="icon-pick"
+              :class="{ on: !form.avatar && form.icon === ic }"
+              @click="form.icon = ic"
+            >
+              <Icon :name="ic" :size="17" />
+            </button>
+          </div>
+          <div class="color-row">
+            <button
+              v-for="c in AVATAR_COLORS"
+              :key="c || 'default'"
+              class="color-pick"
+              :class="{ on: form.avatar_color === c }"
+              :style="c ? { background: c } : undefined"
+              :title="c || '默认底色'"
+              @click="form.avatar_color = c"
+            >
+              <Icon v-if="form.avatar_color === c" name="check-line" :size="13" />
+            </button>
+          </div>
+        </div>
           <div class="field">
             <label>角色定位提示词</label>
             <textarea
@@ -669,7 +773,28 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
   background: var(--pd-bg-hover);
   color: var(--pd-accent);
   flex: none;
+  overflow: hidden;
 }
+.avatar img { width: 100%; height: 100%; object-fit: cover; }
+.avatar.lg { width: 64px; height: 64px; }
+.avatar-edit { display: flex; align-items: center; gap: 14px; }
+.avatar-ops { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.avatar-hint { font-size: 11.5px; color: var(--pd-text-4); }
+.sub-label { margin: 12px 0 0; font-size: 12px; color: var(--pd-text-4); }
+.color-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.color-pick {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--pd-bg-hover);
+  color: #fff;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.color-pick.on { border-color: var(--pd-text); }
 .card-id { min-width: 0; }
 .card-id strong { display: block; color: var(--pd-text); font-size: 15px; }
 .card-id .subtitle {

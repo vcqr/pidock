@@ -245,8 +245,12 @@ export interface Expert {
   /** 显示名，同时是 /expert:name 的调用名（唯一） */
   name: string;
   description?: string;
-  /** remixicon 图标名（可选） */
+  /** remixicon 图标名（可选，未上传头像时的字形头像） */
   icon?: string;
+  /** 自定义头像（data URL，host 缩存校验；设了它就不渲染字形头像） */
+  avatar?: string;
+  /** 字形头像的底色（#rrggbb；缺省用主题灰） */
+  avatar_color?: string;
   /** 角色定位提示词，以 append 方式叠加在 pi 默认系统提示词之后 */
   prompt: string;
   /** 全局技能名白名单；空数组 = 不限制（全部可用） */
@@ -355,6 +359,7 @@ export const Method = {
   EXPERTS_INSTALL_RESOURCE: "experts.install_resource",
   EXPERTS_PRIVATE_LIST: "experts.private_list",
   EXPERTS_REMOVE_RESOURCE: "experts.remove_resource",
+  EXPERTS_READ_AVATAR_FILE: "experts.read_avatar_file",
 } as const;
 
 // payload size limits (mirrors pidock-protocol Rust crate)

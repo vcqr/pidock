@@ -165,6 +165,39 @@ async function main(): Promise<number> {
     const afterDelete = await request("experts.list");
     check("experts.delete removes entry", !afterDelete.experts.some((e: any) => e.id === expert.id));
 
+    // ---- 头像：read_avatar_file + save 携带 data URL
+    const pngPath = join(agentDir, "avatar.png");
+    writeFileSync(pngPath, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+    const avatarRead = await request("experts.read_avatar_file", { srcPath: pngPath });
+    check(
+      "experts.read_avatar_file returns data URL",
+      typeof avatarRead.data_url === "string" && avatarRead.data_url.startsWith("data:image/png;base64,"),
+    );
+    const badAvatar = await request("experts.read_avatar_file", { srcPath: join(agentDir, "extensions", "g-ext.ts") }).then(
+      () => false,
+      () => true,
+    );
+    check("read_avatar_file rejects non-image", badAvatar === true);
+
+    const withAvatar = await request("experts.save", {
+      name: "avatar-expert",
+      prompt: "头像测试",
+      avatar: avatarRead.data_url,
+      avatar_color: "#10B981",
+    });
+    check("experts.save stores avatar + color", Boolean(withAvatar.expert.avatar?.startsWith("data:image/png")) && withAvatar.expert.avatar_color === "#10b981");
+    const badSave = await request("experts.save", { name: "bad-avatar", prompt: "x", avatar: "http://not-a-data-url" }).then(
+      () => false,
+      () => true,
+    );
+    check("experts.save rejects non-data-url avatar", badSave === true);
+    // 缺省 avatar 参数 → 保留既有值；空串 → 清除
+    const kept = await request("experts.save", { id: withAvatar.expert.id, name: "avatar-expert", prompt: "改个提示词" });
+    check("save without avatar keeps existing", Boolean(kept.expert.avatar));
+    const cleared = await request("experts.save", { id: withAvatar.expert.id, name: "avatar-expert", prompt: "改个提示词", avatar: "" });
+    check("save with empty avatar clears it", !cleared.expert.avatar);
+    await request("experts.delete", { id: withAvatar.expert.id });
+
     rmSync(importDir, { recursive: true, force: true });
     clearTimeout(timeout);
     child.stdin.end();

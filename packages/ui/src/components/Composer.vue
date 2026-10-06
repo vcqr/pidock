@@ -31,7 +31,7 @@ const props = withDefaults(
     /** 技能列表加载器（+ 菜单 $ 选择技能用，来自 store） */
     skillsLoader?: () => Promise<Array<{ name: string; description: string }>>;
     /** 专家列表加载器（/ 弹层专家段用，来自 store） */
-    expertsLoader?: () => Promise<Array<{ id: string; name: string; description?: string; icon?: string }>>;
+    expertsLoader?: () => Promise<Array<{ id: string; name: string; description?: string; icon?: string; avatar?: string }>>;
     /** 已雇佣的专家（新任务模式绑定到将创建的会话；由父级管理） */
     hiredExpert?: { id: string; name: string } | null;
     /** 当前模型是否支持图片输入（false = 显示预警；undefined = 未知不预警） */
@@ -410,8 +410,8 @@ const slashQuery = computed(() => (slash.value?.raw ?? "").replace(/^(skill|expe
 /** 弹层条目：技能插入 /skill: 命令；专家在首页/新任务 hiring，会话中插入 /expert: 咨询命令 */
 type SlashItem =
   | { kind: "skill"; name: string; description: string }
-  | { kind: "expert"; id: string; name: string; description: string };
-const experts = ref<Array<{ id: string; name: string; description?: string; icon?: string }>>([]);
+  | { kind: "expert"; id: string; name: string; description: string; avatar?: string };
+const experts = ref<Array<{ id: string; name: string; description?: string; icon?: string; avatar?: string }>>([]);
 const expertsLoading = ref(false);
 
 function ensureExperts(): void {
@@ -435,7 +435,7 @@ const slashMatches = computed<SlashItem[]>(() => {
   const expertHits: SlashItem[] = experts.value
     .filter((e) => !q || e.name.toLowerCase().includes(q) || (e.description ?? "").toLowerCase().includes(q))
     .slice(0, 10)
-    .map((e) => ({ kind: "expert", id: e.id, name: e.name, description: e.description ?? "" }));
+    .map((e) => ({ kind: "expert", id: e.id, name: e.name, description: e.description ?? "", avatar: e.avatar }));
   return [...skillHits, ...expertHits];
 });
 
@@ -773,7 +773,13 @@ function onKeydown(e: KeyboardEvent): void {
           @click="applySlash(s)"
         >
           <span class="m-icon">
-            <Icon :name="s.kind === 'skill' ? I.magic : 'user-star-line'" :size="16" />
+            <img
+              v-if="s.kind === 'expert' && s.avatar"
+              :src="s.avatar"
+              class="m-avatar"
+              alt=""
+            />
+            <Icon v-else :name="s.kind === 'skill' ? I.magic : 'user-star-line'" :size="16" />
           </span>
           <span class="m-name">{{ s.kind === "skill" ? `/skill:${s.name}` : `/expert:${s.name}` }}</span>
           <span class="m-dir">{{ s.description }}</span>
@@ -1031,6 +1037,7 @@ function onKeydown(e: KeyboardEvent): void {
 .mention-item.active,
 .mention-item:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 .m-icon { flex: none; display: inline-grid; place-items: center; }
+.m-avatar { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; display: block; }
 .m-name { flex: none; font-weight: 500; color: var(--pd-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-dir {
   flex: 1;

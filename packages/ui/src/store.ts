@@ -641,7 +641,7 @@ export function createAgentStore(bus: DataBus) {
   }
 
   /** 专家列表（雇佣 chip 与 / 弹窗专家段共用）；失败静默返回空 */
-  async function listExperts(): Promise<Array<{ id: string; name: string; description?: string; icon?: string }>> {
+  async function listExperts(): Promise<Array<{ id: string; name: string; description?: string; icon?: string; avatar?: string }>> {
     try {
       const r = await bus.request("experts.list");
       return (r?.experts ?? []).map((e: any) => ({
@@ -649,6 +649,7 @@ export function createAgentStore(bus: DataBus) {
         name: String(e.name ?? ""),
         description: e.description ? String(e.description) : undefined,
         icon: e.icon ? String(e.icon) : undefined,
+        avatar: e.avatar ? String(e.avatar) : undefined,
       }));
     } catch {
       return [];
