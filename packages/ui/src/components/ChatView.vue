@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { NSplit } from "naive-ui";
-import type { AgentStore, UiItem } from "../store.js";
+import type { AgentStore, ExpertInfo, UiItem } from "../store.js";
 import { formatSpan, greeting } from "../utils/time.js";
 import FileIcon from "./FileIcon.vue";
 import MdContent from "./MdContent.vue";
@@ -87,6 +87,17 @@ function setThinkingLevel(l: string): void {
 
 /** @ 文件提及：基准目录（首页用主目录兜底，会话内用会话 cwd）与加载器 */
 const activeSession = computed(() => props.store.sessions.find((s) => s.session_id === props.store.activeId));
+/** 活动会话绑定的专家详情（第三栏信息卡）；专家已删除则为 null */
+const activeExpert = ref<ExpertInfo | null>(null);
+watch(
+  () => activeSession.value?.expert_id,
+  async (id) => {
+    activeExpert.value = null;
+    if (!id) return;
+    activeExpert.value = await props.store.getExpert(id);
+  },
+  { immediate: true },
+);
 function mentionLoader(cwd: string): Promise<Array<{ path: string; name: string; dir: boolean }>> {
   return props.store.listWorkspaceFiles(cwd);
 }
@@ -695,8 +706,8 @@ watch(
         </template>
         <template #resize-trigger><div class="rz-line" /></template>
       </n-split>
-      <!-- 任务进度第三栏（TodoWrite 推送时停靠展开；收起为悬浮小圆标） -->
-      <ProgressCard :store="store" />
+      <!-- 任务进度第三栏（TodoWrite 推送或雇佣专家时停靠展开；收起为悬浮小圆标） -->
+      <ProgressCard :store="store" :expert="activeExpert" />
       </div>
     </template>
   </div>

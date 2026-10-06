@@ -83,6 +83,21 @@ export interface SessionSummaryUi {
   state: string;
 }
 
+/** 专家档案（第三栏信息卡 / 雇佣流程共用） */
+export interface ExpertInfo {
+  id: string;
+  name: string;
+  description?: string;
+  icon?: string;
+  avatar?: string;
+  avatar_color?: string;
+  prompt: string;
+  skills: string[];
+  extensions: string[];
+  exclude_tools?: string[];
+  knowledge_dirs: string[];
+}
+
 let keyCounter = 0;
 const nextKey = (): string => `k${++keyCounter}`;
 
@@ -656,6 +671,31 @@ export function createAgentStore(bus: DataBus) {
     }
   }
 
+  /** 单个专家详情（第三栏信息卡用）；专家已删除时返回 null */
+  async function getExpert(id: string): Promise<ExpertInfo | null> {
+    if (!id) return null;
+    try {
+      const r = await bus.request("experts.get", { id });
+      const e = r?.expert;
+      if (!e) return null;
+      return {
+        id: String(e.id ?? ""),
+        name: String(e.name ?? ""),
+        description: e.description ? String(e.description) : undefined,
+        icon: e.icon ? String(e.icon) : undefined,
+        avatar: e.avatar ? String(e.avatar) : undefined,
+        avatar_color: e.avatar_color ? String(e.avatar_color) : undefined,
+        prompt: String(e.prompt ?? ""),
+        skills: Array.isArray(e.skills) ? e.skills.map(String) : [],
+        extensions: Array.isArray(e.extensions) ? e.extensions.map(String) : [],
+        exclude_tools: Array.isArray(e.exclude_tools) ? e.exclude_tools.map(String) : undefined,
+        knowledge_dirs: Array.isArray(e.knowledge_dirs) ? e.knowledge_dirs.map(String) : [],
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /** 回合结束后拉取各回合文件变更（按轮分组） */
   async function fetchFileChanges(): Promise<void> {
     if (!activeId.value) return;
@@ -723,6 +763,7 @@ export function createAgentStore(bus: DataBus) {
     renameSession,
     listSkills,
     listExperts,
+    getExpert,
     setModelOverride,
     listWorkspaceFiles,
     resolveApproval,
