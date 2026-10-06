@@ -14,6 +14,7 @@
  */
 import { inflateRawSync } from "node:zlib";
 import { extractText } from "unpdf";
+import { convertToPng, formatDimensionNote, resizeImage } from "@earendil-works/pi-coding-agent";
 
 export interface IncomingAttachment {
   /** 文件名（含扩展名，扩展名是类型识别的主要依据） */
@@ -30,6 +31,8 @@ export interface ParsedAttachments {
   images: Array<{ type: "image"; data: string; mimeType: string }>;
   /** <attachment> 文本块，按序追加在用户文本后 */
   blocks: string[];
+  /** 大图缩放的尺寸注记（给模型说明坐标映射），按序追加在用户文本后 */
+  notes: string[];
 }
 
 const MAX_FILES = 6;
@@ -196,6 +199,47 @@ function pptxToText(entries: Map<string, Buffer>): string {
   return text;
 }
 
+// ---------------------------------------------------------------- 图片规整
+
+/** provider 普遍接受的图片格式；其余（HEIC/AVIF/TIFF/BMP…）先转 PNG */
+const NATIVE_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+/** 超过该字节数的大图先缩放（4:3 参考：约 2000 万像素 base64），控制 token 消耗 */
+const RESIZE_OVER_BYTES = 2 * 1024 * 1024;
+const RESIZE_MAX_EDGE = 2048;
+
+/**
+ * 把附件图片规整成 provider 友好的形态：
+ * 1. 非 PNG/JPEG/WebP/GIF（HEIC/AVIF/TIFF 等）→ convertToPng；转不动再原样发（交由 provider 报错）。
+ * 2. 大图（>2MB）→ resizeImage 压到 2048px 内，返回的尺寸注记由调用方拼进 prompt 文本。
+ */
+export async function normalizeImage(data: string, mime: string): Promise<{ data: string; mimeType: string; note?: string }> {
+  let img = { data, mimeType: mime || "image/png" };
+  if (!NATIVE_IMAGE_MIMES.has(img.mimeType)) {
+    const converted = await convertToPng(img.data, img.mimeType);
+    if (converted) img = converted;
+  }
+  const bytes = Math.floor((img.data.length * 3) / 4);
+  if (bytes > RESIZE_OVER_BYTES) {
+    try {
+      const resized = await resizeImage(Buffer.from(img.data, "base64"), img.mimeType, {
+        maxWidth: RESIZE_MAX_EDGE,
+        maxHeight: RESIZE_MAX_EDGE,
+      });
+      if (resized) {
+        const note = formatDimensionNote(resized);
+        return {
+          data: resized.data,
+          mimeType: resized.mimeType,
+          ...(note ? { note } : {}),
+        };
+      }
+    } catch {
+      // 缩放失败用原图（转换后的 PNG）兜底
+    }
+  }
+  return img;
+}
+
 // ---------------------------------------------------------------- 主入口
 
 async function extractOne(att: IncomingAttachment): Promise<{ kind: "text" | "image"; body?: string; image?: { type: "image"; data: string; mimeType: string } }> {
@@ -238,6 +282,7 @@ async function extractOne(att: IncomingAttachment): Promise<{ kind: "text" | "im
 export async function parseAttachments(list: IncomingAttachment[] | undefined): Promise<ParsedAttachments> {
   const images: ParsedAttachments["images"] = [];
   const blocks: string[] = [];
+  const notes: string[] = [];
   let totalChars = 0;
   for (const att of (list ?? []).slice(0, MAX_FILES)) {
     if (!att?.data) continue;
@@ -245,7 +290,9 @@ export async function parseAttachments(list: IncomingAttachment[] | undefined): 
     try {
       const r = await extractOne(att);
       if (r.kind === "image" && r.image) {
-        images.push(r.image);
+        const norm = await normalizeImage(r.image.data, r.image.mimeType);
+        images.push({ type: "image", data: norm.data, mimeType: norm.mimeType });
+        if (norm.note) notes.push(norm.note);
         continue;
       }
       if (totalChars >= MAX_TOTAL_CHARS) {
@@ -259,5 +306,5 @@ export async function parseAttachments(list: IncomingAttachment[] | undefined): 
       blocks.push(errorBlock(att.name, size, String(err instanceof Error ? err.message : err)));
     }
   }
-  return { images, blocks };
+  return { images, blocks, notes };
 }

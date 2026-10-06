@@ -292,6 +292,8 @@ export const Event = {
   TOOL_EXECUTION_END: "tool_execution_end",
   AGENT_STATE_CHANGED: "agent_state_changed",
   QUEUE_CHANGED: "queue_changed",
+  /** 上下文用量推送（agent_settled/compaction_end 后由 host 主动发） */
+  CONTEXT_USAGE: "context_usage",
   AUTO_RETRY: "auto_retry",
   COMPACTION_LIFECYCLE: "compaction_lifecycle",
   TODO_UPDATED: "todo_updated",
@@ -332,6 +334,34 @@ export const Method = {
   AGENT_STEER: "agent.steer",
   AGENT_FOLLOW_UP: "agent.follow_up",
   AGENT_ABORT: "agent.abort",
+  /** 手动压缩上下文（SDK compact()，lifecycle 走 compaction_lifecycle 事件） */
+  AGENT_COMPACT: "agent.compact",
+  /** 当前上下文用量（getContextUsage + getSessionStats 摘要；也由 context_usage 事件推送） */
+  AGENT_CONTEXT_USAGE: "agent.context_usage",
+  /** 清空排队中的 steering/followUp 消息 */
+  AGENT_CLEAR_QUEUE: "agent.clear_queue",
+  /** 中止进行中的自动重试 */
+  AGENT_ABORT_RETRY: "agent.abort_retry",
+  /** 导出会话（html/jsonl），返回落盘路径 */
+  SESSION_EXPORT: "session.export",
+  /** 开关自动压缩（SDK setAutoCompactionEnabled，仅内存态） */
+  SESSION_SET_AUTO_COMPACTION: "session.set_auto_compaction",
+  /** 开关自动重试（SDK setAutoRetryEnabled，仅内存态） */
+  SESSION_SET_AUTO_RETRY: "session.set_auto_retry",
+  /** 会话工具清单（含启用状态，供工具管理对话框） */
+  SESSION_LIST_TOOLS: "session.list_tools",
+  /** 设置启用工具子集（SDK setActiveToolsByName） */
+  SESSION_SET_ACTIVE_TOOLS: "session.set_active_tools",
+  /** 会话分支树（用户消息节点列表，树导航用） */
+  SESSION_TREE: "session.tree",
+  /** 就地切换到树中某节点（SDK navigateTree，UI 事后重开会话刷新视图） */
+  SESSION_NAVIGATE_TREE: "session.navigate_tree",
+  /** 当前会话的 prompts 模板（slash 弹窗与技能合并展示） */
+  CONFIG_PROMPTS_LIST: "config.prompts.list",
+  /** 模型思考能力/可用档位（supportsThinking/getAvailableThinkingLevels） */
+  SESSION_THINKING_INFO: "session.thinking_info",
+  /** 项目信任决定（ProjectTrustStore；trust_required 错误后 UI 确认回调） */
+  SESSION_TRUST: "session.trust",
   CONFIG_GET: "config.get",
   CONFIG_SETTINGS_SET: "config.settings.set",
   CONFIG_PROVIDERS_LIST: "config.providers.list",

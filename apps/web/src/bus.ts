@@ -249,6 +249,25 @@ export function createWebBus(auth: AuthClient): DataBus & {
         case "agent.abort":
           await command(params.session_id, "agent.abort", {});
           return { aborted: true };
+        case "agent.context_usage":
+        case "agent.compact":
+        case "agent.clear_queue":
+        case "agent.abort_retry":
+        case "session.export":
+        case "session.set_auto_compaction":
+        case "session.set_auto_retry":
+        case "session.list_tools":
+        case "session.set_active_tools":
+        case "session.tree":
+        case "session.navigate_tree":
+        case "config.prompts.list":
+        case "session.thinking_info":
+        case "session.trust": {
+          // 新一代会话级命令：桌面端按同名 method 透传给 host
+          const { session_id, ...payload } = params ?? {};
+          const result = await command(session_id ?? "", method, payload);
+          return result ?? {};
+        }
         case "config.get":
           // config is a desktop-local concept in v1
           throw new Error("配置管理仅在桌面端可用");

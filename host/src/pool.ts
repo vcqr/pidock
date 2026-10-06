@@ -7,7 +7,9 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
+  hasTrustRequiringProjectResources,
   ModelRuntime,
+  ProjectTrustStore,
   SessionManager,
   SettingsManager,
   VERSION as PI_VERSION,
@@ -16,7 +18,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { emitEvent } from "./emit.js";
 import { entryToPayload, metaPayloadFromSession } from "./map.js";
-import { parseAttachments, type IncomingAttachment } from "./attachments.js";
+import { parseAttachments, normalizeImage, type IncomingAttachment } from "./attachments.js";
 import { createTodoWriteTool, sanitizeTodos } from "./todo.js";
 import { createAskUserQuestionTool, type AskAnswer } from "./ask.js";
 import { buildExpertPromptBlock, ExpertsService, matchExpertCommand, type ExpertSessionConfig } from "./experts.js";
@@ -36,7 +38,8 @@ export const HOST_VERSION = "0.1.0";
 /** 工具调用权限模式（输入卡片左下角下拉） */
 export type PermissionMode = "plan" | "confirm" | "edit-auto" | "full";
 const PERMISSION_MODES: PermissionMode[] = ["plan", "confirm", "edit-auto", "full"];
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"];
+/** plan 模式下从模型工具集里摘除的修改类内置工具（权限扩展继续兜底拦截） */
+const MUTATING_TOOLS = new Set(["bash", "write", "edit"]);
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 
@@ -70,6 +73,8 @@ interface TrackedSession {
   pendingTurnId: string | null;
   unsubscribe: () => void;
   drain: () => void;
+  /** plan 模式期间被摘除的工具名单（切回其他模式时恢复原工具集） */
+  prePlanTools: string[] | null;
   /** LLM 最近一次 TodoWrite 提交的任务清单（UI 进度卡数据源；重开时从 JSONL 恢复） */
   todos: TodoItem[];
   snapshot: {
@@ -137,6 +142,8 @@ export class SessionPool {
     string,
     { sessionId: string; resolve: (answer: AskAnswer | "timeout" | null) => void }
   >();
+  /** 项目信任决定存储（~/.pi/agent/trust.json，SDK 同源） */
+  private trustStore = new ProjectTrustStore(getAgentDir());
 
   constructor() {
     // 启动时清理 registry 里已不存在会话的快照落盘文件
@@ -226,6 +233,70 @@ export class SessionPool {
   // ------------------------------------------------------------- creation
 
   /**
+   * 项目信任门槛：工作区带有受信任保护的资源（.pi 扩展/技能/prompts 等）
+   * 且用户尚未做出决定时，拒绝创建/打开会话并抛 trust_required，由 UI 弹
+   * 确认框后调 session.trust 写入决定再重试。明确拒绝过（false）则放行——
+   * resolveProjectTrust 会拦下项目资源，仅加载全局资源。
+   */
+  private requireTrustDecision(cwd: string): void {
+    if (!hasTrustRequiringProjectResources(cwd)) return;
+    if (this.trustStore.get(cwd) !== null) return;
+    throw new RpcError(
+      "trust_required",
+      `项目 "${cwd}" 包含需要信任确认的资源（扩展/技能/prompts），请先确认是否信任该项目`,
+    );
+  }
+
+  /** 传给 loader.reload 的信任裁决：true=加载项目资源；未决定且无受保护资源时视为信任 */
+  private trustResolver(cwd: string): () => Promise<boolean> {
+    return async () => {
+      const decision = this.trustStore.get(cwd);
+      if (decision === true) return true;
+      if (decision === false) return false;
+      return !hasTrustRequiringProjectResources(cwd);
+    };
+  }
+
+  /**
+   * plan 模式下把修改类内置工具从模型工具集里摘除（真只读：模型看不到也调不了，
+   * 而不是调用后被拦）。原工具集记入 prePlanTools，切回其他模式时恢复；
+   * 权限扩展的 tool_call 拦截继续保留作兜底（防 MCP/扩展重新引入同名工具）。
+   */
+  private applyPlanToolFilter(sessionId: string, tracked: TrackedSession, plan: boolean): void {
+    try {
+      if (plan) {
+        if (tracked.prePlanTools) return;
+        const current = tracked.session.getActiveToolNames();
+        const filtered = current.filter((n) => !MUTATING_TOOLS.has(n));
+        if (filtered.length !== current.length) {
+          tracked.prePlanTools = current;
+          tracked.session.setActiveToolsByName(filtered);
+        }
+      } else if (tracked.prePlanTools) {
+        tracked.session.setActiveToolsByName(tracked.prePlanTools);
+        tracked.prePlanTools = null;
+      }
+    } catch {
+      // 工具集切换失败不阻塞会话：权限扩展兜底拦截仍在
+    }
+  }
+
+  /** 上下文用量推送载荷（agent_settled/compaction_end 后与 RPC 共用；附队列计数） */
+  private contextUsagePayload(tracked: TrackedSession): Record<string, unknown> {
+    const s = tracked.session;
+    const usage = s.getContextUsage();
+    return {
+      tokens: usage ? usage.tokens : null,
+      percent: usage ? usage.percent : null,
+      context_window: usage ? usage.contextWindow : null,
+      auto_compaction: s.autoCompactionEnabled,
+      auto_retry: s.autoRetryEnabled,
+      steering_count: s.getSteeringMessages().length,
+      follow_up_count: s.getFollowUpMessages().length,
+    };
+  }
+
+  /**
    * 专家档案 → DefaultResourceLoader 覆盖项。角色提示词与知识库清单走
    * appendSystemPrompt（追加在 pi 默认系统提示词之后，保留编码底座）；
    * 私有技能/插件目录走 additional*Paths（与全局资源合并后加载）；
@@ -268,6 +339,7 @@ export class SessionPool {
   }): Promise<{ session_id: string; file: string; cwd: string; expert_id?: string; expert_name?: string }> {
     // 无头模式下没有"当前项目"概念：缺省落在用户主目录而不是 host 进程目录
     const cwd = params.cwd ?? homedir();
+    this.requireTrustDecision(cwd);
     const expertCfg = this.experts.resolveForSession(params.expert_id);
     // 显式传入的模型/思考级别优先于专家预设
     const model = await this.resolveModel(params.model ?? expertCfg?.expert.model);
@@ -294,7 +366,7 @@ export class SessionPool {
         },
       ],
     });
-    await loader.reload();
+    await loader.reload({ resolveProjectTrust: this.trustResolver(cwd) });
     const thinkingLevel = params.thinking_level ?? expertCfg?.expert.thinking_level;
     const { session } = await createAgentSession({
       cwd,
@@ -331,12 +403,14 @@ export class SessionPool {
       pendingTurnId: null,
       unsubscribe: () => {},
       drain: () => {},
+      prePlanTools: null,
       todos: [],
       snapshot: { messageId: null, text: "", thinking: "", dirty: false, lastEmit: 0 },
     };
     trackedRef.current = tracked;
     tracked.unsubscribe = this.wire(sessionId, tracked);
     this.sessions.set(sessionId, tracked);
+    this.applyPlanToolFilter(sessionId, tracked, permission.mode === "plan");
 
     const file = session.sessionFile ?? "";
     this.writeRegistryEntry({
@@ -351,6 +425,7 @@ export class SessionPool {
     emitEvent(sessionId, Event.SESSION_META, metaPayloadFromSession({ cwd, model: params.model ?? expertCfg?.expert.model }), {
       persist: false,
     });
+    emitEvent(sessionId, Event.CONTEXT_USAGE, this.contextUsagePayload(tracked), { persist: false });
     return {
       session_id: sessionId,
       file,
@@ -362,6 +437,7 @@ export class SessionPool {
   async openSession(params: { file: string }): Promise<{ session_id: string; file: string; cwd: string; expert_id?: string; expert_name?: string }> {
     const sessionManager = SessionManager.open(params.file);
     const cwd = sessionManager.getCwd() || process.cwd();
+    this.requireTrustDecision(cwd);
     // 重开会话按注册表里的 expert_id 重放专家配置（专家已被删除则回退普通会话）
     const expertCfg = this.experts.resolveForSession(
       this.readRegistry().find((e) => e.file === params.file)?.expert_id,
@@ -387,7 +463,7 @@ export class SessionPool {
         },
       ],
     });
-    await loader.reload();
+    await loader.reload({ resolveProjectTrust: this.trustResolver(cwd) });
     const { session } = await createAgentSession({
       cwd,
       modelRuntime: await this.modelRuntime(),
@@ -418,12 +494,14 @@ export class SessionPool {
       pendingTurnId: null,
       unsubscribe: () => {},
       drain: () => {},
+      prePlanTools: null,
       todos: this.restoreTodos(sessionManager),
       snapshot: { messageId: null, text: "", thinking: "", dirty: false, lastEmit: 0 },
     };
     trackedRef.current = tracked;
     tracked.unsubscribe = this.wire(sessionId, tracked);
     this.sessions.set(sessionId, tracked);
+    this.applyPlanToolFilter(sessionId, tracked, permission.mode === "plan");
 
     // 重开会话后立即把恢复出的任务清单推给 UI（web 端经 cloud mirror 同样收到）
     if (tracked.todos.length) {
@@ -431,6 +509,7 @@ export class SessionPool {
     }
 
     emitEvent(sessionId, Event.SESSION_META, metaPayloadFromSession({ cwd }), { persist: false });
+    emitEvent(sessionId, Event.CONTEXT_USAGE, this.contextUsagePayload(tracked), { persist: false });
     return {
       session_id: sessionId,
       file: params.file,
@@ -670,10 +749,19 @@ export class SessionPool {
   }): Promise<{ accepted: boolean }> {
     const tracked = this.require(params.session_id);
     this.autoTitle(params.session_id, params.text);
-    const images = (params.images ?? [])
-      .slice(0, 6)
-      .filter((img) => img?.data)
-      .map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mime_type || "image/png" }));
+    const rawImages = (params.images ?? []).slice(0, 6).filter((img) => img?.data);
+    // 直发图片同样规整（非通用格式转 PNG、大图缩放），与附件图片同一通道
+    const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+    const directNotes: string[] = [];
+    for (const img of rawImages) {
+      try {
+        const norm = await normalizeImage(img.data, img.mime_type || "image/png");
+        images.push({ type: "image", data: norm.data, mimeType: norm.mimeType });
+        if (norm.note) directNotes.push(norm.note);
+      } catch {
+        images.push({ type: "image", data: img.data, mimeType: img.mime_type || "image/png" });
+      }
+    }
     // /expert:name args → 以该专家身份发言：整条消息替换为专家块（与 pi 的
     // /skill: 展开同构，展开后的文本就是持久化的用户消息）；未知专家原样透传。
     // 这是会话中途"咨询"专家的通道——完整雇佣（技能/工具过滤）只在创建会话时生效。
@@ -685,7 +773,9 @@ export class SessionPool {
     }
     const parsed = await parseAttachments(params.attachments);
     const allImages = [...images, ...parsed.images].slice(0, 6);
-    const fullText = parsed.blocks.length ? `${promptText}\n\n${parsed.blocks.join("\n\n")}` : promptText;
+    const notes = [...directNotes, ...parsed.notes];
+    const textParts = [promptText, ...notes, ...parsed.blocks].filter(Boolean);
+    const fullText = textParts.length > 1 ? textParts.join("\n\n") : promptText;
     tracked.session
       .prompt(fullText, allImages.length ? { images: allImages } : undefined)
       .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: String(err) }))
@@ -786,6 +876,11 @@ export class SessionPool {
     if (!state) throw new RpcError("session_not_found", `unknown session "${params.session_id}"`);
     if (!PERMISSION_MODES.includes(params.mode)) {
       throw new RpcError("bad_request", `invalid permission mode "${params.mode}"`);
+    }
+    // plan 模式切换时同步增减模型工具集（真只读），切回时恢复原工具集
+    const tracked = this.sessions.get(params.session_id);
+    if (tracked) {
+      this.applyPlanToolFilter(params.session_id, tracked, params.mode === "plan" && state.mode !== "plan");
     }
     state.mode = params.mode;
     return { ok: true };
@@ -1043,11 +1138,31 @@ export class SessionPool {
 
   setThinkingLevel(params: { session_id: string; level: string }): { ok: true } {
     const tracked = this.require(params.session_id);
-    if (!THINKING_LEVELS.includes(params.level)) {
-      throw new RpcError("bad_request", `invalid thinking level "${params.level}"`);
+    // 按当前模型的能力集校验（getAvailableThinkingLevels），不支持思考的模型直接报错
+    const levels = tracked.session.getAvailableThinkingLevels() as string[];
+    if (levels.length && !levels.includes(params.level)) {
+      throw new RpcError(
+        "bad_request",
+        `invalid thinking level "${params.level}" for this model (available: ${levels.join(", ") || "none"})`,
+      );
     }
     tracked.session.setThinkingLevel(params.level as never);
     return { ok: true };
+  }
+
+  /** 当前模型的思考能力与可用档位（UI 选择器据此渲染/过滤） */
+  thinkingInfo(params: { session_id: string }): {
+    supports: boolean;
+    levels: string[];
+    current: string;
+  } {
+    const tracked = this.require(params.session_id);
+    const s = tracked.session;
+    return {
+      supports: s.supportsThinking(),
+      levels: s.getAvailableThinkingLevels() as string[],
+      current: s.thinkingLevel as string,
+    };
   }
 
   /** 按名称（id/name/provider/id）唯一匹配后切换会话模型 */
@@ -1423,8 +1538,215 @@ export class SessionPool {
     this.denyApprovals(params.session_id);
     // 挂起的提问按用户取消处理（工具返回 interrupted，模型自行收尾）
     this.denyAsks(params.session_id);
+    // 压缩进行中：中止的是压缩本身（abort() 对压缩无效）
+    if (tracked.session.isCompacting) {
+      tracked.session.abortCompaction();
+      return { aborted: true };
+    }
     await tracked.session.abort();
     return { aborted: true };
+  }
+
+  // -------------------------------------------------------- context/queue
+
+  /** 手动压缩上下文：fire-and-forget（耗时可达数十秒），进度/结果走 compaction_lifecycle 与 compaction_summary 事件 */
+  compactSession(params: { session_id: string; instructions?: string }): { accepted: boolean } {
+    const tracked = this.require(params.session_id);
+    if (tracked.session.isCompacting) return { accepted: false };
+    tracked.session
+      .compact(params.instructions?.trim() || undefined)
+      .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: `压缩失败: ${String(err)}` }));
+    return { accepted: true };
+  }
+
+  /** 当前上下文用量 + 会话统计摘要（仪表条数据源；开关状态随事件/本响应一起返回） */
+  contextUsage(params: { session_id: string }): Record<string, unknown> {
+    const tracked = this.require(params.session_id);
+    const s = tracked.session;
+    const stats = s.getSessionStats();
+    return {
+      ...this.contextUsagePayload(tracked),
+      stats: {
+        user_messages: stats.userMessages,
+        assistant_messages: stats.assistantMessages,
+        tool_calls: stats.toolCalls,
+        tokens: stats.tokens,
+        cost: stats.cost,
+      },
+    };
+  }
+
+  /** 清空排队中的 steering/followUp 消息，返回各类清除条数 */
+  clearQueue(params: { session_id: string }): { steering: number; follow_up: number; texts: string[] } {
+    const tracked = this.require(params.session_id);
+    const cleared = tracked.session.clearQueue();
+    return {
+      steering: cleared.steering.length,
+      follow_up: cleared.followUp.length,
+      texts: [...cleared.steering, ...cleared.followUp],
+    };
+  }
+
+  /** 中止进行中的自动重试 */
+  abortRetry(params: { session_id: string }): { ok: true } {
+    const tracked = this.require(params.session_id);
+    if (tracked.session.isRetrying) tracked.session.abortRetry();
+    return { ok: true };
+  }
+
+  /** 开关自动压缩（内存态，重开会话回到 SDK 默认开启） */
+  setAutoCompaction(params: { session_id: string; enabled: boolean }): { ok: true; enabled: boolean } {
+    const tracked = this.require(params.session_id);
+    const enabled = Boolean(params.enabled);
+    tracked.session.setAutoCompactionEnabled(enabled);
+    return { ok: true, enabled };
+  }
+
+  /** 开关自动重试（内存态） */
+  setAutoRetry(params: { session_id: string; enabled: boolean }): { ok: true; enabled: boolean } {
+    const tracked = this.require(params.session_id);
+    const enabled = Boolean(params.enabled);
+    tracked.session.setAutoRetryEnabled(enabled);
+    return { ok: true, enabled };
+  }
+
+  // -------------------------------------------------------------- export
+
+  /**
+   * 导出会话为 HTML（自包含单文件）或 JSONL（当前分支路径）。
+   * 缺省落到桌面（不存在则用户目录），返回落盘绝对路径供 UI 展示/reveal。
+   */
+  async exportSession(params: {
+    session_id: string;
+    format?: string;
+    output_path?: string;
+  }): Promise<{ path: string }> {
+    const tracked = this.require(params.session_id);
+    const format = params.format === "jsonl" ? "jsonl" : "html";
+    const desktop = join(homedir(), "Desktop");
+    const outDir = existsSync(desktop) ? desktop : homedir();
+    const entry = this.readRegistry().find((e) => e.session_id === params.session_id);
+    const stem = (entry?.name || params.session_id).replace(/[\\/:*?"<>|]/g, "_").slice(0, 60);
+    const outPath = params.output_path?.trim() || join(outDir, `${stem}.${format}`);
+    const path =
+      format === "jsonl"
+        ? tracked.session.exportToJsonl(outPath)
+        : await tracked.session.exportToHtml(outPath);
+    return { path };
+  }
+
+  // --------------------------------------------------------------- tools
+
+  /** 会话工具清单（含启用状态与来源），供工具管理对话框渲染 */
+  listTools(params: { session_id: string }): {
+    tools: Array<{
+      name: string;
+      description: string;
+      active: boolean;
+      namespace: string | null;
+      source: string;
+    }>;
+  } {
+    const tracked = this.require(params.session_id);
+    const active = new Set(tracked.session.getActiveToolNames());
+    const tools = tracked.session.getAllTools().map((t) => ({
+      name: t.name,
+      description: String(t.description ?? "").slice(0, 200),
+      active: active.has(t.name),
+      namespace: t.namespace ? t.namespace.name : null,
+      source: String(t.sourceInfo?.source ?? t.sourceInfo?.path ?? ""),
+    }));
+    return { tools };
+  }
+
+  /** 设置启用工具子集（setActiveToolsByName；被排除的工具从系统提示中移除） */
+  setActiveTools(params: { session_id: string; active_names: string[] }): { ok: true; active: string[] } {
+    const tracked = this.require(params.session_id);
+    const names = (Array.isArray(params.active_names) ? params.active_names : []).filter(
+      (n): n is string => typeof n === "string" && !!n.trim(),
+    );
+    if (!names.length) throw new RpcError("bad_request", "active_names must not be empty");
+    tracked.session.setActiveToolsByName(names);
+    if (tracked.prePlanTools) {
+      // plan 过滤的恢复基线跟随用户手工调整，避免切回模式时复活已禁用的工具
+      tracked.prePlanTools = tracked.prePlanTools.filter((n) => names.includes(n));
+    }
+    return { ok: true, active: tracked.session.getActiveToolNames() };
+  }
+
+  // ----------------------------------------------------------------- tree
+
+  /** 会话分支树的用户消息节点（树导航：就地切换到某条消息继续） */
+  sessionTree(params: { session_id: string }): {
+    nodes: Array<{ id: string; parent_id: string | null; text: string; ts: string }>;
+    leaf_id: string | null;
+  } {
+    const tracked = this.require(params.session_id);
+    const sm = tracked.session.sessionManager;
+    const nodes = (sm.getEntries() as unknown as Record<string, any>[])
+      .filter((e) => e?.type === "message" && e.message?.role === "user")
+      .map((e) => ({
+        id: String(e.id ?? ""),
+        parent_id: typeof e.parentId === "string" ? e.parentId : null,
+        text: this.userMessageText(e.message).replace(/\s+/g, " ").trim().slice(0, 120),
+        ts: typeof e.timestamp === "string" ? e.timestamp : "",
+      }))
+      .filter((n) => n.id);
+    return { nodes, leaf_id: sm.getLeafId() };
+  }
+
+  /**
+   * 就地切换到树中某节点（该消息成为叶子，其后的对话退出上下文；JSONL 历史保留）。
+   * 完成后 UI 应重开会话以刷新视图（宿主不主动推送全量重放）。
+   */
+  async navigateTree(params: { session_id: string; entry_id: string }): Promise<{
+    cancelled: boolean;
+    editor_text?: string;
+  }> {
+    const tracked = this.require(params.session_id);
+    if (this.stateOf(params.session_id) !== "idle") {
+      throw new RpcError("busy", "会话正在运行中，请先中止再切换分支");
+    }
+    const res = await tracked.session.navigateTree(params.entry_id, { summarize: false });
+    return {
+      cancelled: res.cancelled,
+      ...(res.editorText ? { editor_text: res.editorText } : {}),
+    };
+  }
+
+  // ------------------------------------------------------------- prompts
+
+  /** 当前会话加载的 prompts 模板（slash 弹窗与技能合并展示；会话未打开返回空） */
+  promptsList(params: { session_id?: string }): {
+    prompts: Array<{ name: string; description: string; argument_hint: string }>;
+  } {
+    const tracked = params.session_id ? this.sessions.get(params.session_id) : undefined;
+    if (!tracked) return { prompts: [] };
+    const prompts = tracked.session.promptTemplates.map((p) => ({
+      name: p.name,
+      description: String(p.description ?? "").slice(0, 200),
+      argument_hint: String(p.argumentHint ?? ""),
+    }));
+    return { prompts };
+  }
+
+  // --------------------------------------------------------------- trust
+
+  /** 写入项目信任决定（true=信任；false=拒绝，项目资源不加载） */
+  setProjectTrust(params: { cwd: string; decision: boolean }): { ok: true } {
+    const cwd = String(params.cwd ?? "").trim();
+    if (!cwd) throw new RpcError("bad_request", "cwd required");
+    this.trustStore.set(cwd, Boolean(params.decision));
+    return { ok: true };
+  }
+
+  /** 查询项目信任状态（UI 在 trust_required 对话框里展示当前决定） */
+  getProjectTrust(params: { cwd: string }): { decision: boolean | null; has_protected: boolean } {
+    const cwd = String(params.cwd ?? "").trim();
+    return {
+      decision: cwd ? this.trustStore.get(cwd) : null,
+      has_protected: cwd ? hasTrustRequiringProjectResources(cwd) : false,
+    };
   }
 
   // ---------------------------------------------------------------- wiring
@@ -1594,6 +1916,7 @@ export class SessionPool {
         case "agent_settled":
           this.setState(tracked, sessionId, "idle");
           resetSnap();
+          emitEvent(sessionId, Event.CONTEXT_USAGE, this.contextUsagePayload(tracked), { persist: false });
           break;
         case "queue_update":
           emitEvent(sessionId, Event.QUEUE_CHANGED, {
@@ -1613,6 +1936,9 @@ export class SessionPool {
             aborted: event.aborted,
             ...(event.errorMessage ? { error: event.errorMessage } : {}),
           });
+          if (!event.aborted && !event.willRetry) {
+            emitEvent(sessionId, Event.CONTEXT_USAGE, this.contextUsagePayload(tracked), { persist: false });
+          }
           break;
         case "auto_retry_start":
           this.setState(tracked, sessionId, "retrying");

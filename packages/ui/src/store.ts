@@ -1,6 +1,7 @@
 import { reactive, ref, watch } from "vue";
 import type { DataBus } from "./databus.js";
 import type { AskQuestion, TodoItem } from "@pidock/protocol";
+import { appConfirm } from "./confirm.js";
 
 /**
  * Reactive agent store consuming DataBus events.
@@ -128,6 +129,49 @@ export interface ModelInfo {
 /** 工具调用权限模式（与 host pool.ts 保持一致） */
 export type PermissionMode = "plan" | "confirm" | "edit-auto" | "full";
 
+/** 上下文用量（host context_usage 事件 / agent.context_usage RPC 载荷） */
+export interface ContextUsageInfo {
+  /** 估算上下文 token（刚压缩完/尚未响应时为 null） */
+  tokens: number | null;
+  percent: number | null;
+  context_window: number | null;
+  auto_compaction?: boolean;
+  auto_retry?: boolean;
+  steering_count?: number;
+  follow_up_count?: number;
+  stats?: {
+    user_messages: number;
+    assistant_messages: number;
+    tool_calls: number;
+    tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+    cost: number;
+  };
+}
+
+/** 会话工具清单项（session.list_tools） */
+export interface ToolInfoUi {
+  name: string;
+  description: string;
+  active: boolean;
+  namespace: string | null;
+  source: string;
+}
+
+/** 思考能力（session.thinking_info） */
+export interface ThinkingInfoUi {
+  supports: boolean;
+  levels: string[];
+  current: string;
+}
+
+/** 会话分支树的用户消息节点（session.tree） */
+export interface TreeNodeUi {
+  id: string;
+  parent_id: string | null;
+  text: string;
+  ts: string;
+}
+
 /**
  * Push an item and return its REACTIVE proxy. Mutating the raw object that
  * was pushed would bypass Vue's proxies and never re-render the UI.
@@ -167,6 +211,12 @@ export function createAgentStore(bus: DataBus) {
    * 事件可能先于 activeId 赋值到达，按活动会话过滤会把它丢掉。
    */
   const todosBySession = ref<Record<string, TodoItem[]>>({});
+  /** 每会话上下文用量（context_usage 事件 + agent.context_usage RPC） */
+  const contextBySession = ref<Record<string, ContextUsageInfo>>({});
+  /** 每会话排队消息计数（queue_changed 事件；context_usage 载荷同样携带） */
+  const queueBySession = ref<Record<string, { steering: number; follow_up: number }>>({});
+  /** 每会话思考能力（session.thinking_info，openSession 时拉取） */
+  const thinkingBySession = ref<Record<string, ThinkingInfoUi>>({});
 
   let liveTools = new Map<string, UiToolItem>();
   let streaming: UiMessageItem | null = null;
@@ -303,6 +353,29 @@ export function createAgentStore(bus: DataBus) {
     if (e.kind === "todo_updated") {
       const todos = Array.isArray(e.payload?.todos) ? (e.payload.todos as TodoItem[]) : [];
       todosBySession.value = { ...todosBySession.value, [e.session_id]: todos };
+      return;
+    }
+    if (e.kind === "context_usage") {
+      const info = e.payload as ContextUsageInfo;
+      contextBySession.value = { ...contextBySession.value, [e.session_id]: info };
+      // context_usage 载荷同时携带排队计数（host 单一数据源）
+      queueBySession.value = {
+        ...queueBySession.value,
+        [e.session_id]: {
+          steering: Number(info?.steering_count) || 0,
+          follow_up: Number(info?.follow_up_count) || 0,
+        },
+      };
+      return;
+    }
+    if (e.kind === "queue_changed") {
+      queueBySession.value = {
+        ...queueBySession.value,
+        [e.session_id]: {
+          steering: Number(e.payload?.steering_count) || 0,
+          follow_up: Number(e.payload?.follow_up_count) || 0,
+        },
+      };
       return;
     }
     if (e.session_id !== activeId.value) return;
@@ -475,10 +548,42 @@ export function createAgentStore(bus: DataBus) {
     }
   }
 
+  /** host 错误串带 "trust_required" 前缀（desktop/web 两条链路都这样透传） */
+  function isTrustError(err: unknown): boolean {
+    const s = err instanceof Error ? err.message : String(err ?? "");
+    return s.includes("trust_required");
+  }
+
+  /**
+   * trust_required 之后的确认框：信任 → 决定写回 host 并重试；
+   * 取消 → 写回不信任（会话仍可建，项目自带资源不加载），同样重试。
+   * 返回 true = 用户已做出决定（无论哪种），调用方重试一次。
+   */
+  async function confirmTrust(cwd: string): Promise<boolean> {
+    const trust = await appConfirm({
+      title: "信任此项目？",
+      message: `${cwd}\n\n该项目自带扩展 / 技能 / prompts 等可执行资源，信任后它们将随会话自动加载（等同于运行其中的代码）。不信任则仅加载全局资源，会话仍可继续。`,
+      confirmText: "信任并加载",
+      cancelText: "不信任继续",
+      danger: true,
+    });
+    try {
+      await bus.request("session.trust", { session_id: activeId.value ?? "", cwd, decision: trust });
+    } catch {
+      // 决定写入失败不阻塞（host 下次会再询问）
+    }
+    return true;
+  }
+
   async function openSession(sessionId: string): Promise<void> {
     const summary = sessions.value.find((s) => s.session_id === sessionId);
     if (summary && !summary.open && summary.file) {
-      await bus.request("session.open", { file: summary.file });
+      try {
+        await bus.request("session.open", { file: summary.file });
+      } catch (err) {
+        if (!isTrustError(err) || !summary.cwd || !(await confirmTrust(summary.cwd))) throw err;
+        await bus.request("session.open", { file: summary.file });
+      }
       await refreshSessions();
     }
     activeId.value = sessionId;
@@ -499,15 +604,25 @@ export function createAgentStore(bus: DataBus) {
     }
     // 重启后打开会话：从落盘快照恢复文件变更卡片（无快照时为空）
     void fetchFileChanges();
+    // 上下文用量 + 模型思考能力（事件兜底之外的主动拉取，web 链路依赖此处）
+    void fetchContextUsage();
+    void fetchThinkingInfo();
   }
 
   async function newSession(cwd?: string, model?: string, expertId?: string): Promise<void> {
     // cwd 省略 = 「不在项目中工作」，host 会落到用户主目录
-    const created = await bus.request("session.create", {
+    const params = {
       ...(cwd ? { cwd } : {}),
       ...(model ? { model } : {}),
       ...(expertId ? { expert_id: expertId } : {}),
-    });
+    };
+    let created: { session_id: string };
+    try {
+      created = await bus.request("session.create", params);
+    } catch (err) {
+      if (!isTrustError(err) || !cwd || !(await confirmTrust(cwd))) throw err;
+      created = await bus.request("session.create", params);
+    }
     await refreshSessions();
     await openSession(created.session_id);
   }
@@ -834,6 +949,153 @@ export function createAgentStore(bus: DataBus) {
     await fetchFileChanges();
   }
 
+  // ------------------------------------------------- context/queue/export
+
+  /** 拉取指定会话（缺省活动会话）的上下文用量；事件推送之外的兜底 */
+  async function fetchContextUsage(sessionId?: string): Promise<ContextUsageInfo | null> {
+    const sid = sessionId ?? activeId.value;
+    if (!sid) return null;
+    try {
+      const r = await bus.request("agent.context_usage", { session_id: sid });
+      const info = r as ContextUsageInfo;
+      contextBySession.value = { ...contextBySession.value, [sid]: info };
+      if (r?.steering_count !== undefined || r?.follow_up_count !== undefined) {
+        queueBySession.value = {
+          ...queueBySession.value,
+          [sid]: { steering: Number(r.steering_count) || 0, follow_up: Number(r.follow_up_count) || 0 },
+        };
+      }
+      return info;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 手动压缩上下文（host fire-and-forget；进度看 compaction_lifecycle/summary 事件） */
+  async function compactSession(instructions?: string): Promise<boolean> {
+    const sid = activeId.value;
+    if (!sid) return false;
+    try {
+      await bus.request("agent.compact", { session_id: sid, ...(instructions ? { instructions } : {}) });
+      lastError.value = null;
+      return true;
+    } catch (err) {
+      lastError.value = err instanceof Error ? err.message : String(err);
+      return false;
+    }
+  }
+
+  /** 清空当前会话排队中的消息，返回被清除的文本（输入框可回填） */
+  async function clearQueue(): Promise<string[]> {
+    const sid = activeId.value;
+    if (!sid) return [];
+    try {
+      const r = await bus.request("agent.clear_queue", { session_id: sid });
+      queueBySession.value = { ...queueBySession.value, [sid]: { steering: 0, follow_up: 0 } };
+      return Array.isArray(r?.texts) ? r.texts.map(String) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** 开关自动压缩 */
+  async function setAutoCompaction(enabled: boolean): Promise<void> {
+    const sid = activeId.value;
+    if (!sid) return;
+    await bus.request("session.set_auto_compaction", { session_id: sid, enabled });
+    const cur = contextBySession.value[sid];
+    if (cur) contextBySession.value = { ...contextBySession.value, [sid]: { ...cur, auto_compaction: enabled } };
+  }
+
+  /** 开关自动重试 */
+  async function setAutoRetry(enabled: boolean): Promise<void> {
+    const sid = activeId.value;
+    if (!sid) return;
+    await bus.request("session.set_auto_retry", { session_id: sid, enabled });
+    const cur = contextBySession.value[sid];
+    if (cur) contextBySession.value = { ...contextBySession.value, [sid]: { ...cur, auto_retry: enabled } };
+  }
+
+  /** 导出会话（format: html | jsonl），返回落盘路径 */
+  async function exportSession(format: "html" | "jsonl"): Promise<string> {
+    const sid = activeId.value;
+    if (!sid) throw new Error("没有打开的会话");
+    const r = await bus.request("session.export", { session_id: sid, format });
+    return String(r?.path ?? "");
+  }
+
+  // -------------------------------------------------------- tools/tree
+
+  /** 会话工具清单（工具管理对话框） */
+  async function listTools(sessionId?: string): Promise<ToolInfoUi[]> {
+    const sid = sessionId ?? activeId.value;
+    if (!sid) return [];
+    try {
+      const r = await bus.request("session.list_tools", { session_id: sid });
+      return r?.tools ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** 设置启用工具子集 */
+  async function setActiveTools(names: string[]): Promise<void> {
+    const sid = activeId.value;
+    if (!sid) return;
+    await bus.request("session.set_active_tools", { session_id: sid, active_names: names });
+  }
+
+  /** 会话分支树的用户消息节点 */
+  async function fetchSessionTree(sessionId?: string): Promise<{ nodes: TreeNodeUi[]; leafId: string | null }> {
+    const sid = sessionId ?? activeId.value;
+    if (!sid) return { nodes: [], leafId: null };
+    try {
+      const r = await bus.request("session.tree", { session_id: sid });
+      return { nodes: r?.nodes ?? [], leafId: r?.leaf_id ?? null };
+    } catch {
+      return { nodes: [], leafId: null };
+    }
+  }
+
+  /**
+   * 就地切换到树中某条用户消息（其后的对话退出上下文）。切换后重开会话
+   * 刷新视图；重开前后 session_id 不变（同一 JSONL 文件）。
+   */
+  async function navigateTree(entryId: string): Promise<void> {
+    const sid = activeId.value;
+    if (!sid) return;
+    await bus.request("session.navigate_tree", { session_id: sid, entry_id: entryId });
+    await openSession(sid);
+  }
+
+  // -------------------------------------------------- prompts/thinking
+
+  /** 当前会话的 prompts 模板（slash 弹窗与技能合并展示） */
+  async function listPrompts(sessionId?: string): Promise<Array<{ name: string; description: string; argument_hint: string }>> {
+    const sid = sessionId ?? activeId.value;
+    if (!sid) return [];
+    try {
+      const r = await bus.request("config.prompts.list", { session_id: sid });
+      return r?.prompts ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** 拉取当前会话模型的思考能力（选择器过滤用） */
+  async function fetchThinkingInfo(sessionId?: string): Promise<ThinkingInfoUi | null> {
+    const sid = sessionId ?? activeId.value;
+    if (!sid) return null;
+    try {
+      const r = await bus.request("session.thinking_info", { session_id: sid });
+      const info = r as ThinkingInfoUi;
+      thinkingBySession.value = { ...thinkingBySession.value, [sid]: info };
+      return info;
+    } catch {
+      return null;
+    }
+  }
+
   return reactive({
     // state
     sessions,
@@ -852,6 +1114,9 @@ export function createAgentStore(bus: DataBus) {
     turnFileChanges,
     allModels,
     todosBySession,
+    contextBySession,
+    queueBySession,
+    thinkingBySession,
     // actions
     start,
     refreshSessions,
@@ -878,6 +1143,18 @@ export function createAgentStore(bus: DataBus) {
     fetchFileChanges,
     fileDiff,
     revertFiles,
+    fetchContextUsage,
+    compactSession,
+    clearQueue,
+    setAutoCompaction,
+    setAutoRetry,
+    exportSession,
+    listTools,
+    setActiveTools,
+    fetchSessionTree,
+    navigateTree,
+    listPrompts,
+    fetchThinkingInfo,
   });
 }
 

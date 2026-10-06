@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "build": "bun build ./src/main.ts --compile --outfile ../target/pidock-host.exe",
     "smoke": "bun run scripts/smoke.ts",
+    "smoke:features": "bun run scripts/features-smoke.ts",
     "smoke:node": "node --experimental-strip-types scripts/smoke.ts",
     "smoke:extension": "bun run scripts/extension-smoke.ts",
     "smoke:config": "bun run scripts/config-smoke.ts",
@@ -19,7 +20,7 @@
     "e2e:server": "bun run ../server/scripts/fake-desktop.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@earendil-works/pi-coding-agent": "1.0.4",
     "@pidock/protocol": "workspace:*",
     "typebox": "1.1.38",
     "unpdf": "^1.8.1"

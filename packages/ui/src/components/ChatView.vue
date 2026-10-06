@@ -11,6 +11,7 @@ import ReviewPanel from "./ReviewPanel.vue";
 import Composer from "./Composer.vue";
 import Icon from "./Icon.vue";
 import ProgressCard from "./ProgressCard.vue";
+import SessionSettings from "./SessionSettings.vue";
 import { appConfirm } from "../confirm.js";
 import AskCard from "./AskCard.vue";
 
@@ -97,6 +98,58 @@ function setThinkingLevel(l: string): void {
 
 /** @ 文件提及：基准目录（首页用主目录兜底，会话内用会话 cwd）与加载器 */
 const activeSession = computed(() => props.store.sessions.find((s) => s.session_id === props.store.activeId));
+
+// ---- 上下文用量仪表条 + 会话设置 ----
+const showSessionSettings = ref(false);
+const contextInfo = computed(() =>
+  props.store.activeId ? props.store.contextBySession[props.store.activeId] : undefined,
+);
+/** 仪表条百分比（usage 未知时 null → 显示"待响应"） */
+const contextPercent = computed(() => {
+  const p = contextInfo.value?.percent;
+  return typeof p === "number" && Number.isFinite(p) ? Math.min(100, Math.max(0, p)) : null;
+});
+const contextTokensText = computed(() => {
+  const t = contextInfo.value?.tokens;
+  if (typeof t !== "number" || !Number.isFinite(t)) return "";
+  return t >= 1024 ? `${(t / 1024).toFixed(1)}K` : String(t);
+});
+const contextWindowText = computed(() => {
+  const w = contextInfo.value?.context_window;
+  if (typeof w !== "number" || !Number.isFinite(w)) return "";
+  return w >= 1024 ? `${Math.round(w / 1024)}K` : String(w);
+});
+/** 仪表条颜色阈值：<70% 常态色，<90% 琥珀，≥90% 红 */
+const contextMeterClass = computed(() => {
+  const p = contextPercent.value;
+  if (p === null) return "";
+  if (p >= 90) return "hot";
+  if (p >= 70) return "warm";
+  return "";
+});
+/** 排队中的消息总数（steering + followUp） */
+const queuedCount = computed(() => {
+  const q = props.store.activeId ? props.store.queueBySession[props.store.activeId] : undefined;
+  return (q?.steering ?? 0) + (q?.follow_up ?? 0);
+});
+/** 清空排队消息；被清的文本回填输入框（preset 是 Composer 的受控草稿通道） */
+async function clearQueueToComposer(): Promise<void> {
+  const texts = await props.store.clearQueue();
+  if (texts.length) preset.value = texts.join("\n\n");
+}
+/** 手动压缩（确认后触发；压缩全程/结果由 compaction 事件与状态徽标呈现） */
+async function compactConfirm(): Promise<void> {
+  if (
+    !(await appConfirm({
+      title: "压缩上下文？",
+      message: "把当前对话历史压缩成摘要以腾出上下文窗口。压缩期间无法继续对话，历史在磁盘保留。",
+      confirmText: "开始压缩",
+    }))
+  )
+    return;
+  await props.store.compactSession();
+}
+
 /** 活动会话绑定的专家详情（第三栏信息卡）；专家已删除则为 null */
 const activeExpert = ref<ExpertInfo | null>(null);
 watch(
@@ -119,6 +172,15 @@ function skillsLoader(): Promise<Array<{ name: string; description: string }>> {
 function expertsLoader(): Promise<Array<{ id: string; name: string; description?: string; icon?: string }>> {
   return props.store.listExperts();
 }
+/** / 弹层命令模板段加载器（当前会话已加载的 prompts，未打开会话返回空） */
+function promptsLoader(): Promise<Array<{ name: string; description: string; argument_hint: string }>> {
+  return props.store.listPrompts(activeSession.value?.session_id);
+}
+/** 当前模型可用思考档位（thinking_info；首页/未知时 null = 全部展示） */
+const thinkingAvailable = computed(() => {
+  const info = props.store.activeId ? props.store.thinkingBySession[props.store.activeId] : undefined;
+  return info ? info.levels : null;
+});
 /** 当前模型是否支持图片输入（未知 = undefined，不预警） */
 const modelSupportsImages = computed<boolean | undefined>(() => {
   const cur = home.value ? (homeModel.value ?? props.model ?? "") : (props.model ?? "");
@@ -667,6 +729,7 @@ watch(
           :mention-loader="mentionLoader"
           :skills-loader="skillsLoader"
           :experts-loader="expertsLoader"
+          :prompts-loader="promptsLoader"
           :hired-expert="hiredExpert"
           :model-images-ok="modelSupportsImages"
           centered
@@ -795,15 +858,40 @@ watch(
         @resolve="(a) => store.resolveAsk(a)"
       />
       <div class="dock">
+        <!-- 上下文用量仪表条：压缩入口 / 排队消息清空 / 会话设置 -->
+        <div class="ctx-bar">
+          <button
+            class="ctx-meter"
+            :class="contextMeterClass"
+            :disabled="store.agentState !== 'idle'"
+            title="压缩上下文"
+            @click="compactConfirm"
+          >
+            <span class="meter"><span class="fill" :style="{ width: `${contextPercent ?? 0}%` }"></span></span>
+            <span class="ctx-text">
+              <template v-if="contextPercent !== null">上下文 {{ Math.round(contextPercent) }}%{{ contextTokensText ? ` · ${contextTokensText}${contextWindowText ? `/${contextWindowText}` : ""}` : "" }}</template>
+              <template v-else>上下文 待响应</template>
+            </span>
+          </button>
+          <button v-if="queuedCount" class="queue-chip" title="清空排队中的消息（原文回填输入框）" @click="clearQueueToComposer">
+            <Icon name="time-line" :size="13" />排队 {{ queuedCount }} · 清空
+          </button>
+          <span class="flex-sp"></span>
+          <button class="ctx-gear" title="会话设置" @click="showSessionSettings = true">
+            <Icon name="settings-3-line" :size="15" />
+          </button>
+        </div>
         <Composer
           :busy="store.agentState !== 'idle'"
           :model="model"
           :permission-mode="composerPermissionMode"
           :thinking-level="composerThinkingLevel"
+          :thinking-available="thinkingAvailable"
           :mention-cwd="activeSession?.cwd"
           :mention-loader="mentionLoader"
           :skills-loader="skillsLoader"
           :experts-loader="expertsLoader"
+          :prompts-loader="promptsLoader"
           :model-images-ok="modelSupportsImages"
           :models="modelOptions"
           :preset="preset"
@@ -832,6 +920,8 @@ watch(
       <!-- 任务进度第三栏（TodoWrite 推送或雇佣专家时停靠展开；收起为悬浮小圆标） -->
       <ProgressCard :store="store" :expert="activeExpert" />
       </div>
+    <!-- 会话设置弹窗：开关/工具子集/导出/分支树导航 -->
+    <SessionSettings :store="store" :open="showSessionSettings" @close="showSessionSettings = false" />
     <!-- 临时文件预览浮层：覆盖在主对话区上方（home 与会话模式共用），关闭后恢复对话 -->
     <FilePreview
       v-if="previewTabs.length"
@@ -1050,6 +1140,76 @@ export default { components: { ToolCard, MessageItem } };
   font-size: calc(13px * var(--pd-font-scale));
 }
 .dock { padding: 10px 16px 14px; }
+
+/* ---- 上下文用量仪表条 ---- */
+.ctx-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  min-height: 22px;
+}
+.ctx-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px;
+  border: 1px solid var(--pd-border);
+  border-radius: 999px;
+  background: none;
+  color: var(--pd-text-3);
+  font-size: calc(11px * var(--pd-font-scale, 1));
+  cursor: pointer;
+}
+.ctx-meter:hover:not(:disabled) { background: var(--pd-bg-hover); color: var(--pd-text-2); }
+.ctx-meter:disabled { cursor: default; opacity: 0.7; }
+.ctx-meter .meter {
+  width: 56px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--pd-bg-hover);
+  overflow: hidden;
+  flex: none;
+}
+.ctx-meter .fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--pd-accent);
+  transition: width 0.4s ease;
+}
+.ctx-meter.warm .fill { background: var(--pd-amber, #e6a23c); }
+.ctx-meter.warm { color: var(--pd-amber, #e6a23c); }
+.ctx-meter.hot .fill { background: var(--pd-red, #e5484d); }
+.ctx-meter.hot { color: var(--pd-red, #e5484d); }
+.ctx-text { white-space: nowrap; }
+.queue-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--pd-amber, #e6a23c);
+  background: none;
+  color: var(--pd-amber, #e6a23c);
+  font-size: calc(11px * var(--pd-font-scale, 1));
+  cursor: pointer;
+  white-space: nowrap;
+}
+.queue-chip:hover { filter: brightness(1.1); }
+.ctx-gear {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--pd-text-3);
+  cursor: pointer;
+  flex: none;
+}
+.ctx-gear:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 
 /* ---- 回合分隔线（工作中 · 耗时） ---- */
 .turn-divider {

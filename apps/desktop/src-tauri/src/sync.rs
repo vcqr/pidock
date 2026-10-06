@@ -143,6 +143,8 @@ fn cloud_worthy(kind: &str) -> bool {
             | "compaction_lifecycle"
             | "todo_updated"
             | "command_result"
+            | "context_usage"
+            | "queue_changed"
             | "error"
     )
 }
@@ -312,6 +314,26 @@ async fn execute_command(
             "cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or(""),
             "path": payload.get("path").and_then(|t| t.as_str()).unwrap_or(""),
         })),
+        // 会话级新命令（上下文用量/压缩/队列/导出/开关/工具/树/prompts/thinking/信任）：
+        // 与 host TS Method 同名，注入 session_id 后原样透传
+        passthrough @ ("agent.context_usage"
+            | "agent.compact"
+            | "agent.clear_queue"
+            | "agent.abort_retry"
+            | "session.export"
+            | "session.set_auto_compaction"
+            | "session.set_auto_retry"
+            | "session.list_tools"
+            | "session.set_active_tools"
+            | "session.tree"
+            | "session.navigate_tree"
+            | "config.prompts.list"
+            | "session.thinking_info"
+            | "session.trust") => {
+            let mut p = payload.clone();
+            p["session_id"] = json!(session_id);
+            (passthrough, p)
+        }
         other => {
             return Err(format!("command type \"{other}\" not supported by this desktop"));
         }

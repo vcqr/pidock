@@ -20,8 +20,12 @@ const props = withDefaults(
     presetCwd?: { cwd: string; seq: number } | null;
     /** 权限模式（完全访问/自动编辑/变更前确认/计划模式） */
     permissionMode?: string;
-    /** 思考级别（off/minimal/low/medium/high） */
+    /** 思考级别（off/minimal/low/medium/high/xhigh/max） */
     thinkingLevel?: string;
+    /** 当前模型可用的思考档位（session.thinking_info；null/缺省 = 未知，全部展示） */
+    thinkingAvailable?: string[] | null;
+    /** prompts 模板列表加载器（/ 弹层命令段用，来自 store） */
+    promptsLoader?: () => Promise<Array<{ name: string; description: string; argument_hint: string }>>;
     /** 可切换的模型名（来自本工作区的会话） */
     models?: string[];
     /** @ 提及的基准目录（会话 cwd 或主目录）；首页未选项目时兜底 */
@@ -254,17 +258,26 @@ const THINKING_ITEMS = [
   { value: "minimal", label: "最低" },
   { value: "low", label: "低" },
   { value: "medium", label: "中" },
-  { value: "high", label: "最高" },
+  { value: "high", label: "高" },
+  { value: "xhigh", label: "更高" },
+  { value: "max", label: "最高" },
 ];
+/** 按模型能力过滤后的档位（能力未知时全部展示；xhigh/max 仅在模型声明支持时出现） */
+const thinkItems = computed(() => {
+  const avail = props.thinkingAvailable;
+  if (!avail || !avail.length) return THINKING_ITEMS;
+  return THINKING_ITEMS.filter((i) => avail.includes(i.value));
+});
 const permLabel = computed(
   () => PERMISSION_ITEMS.find((i) => i.value === props.permissionMode)?.label ?? "计划模式",
 );
 const permIcon = computed(
   () => PERMISSION_ITEMS.find((i) => i.value === props.permissionMode)?.icon ?? I.bulb,
 );
-const thinkLabel = computed(
-  () => THINKING_ITEMS.find((i) => i.value === props.thinkingLevel)?.label ?? "中",
-);
+const thinkLabel = computed(() => {
+  const hit = THINKING_ITEMS.find((i) => i.value === props.thinkingLevel);
+  return hit?.label ?? (props.thinkingLevel ? String(props.thinkingLevel) : "中");
+});
 
 function selectPerm(mode: string): void {
   permOpen.value = false;
@@ -368,10 +381,11 @@ function onTextInput(e: Event): void {
   }
   // / 技能命令：/ 与 /skill:、/expert: 三种写法都触发，过滤时忽略 skill:/expert: 前缀
   const sm = before.match(/(^|\s)\/([^\s/]*)$/);
-  if (sm && (props.skillsLoader || props.expertsLoader)) {
+  if (sm && (props.skillsLoader || props.expertsLoader || props.promptsLoader)) {
     slash.value = { start: caret - sm[2]!.length - 1, raw: sm[2]!, active: 0 };
     ensureSkills();
     ensureExperts();
+    ensurePrompts();
   } else if (slash.value) {
     slash.value = null;
   }
@@ -407,12 +421,15 @@ watch(
 // ---- / 技能命令弹层（与 @ 提及同款交互） ----
 const slash = ref<{ start: number; raw: string; active: number } | null>(null);
 const slashQuery = computed(() => (slash.value?.raw ?? "").replace(/^(skill|expert):/i, ""));
-/** 弹层条目：技能插入 /skill: 命令；专家在首页/新任务 hiring，会话中插入 /expert: 咨询命令 */
+/** 弹层条目：技能插入 /skill: 命令；专家在首页/新任务 hiring，会话中插入 /expert: 咨询命令；prompts 插入 /name（host 端展开模板） */
 type SlashItem =
   | { kind: "skill"; name: string; description: string }
+  | { kind: "prompt"; name: string; description: string }
   | { kind: "expert"; id: string; name: string; description: string; avatar?: string };
 const experts = ref<Array<{ id: string; name: string; description?: string; icon?: string; avatar?: string }>>([]);
 const expertsLoading = ref(false);
+const prompts = ref<Array<{ name: string; description: string; argument_hint: string }>>([]);
+const promptsLoading = ref(false);
 
 function ensureExperts(): void {
   if (!expertsLoading.value && experts.value.length === 0 && props.expertsLoader) {
@@ -425,6 +442,17 @@ function ensureExperts(): void {
   }
 }
 
+function ensurePrompts(): void {
+  if (!promptsLoading.value && prompts.value.length === 0 && props.promptsLoader) {
+    promptsLoading.value = true;
+    props
+      .promptsLoader()
+      .then((list) => (prompts.value = list))
+      .catch(() => {})
+      .finally(() => (promptsLoading.value = false));
+  }
+}
+
 const slashMatches = computed<SlashItem[]>(() => {
   if (!slash.value) return [];
   const q = slashQuery.value.toLowerCase();
@@ -432,14 +460,18 @@ const slashMatches = computed<SlashItem[]>(() => {
     .filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q))
     .slice(0, 20)
     .map((s) => ({ kind: "skill", name: s.name, description: s.description }));
+  const promptHits: SlashItem[] = prompts.value
+    .filter((p) => !q || p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q))
+    .slice(0, 20)
+    .map((p) => ({ kind: "prompt", name: p.name, description: p.description }));
   const expertHits: SlashItem[] = experts.value
     .filter((e) => !q || e.name.toLowerCase().includes(q) || (e.description ?? "").toLowerCase().includes(q))
     .slice(0, 10)
     .map((e) => ({ kind: "expert", id: e.id, name: e.name, description: e.description ?? "", avatar: e.avatar }));
-  return [...skillHits, ...expertHits];
+  return [...skillHits, ...promptHits, ...expertHits];
 });
 
-/** 把 /query 段替换为完整的技能命令，光标落在其后 */
+/** 把 /query 段替换为完整的技能/模板命令，光标落在其后 */
 function applySlash(s: SlashItem): void {
   if (!slash.value) return;
   const start = slash.value.start;
@@ -467,7 +499,8 @@ function applySlash(s: SlashItem): void {
     });
     return;
   }
-  const token = `/skill:${s.name} `;
+  // prompts 模板：插入 /name（host prompt() 默认展开模板，与 pi /命令一致）
+  const token = s.kind === "skill" ? `/skill:${s.name} ` : `/${s.name} `;
   text.value = text.value.slice(0, start) + token + text.value.slice(end);
   slash.value = null;
   void nextTick(() => {
@@ -754,12 +787,19 @@ function onKeydown(e: KeyboardEvent): void {
       </button>
     </div>
 
-    <!-- / 技能命令 + 专家弹层 -->
+    <!-- / 技能命令 + 模板 + 专家弹层 -->
     <div v-if="slash && slashMatches.length" class="mention-menu">
-      <template v-for="(s, i) in slashMatches" :key="s.kind === 'skill' ? `s:${s.name}` : `e:${s.id}`">
-        <!-- 专家段标题：仅紧随技能段（即第一个专家条目）之前显示一次 -->
+      <template v-for="(s, i) in slashMatches" :key="s.kind === 'skill' ? `s:${s.name}` : s.kind === 'prompt' ? `p:${s.name}` : `e:${s.id}`">
+        <!-- 模板段标题：仅紧随技能段（或位于最前）显示一次 -->
         <div
-          v-if="s.kind === 'expert' && (i === 0 || slashMatches[i - 1]?.kind === 'skill')"
+          v-if="s.kind === 'prompt' && (i === 0 || slashMatches[i - 1]?.kind === 'skill')"
+          class="mention-group"
+        >
+          命令模板 · ~/.pi/agent/prompts
+        </div>
+        <!-- 专家段标题：仅紧随技能/模板段（即第一个专家条目）之前显示一次 -->
+        <div
+          v-if="s.kind === 'expert' && (i === 0 || ['skill', 'prompt'].includes(slashMatches[i - 1]?.kind ?? ''))"
           class="mention-group"
         >
           专家 · {{ centered ? "雇佣到新会话" : "以该专家身份" }}
@@ -779,9 +819,9 @@ function onKeydown(e: KeyboardEvent): void {
               class="m-avatar"
               alt=""
             />
-            <Icon v-else :name="s.kind === 'skill' ? I.magic : 'user-star-line'" :size="16" />
+            <Icon v-else :name="s.kind === 'skill' ? I.magic : s.kind === 'prompt' ? 'terminal-box-line' : 'user-star-line'" :size="16" />
           </span>
-          <span class="m-name">{{ s.kind === "skill" ? `/skill:${s.name}` : `/expert:${s.name}` }}</span>
+          <span class="m-name">{{ s.kind === "skill" ? `/skill:${s.name}` : s.kind === "prompt" ? `/${s.name}` : `/expert:${s.name}` }}</span>
           <span class="m-dir">{{ s.description }}</span>
         </button>
       </template>
@@ -958,7 +998,7 @@ function onKeydown(e: KeyboardEvent): void {
         </button>
         <div v-if="thinkOpen" class="dd-menu up right">
           <button
-            v-for="t in THINKING_ITEMS"
+            v-for="t in thinkItems"
             :key="t.value"
             class="c-item"
             :class="{ on: t.value === thinkingLevel }"
@@ -967,6 +1007,7 @@ function onKeydown(e: KeyboardEvent): void {
             <span class="c-item-name">{{ t.label }}</span>
             <Icon v-if="t.value === thinkingLevel" class="c-check" :name="I.check" :size="14" />
           </button>
+          <div v-if="!thinkItems.length" class="c-empty">当前模型不支持思考</div>
         </div>
       </div>
 
