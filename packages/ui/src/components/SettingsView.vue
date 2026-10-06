@@ -172,6 +172,21 @@ function boolSetting(key: string, fallback = false): boolean {
   return typeof v === "boolean" ? v : fallback;
 }
 
+/** defaultTools 数组里的增减项（"+name"/"-name"，纯名单语义这里不处理） */
+function defaultToolAdds(): string[] {
+  const v = settings.value.defaultTools;
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.startsWith("+")) : [];
+}
+/** codemode 工具开关：defaultTools 含 "+codemode" 即开；off 时连 tool_search 一起摘除 */
+const codemodeOn = computed(() => defaultToolAdds().includes("+codemode"));
+function toggleCodemode(): void {
+  const adds = new Set(defaultToolAdds());
+  const next = codemodeOn.value
+    ? [...adds].filter((x) => x !== "+codemode" && x !== "+tool_search")
+    : [...adds, "+codemode", "+tool_search"];
+  void setSetting("defaultTools", next, "已保存，对新会话生效（工具清单见会话设置）");
+}
+
 // ---------------------------------------------------------------- 代理设置
 
 type ProxyMode = "direct" | "http" | "system";
@@ -570,6 +585,16 @@ function openFolder(): void {
               </div>
               <label class="switch" @click.prevent="setSetting('enableSkillCommands', !boolSetting('enableSkillCommands', true))">
                 <input type="checkbox" :checked="boolSetting('enableSkillCommands', true)" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="row">
+              <div class="row-text">
+                <b>Codemode 工具</b>
+                <span>让模型写 JavaScript 调用其他工具（可并行 Promise.allSettled）；连 tool_search 一起启用</span>
+              </div>
+              <label class="switch" @click.prevent="toggleCodemode()">
+                <input type="checkbox" :checked="codemodeOn" />
                 <span class="slider"></span>
               </label>
             </div>

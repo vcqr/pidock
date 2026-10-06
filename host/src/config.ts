@@ -45,9 +45,11 @@ const SETTING_KEYS = new Set([
   "prompts",
   "themes",
   "packages",
+  // 内置工具开关（pi 语义：["+codemode","-x"] 增减 / 纯名单替换；codemode/tool_search 由内置扩展注册）
+  "defaultTools",
 ]);
 
-const SETTING_KEYS_NEEDING_ARRAY = new Set(["extensions", "skills", "prompts", "themes", "packages"]);
+const SETTING_KEYS_NEEDING_ARRAY = new Set(["extensions", "skills", "prompts", "themes", "packages", "defaultTools"]);
 
 /** caps for the skill detail file browser */
 const MAX_SKILL_FILES = 200;
@@ -153,7 +155,7 @@ export class ConfigService {
     return { providers };
   }
 
-  async providerSetKey(params: { provider: string; key: string }): Promise<{ ok: true }> {
+  async providerSetKey(params: { provider: string; key: string }): Promise<{ ok: true; runtime?: Json; runtime_error?: string }> {
     if (!params.provider || !params.key) {
       throw new RpcError("bad_request", "provider and key are required");
     }
@@ -161,17 +163,16 @@ export class ConfigService {
     const data = readJson(authPath) ?? {};
     data[params.provider] = { type: "api_key", key: params.key };
     writeJson(authPath, data);
-    // refresh the runtime's view of credentials
-    await this.pool.modelRuntime().catch(() => {});
-    return { ok: true };
+    // getProviderAuthStatus 读 ModelRuntime 创建时的凭证快照 → 重建让新密钥可见
+    return { ok: true, ...(await this.reloadRuntimeSafe()) };
   }
 
-  providerRemoveKey(params: { provider: string }): { ok: true } {
+  async providerRemoveKey(params: { provider: string }): Promise<{ ok: true; runtime?: Json; runtime_error?: string }> {
     const authPath = join(getAgentDir(), "auth.json");
     const data = readJson(authPath) ?? {};
     delete data[params.provider];
     writeJson(authPath, data);
-    return { ok: true };
+    return { ok: true, ...(await this.reloadRuntimeSafe()) };
   }
 
   async modelsList(): Promise<{

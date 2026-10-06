@@ -5,6 +5,9 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import {
   createAgentSession,
+  createCodemodeExtension,
+  createMcpExtension,
+  createToolSearchExtension,
   DefaultResourceLoader,
   getAgentDir,
   hasTrustRequiringProjectResources,
@@ -414,7 +417,12 @@ export class SessionPool {
       agentDir: getAgentDir(),
       settingsManager: SettingsManager.create(cwd, getAgentDir()),
       ...this.expertLoaderOptions(expertCfg),
+      // SDK 会话不像 CLI 那样自动加载内置扩展，必须显式挂上：
+      // codemode（模型写 JS 并行调工具）/ tool_search / MCP（读 mcp.json 并在 session_start 连接）
       extensionFactories: [
+        createCodemodeExtension(),
+        createToolSearchExtension(),
+        createMcpExtension(),
         {
           name: "pidock-permission",
           factory: (pi: ExtensionAPI) => {
@@ -471,6 +479,12 @@ export class SessionPool {
     tracked.unsubscribe = this.wire(sessionId, tracked);
     this.sessions.set(sessionId, tracked);
     this.applyPlanToolFilter(sessionId, tracked, permission.mode === "plan");
+    // session_start 事件让 MCP 扩展开始后台连接服务器（codemode/tool_search 同批绑定）
+    try {
+      await tracked.session.bindExtensions({});
+    } catch {
+      // 扩展绑定失败不阻塞会话创建
+    }
 
     const file = session.sessionFile ?? "";
     this.writeRegistryEntry({
@@ -511,7 +525,11 @@ export class SessionPool {
       agentDir: getAgentDir(),
       settingsManager: SettingsManager.create(cwd, getAgentDir()),
       ...this.expertLoaderOptions(expertCfg),
+      // 与 createSession 一致：SDK 会话需显式挂内置扩展（codemode/tool_search/MCP）
       extensionFactories: [
+        createCodemodeExtension(),
+        createToolSearchExtension(),
+        createMcpExtension(),
         {
           name: "pidock-permission",
           factory: (pi: ExtensionAPI) => {
@@ -562,6 +580,12 @@ export class SessionPool {
     tracked.unsubscribe = this.wire(sessionId, tracked);
     this.sessions.set(sessionId, tracked);
     this.applyPlanToolFilter(sessionId, tracked, permission.mode === "plan");
+    // 与 createSession 一致：绑定扩展（MCP 在 session_start 后台连接）
+    try {
+      await tracked.session.bindExtensions({});
+    } catch {
+      // 扩展绑定失败不阻塞会话打开
+    }
 
     // 重开会话后立即把恢复出的任务清单推给 UI（web 端经 cloud mirror 同样收到）
     if (tracked.todos.length) {
