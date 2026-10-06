@@ -13,7 +13,14 @@ import Icon from "./Icon.vue";
  */
 
 const props = defineProps<{ bus: DataBus }>();
-const emit = defineEmits<{ close: []; "open-providers": []; hire: [expert: { id: string; name: string }] }>();
+const emit = defineEmits<{
+  close: [];
+  "open-providers": [];
+  /** 雇佣：回到新任务页（可选项目/模型），首条消息发出时才创建会话 */
+  hire: [expert: { id: string; name: string }];
+  /** 对话：立即创建绑定该专家的会话并进入聊天 */
+  test: [expert: { id: string; name: string }];
+}>();
 
 interface Expert {
   id: string;
@@ -198,6 +205,11 @@ async function remove(e: Expert): Promise<void> {
 
 function hire(e: Expert): void {
   emit("hire", { id: e.id, name: e.name });
+}
+
+/** 对话测试：立即开一个绑定该专家的会话 */
+function test(e: Expert): void {
+  emit("test", { id: e.id, name: e.name });
 }
 
 // ---------------------------------------------------------------- 选择数据
@@ -430,7 +442,10 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
           <span class="tag" v-if="(e.knowledge_dirs ?? []).length">知识库 {{ (e.knowledge_dirs ?? []).length }}</span>
         </div>
         <div class="card-actions">
-          <button class="btn primary sm" title="新建任务并雇佣该专家" @click="hire(e)">
+          <button class="btn primary sm" title="立即创建绑定该专家的会话并开始对话" @click="test(e)">
+            <Icon name="chat-1-line" :size="14" />对话
+          </button>
+          <button class="btn sm" title="回到新任务页，可选项目/模型后再开始" @click="hire(e)">
             <Icon name="user-star-line" :size="14" />雇佣
           </button>
           <button class="icon-btn sm" title="编辑" @click="openEdit(e)">

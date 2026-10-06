@@ -51,6 +51,21 @@ function startNewTask(cwd?: string, expert?: { id: string; name: string } | null
   newTaskCwd.value = cwd ? { cwd, seq: (newTaskCwd.value?.seq ?? 0) + 1 } : null;
 }
 
+/** 专家页「对话」：立即创建绑定该专家的会话并进入聊天（工作区沿用最近会话，无则主目录） */
+async function testExpert(e: { id: string; name: string }): Promise<void> {
+  showExperts.value = false;
+  showAutomation.value = false;
+  const s = store.value;
+  if (!s) return;
+  const last = s.sessions[0];
+  try {
+    await s.newSession(last?.cwd, undefined, e.id);
+  } catch (err) {
+    // 标题栏已有 lastError 展示通道，这里不吞异常即可
+    s.lastError = err instanceof Error ? err.message : String(err);
+  }
+}
+
 function openSettings(tab?: string): void {
   settingsPane.value = tab ?? "general";
   showSettings.value = true;
@@ -292,6 +307,7 @@ onMounted(async () => {
           @close="showExperts = false"
           @open-providers="() => openSettings('providers')"
           @hire="(expert) => { showExperts = false; startNewTask(undefined, expert); }"
+          @test="testExpert"
         />
         <SettingsView
           v-if="showSettings"
