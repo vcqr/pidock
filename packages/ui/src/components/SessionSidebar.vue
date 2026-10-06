@@ -230,6 +230,14 @@ function toggleGroup(project: string): void {
   next.has(project) ? next.delete(project) : next.add(project);
   collapsed.value = next;
 }
+/** 是否全部项目分组都已折叠（区块头切换按钮状态） */
+const allProjectsCollapsed = computed(
+  () => groups.value.length > 0 && groups.value.every((g) => collapsed.value.has(g.project)),
+);
+/** 展开/收起全部项目分组 */
+function toggleAllProjectGroups(): void {
+  collapsed.value = allProjectsCollapsed.value ? new Set<string>() : new Set(groups.value.map((g) => g.project));
+}
 function toggleMore(project: string): void {
   const next = new Set(expanded.value);
   next.has(project) ? next.delete(project) : next.add(project);
@@ -358,6 +366,13 @@ onBeforeUnmount(() => {
           <button class="section-head" @click="projectsCollapsed = !projectsCollapsed">
             <span>项目</span>
             <span class="g-count">{{ projectCount }}</span>
+            <span
+              class="grp-toggle"
+              :title="allProjectsCollapsed ? '展开全部项目' : '收起全部项目'"
+              @click.stop="toggleAllProjectGroups"
+            >
+              <Icon :name="allProjectsCollapsed ? 'expand-vertical-line' : 'collapse-vertical-line'" :size="13" />
+            </span>
             <Icon name="arrow-down-s-line" :size="13" :class="{ fold: projectsCollapsed }" />
           </button>
           <template v-if="!projectsCollapsed">
@@ -703,6 +718,18 @@ onBeforeUnmount(() => {
 .section-head .g-count { margin-left: auto; }
 .section-head svg { color: var(--pd-text-4); transition: transform 0.12s; }
 .section-head svg.fold { transform: rotate(-90deg); }
+/* 项目组全局展开/收起切换（常驻小图标，hover 提亮） */
+.grp-toggle {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  color: var(--pd-text-4);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.grp-toggle:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 .folder-row {
   display: flex;
   align-items: center;
