@@ -2,6 +2,7 @@
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { FILE_PICKER, type DataBus } from "../databus.js";
 import Icon from "./Icon.vue";
+import { appConfirm } from "../confirm.js";
 import MdContent from "./MdContent.vue";
 
 /**
@@ -480,7 +481,7 @@ async function saveForm(): Promise<void> {
 }
 
 async function removeServer(it: Row): Promise<void> {
-  if (!window.confirm(`删除 MCP 服务器「${it.name}」？`)) return;
+  if (!(await appConfirm({ title: `删除 MCP 服务器「${it.name}」？`, danger: true }))) return;
   try {
     const container = serversContainer(rawConfig.value, false);
     if (container && it.name in container) {

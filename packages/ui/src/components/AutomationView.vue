@@ -4,6 +4,7 @@ import type { DataBus } from "../databus.js";
 import { basename } from "../utils/time.js";
 import Composer from "./Composer.vue";
 import Icon from "./Icon.vue";
+import { appConfirm } from "../confirm.js";
 
 /**
  * 自动化（定时任务）：主区右栏页面（侧栏保留，左右分栏）。
@@ -223,7 +224,7 @@ async function runNow(j: Job): Promise<void> {
   }
 }
 async function removeJob(j: Job): Promise<void> {
-  if (!window.confirm(`删除定时任务「${j.name}」？`)) return;
+  if (!(await appConfirm({ title: `删除定时任务「${j.name}」？`, danger: true }))) return;
   try {
     await props.bus.request("automation.delete", { id: j.id });
     flash("已删除");

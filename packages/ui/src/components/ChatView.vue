@@ -11,6 +11,7 @@ import ReviewPanel from "./ReviewPanel.vue";
 import Composer from "./Composer.vue";
 import Icon from "./Icon.vue";
 import ProgressCard from "./ProgressCard.vue";
+import { appConfirm } from "../confirm.js";
 import AskCard from "./AskCard.vue";
 
 const props = withDefaults(
@@ -470,7 +471,7 @@ function dirOfPath(p: string): string {
 }
 async function revertAll(turnId: string, count: number): Promise<void> {
   if (!count) return;
-  if (!window.confirm(`撤销该回合全部 ${count} 个文件的更改？`)) return;
+  if (!(await appConfirm({ title: `撤销该回合全部 ${count} 个文件的更改？`, message: "文件将恢复为该回合开始前的内容。", danger: true }))) return;
   await props.store.revertFiles(turnId);
   closeReviewAll();
 }

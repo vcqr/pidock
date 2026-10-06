@@ -3,6 +3,7 @@ import { inject, onMounted, ref } from "vue";
 import type { DataBus } from "../databus.js";
 import { FOLDER_PICKER, FILE_PICKER } from "../databus.js";
 import Icon from "./Icon.vue";
+import { appConfirm } from "../confirm.js";
 
 /**
  * 专家（智能体编排）：主区右栏页面（侧栏保留，同自动化页模式）。
@@ -193,7 +194,7 @@ async function save(): Promise<void> {
 }
 
 async function remove(e: Expert): Promise<void> {
-  if (!window.confirm(`删除专家「${e.name}」？其私有资源一并删除。`)) return;
+  if (!(await appConfirm({ title: `删除专家「${e.name}」？`, message: "其私有资源一并删除。", danger: true }))) return;
   try {
     await props.bus.request("experts.delete", { id: e.id });
     flash(`已删除「${e.name}」`);

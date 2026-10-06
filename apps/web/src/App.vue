@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { darkTheme, NConfigProvider } from "naive-ui";
 import {
+  appConfirm,
   ChatView,
   Icon,
   SessionSidebar,
@@ -62,7 +63,7 @@ async function refreshMachines(): Promise<void> {
 
 async function deleteMachine(m: MachineUi): Promise<void> {
   if (!auth.value) return;
-  if (!window.confirm(`删除机器「${m.hostname || m.machine_id.slice(0, 8)}」及其全部同步数据？`)) return;
+  if (!(await appConfirm({ title: `删除机器「${m.hostname || m.machine_id.slice(0, 8)}」？`, message: "将删除该机器及其全部同步数据。", danger: true }))) return;
   try {
     await auth.value.request(`/machines/${m.machine_id}?token=${auth.value.token}`, { method: "DELETE" });
     if (activeMachineId.value === m.machine_id) {

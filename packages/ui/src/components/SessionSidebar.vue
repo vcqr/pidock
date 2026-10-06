@@ -4,6 +4,7 @@ import type { SessionSummaryUi } from "../store.js";
 import { basename, relTime } from "../utils/time.js";
 import { REVEAL_PATH } from "../databus.js";
 import Icon from "./Icon.vue";
+import { appConfirm } from "../confirm.js";
 
 const props = defineProps<{
   sessions: SessionSummaryUi[];
@@ -79,15 +80,23 @@ function closeCtxMenu(): void {
 }
 
 // ---- 移除项目 / 删除会话（host 只删注册表条目，磁盘上的会话文件保留） ----
-function confirmRemoveProject(g: Group): void {
+async function confirmRemoveProject(g: Group): Promise<void> {
   projMenu.value = null;
-  const msg = `移除项目「${g.project}」？\n\n将把它的 ${g.sessions.length} 个会话从列表移除（不删除项目目录；磁盘上的会话记录文件保留，但界面中将无法再打开）。`;
-  if (window.confirm(msg)) emit("remove-project", g.cwd);
+  const ok = await appConfirm({
+    title: `移除项目「${g.project}」？`,
+    message: `将把它的 ${g.sessions.length} 个会话从列表移除（不删除项目目录；磁盘上的会话记录文件保留，但界面中将无法再打开）。`,
+    danger: true,
+  });
+  if (ok) emit("remove-project", g.cwd);
 }
-function confirmRemoveSession(s: SessionSummaryUi): void {
+async function confirmRemoveSession(s: SessionSummaryUi): Promise<void> {
   ctxMenu.value = null;
-  const msg = `删除会话「${s.name || basename(s.cwd)}」？\n\n将从列表移除该会话记录（磁盘上的会话文件保留）。`;
-  if (window.confirm(msg)) emit("remove-session", s.session_id);
+  const ok = await appConfirm({
+    title: `删除会话「${s.name || basename(s.cwd)}」？`,
+    message: "将从列表移除该会话记录（磁盘上的会话文件保留）。",
+    danger: true,
+  });
+  if (ok) emit("remove-session", s.session_id);
 }
 
 // ---- 置顶（UI 本地偏好，localStorage 持久化） ----

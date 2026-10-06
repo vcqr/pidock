@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { NModal } from "naive-ui";
 import type { DataBus } from "../databus.js";
 import Icon from "./Icon.vue";
+import { appConfirm } from "../confirm.js";
 
 /**
  * 模型供应商管理页：
@@ -403,7 +404,7 @@ async function saveCustom(): Promise<void> {
 async function removeCustom(): Promise<void> {
   const id = formId.value.trim();
   if (!id) return;
-  if (!window.confirm(`删除自定义供应商「${id}」？`)) return;
+  if (!(await appConfirm({ title: `删除自定义供应商「${id}」？`, danger: true }))) return;
   try {
     await props.bus.request("config.providers.custom.remove", { id });
     flash(`已删除「${id}」`);
@@ -452,7 +453,7 @@ async function saveKey(): Promise<void> {
 async function removeKey(): Promise<void> {
   const id = selected.value;
   if (!id) return;
-  if (!window.confirm(`删除「${id}」的 API 密钥？`)) return;
+  if (!(await appConfirm({ title: `删除「${id}」的 API 密钥？`, danger: true }))) return;
   try {
     await props.bus.request("config.providers.remove_key", { provider: id });
     flash(`「${id}」密钥已删除`);
