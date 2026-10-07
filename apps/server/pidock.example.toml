@@ -6,6 +6,8 @@
 bind = "0.0.0.0:8080"            # 监听地址
 pipeline = "kafka"               # kafka | redis（Redis Streams 平替，免装 Kafka）
 jwt_secret = "change-me-please"  # ⚠️ 公网部署必改，建议 openssl rand -hex 32
+# bootstrap_invite = ""          # 首个管理员引导邀请码（或 env PIDOCK_BOOTSTRAP_INVITE）：
+#                                # 用它注册的第一个账号即管理员，产生管理员后自动失效
 
 [mongo]
 uri = "mongodb://localhost:27017"

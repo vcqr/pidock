@@ -105,6 +105,15 @@ cd docker && docker compose up -d --build server
 可配置项（docker-compose 已给默认值）：`PIDOCK_JWT_SECRET`、
 `RUSTFS_ROOT_USER` / `RUSTFS_ROOT_PASSWORD`、`PIDOCK_PIPELINE`（kafka，可选 redis 降级）。
 
+### 注册与邀请码
+
+对外提供服务时注册必须凭邀请码：管理员在 web 控制台首页「邀请码管理」里
+生成（可设可用次数/有效天数），使用者注册时填入即可。
+首个管理员用引导邀请码创建：部署时设置 `PIDOCK_BOOTSTRAP_INVITE=<自定义邀请码>`
+（或配置文件 `[server].bootstrap_invite`），用它注册的第一个账号自动成为管理员，
+产生管理员后该码即失效；老部署升级会自动把最早注册的账号提为管理员。
+配套接口：`POST/GET /admin/invites`、`DELETE /admin/invites/{code}`（均要求 admin 角色）。
+
 ### 打包桌面安装包
 
 ```bash

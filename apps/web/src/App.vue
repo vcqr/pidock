@@ -19,6 +19,7 @@ import {
 } from "@pidock/ui";
 import { ApiError, AuthClient, loadAuth, clearAuth } from "./auth.js";
 import { createWebBus, type WebBus } from "./bus.js";
+import AdminInvites from "./components/AdminInvites.vue";
 import MachineCard from "./components/MachineCard.vue";
 import MachinePopover from "./components/MachinePopover.vue";
 import { osMeta, type MachineUi } from "./machine.js";
@@ -35,9 +36,12 @@ const bootError = ref<string | null>(null);
 const serverUrl = ref("http://localhost:8080");
 const email = ref("");
 const password = ref("");
+const inviteCode = ref("");
 const loginBusy = ref(false);
 const loginError = ref<string | null>(null);
 const registerMode = ref(false);
+/** 邀请码管理面板（仅管理员可见入口） */
+const showInvites = ref(false);
 
 /** 首页节点搜索过滤（主机名/系统/版本/ID），Ctrl+K 聚焦 */
 const nodeFilter = ref("");
@@ -197,7 +201,7 @@ async function doLogin(): Promise<void> {
   try {
     const client = new AuthClient(null as never, () => logout());
     if (registerMode.value) {
-      await client.register(serverUrl.value.trim(), email.value.trim(), password.value);
+      await client.register(serverUrl.value.trim(), email.value.trim(), password.value, inviteCode.value);
     }
     const state = await client.login(serverUrl.value.trim(), email.value.trim(), password.value);
     boot(state, client);
@@ -217,6 +221,7 @@ function logout(): void {
   activeMachineId.value = null;
   sessionCounts.value = {};
   showMachineInfo.value = false;
+  showInvites.value = false;
   view.value = "home";
 }
 
@@ -302,7 +307,17 @@ const sessionsEmpty = computed(() => {
       <label>Server<input v-model="serverUrl" /></label>
       <label>邮箱<input v-model="email" type="email" autocomplete="username" /></label>
       <label>密码<input v-model="password" type="password" autocomplete="current-password" /></label>
-      <button class="primary" :disabled="loginBusy || !email || !password">
+      <label v-if="registerMode"
+        >邀请码<input
+          v-model="inviteCode"
+          placeholder="向管理员索取"
+          autocomplete="off"
+          spellcheck="false"
+      /></label>
+      <button
+        class="primary"
+        :disabled="loginBusy || !email || !password || (registerMode && !inviteCode.trim())"
+      >
         {{ loginBusy ? "提交中…" : registerMode ? "注册并登录" : "登录" }}
       </button>
       <button class="ghost" type="button" @click="registerMode = !registerMode">
@@ -331,6 +346,14 @@ const sessionsEmpty = computed(() => {
         <button v-if="nodeFilter" class="clear" title="清空" @click="nodeFilter = ''">✕</button>
       </div>
       <div class="home-actions">
+        <button
+          v-if="auth?.role === 'admin'"
+          class="ghost"
+          title="邀请码管理"
+          @click="showInvites = true"
+        >
+          <Icon name="key-2-line" :size="15" />
+        </button>
         <button class="ghost" :title="themeMode === 'dark' ? '切换亮色' : '切换暗色'" @click="toggleTheme()">
           <Icon :name="themeMode === 'dark' ? 'sun-line' : 'moon-line'" :size="15" />
         </button>
@@ -456,6 +479,7 @@ const sessionsEmpty = computed(() => {
     </main>
   </div>
   <div v-else class="login-screen">加载中…</div>
+  <AdminInvites v-if="showInvites && auth" :client="auth" @close="showInvites = false" />
   </n-config-provider>
 </template>
 

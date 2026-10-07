@@ -7,9 +7,19 @@ export interface AuthState {
   refresh_token: string;
   user_id: string;
   email: string;
+  /** "admin" | "user"，登录/注册时服务端下发；仅用于 UI 显隐 */
+  role?: string;
 }
 
 const KEY = "pidock.web.auth";
+
+/** AuthClient 的结构化子集：组件 props 用它而不是类本身，
+ *  vue-tsc 对模板 ref 解包出的类型会丢掉类的私有字段，类类型会误报不兼容 */
+export interface ApiClient {
+  readonly token: string;
+  readonly userId: string;
+  request(path: string, init?: RequestInit): Promise<any>;
+}
 
 export function loadAuth(): AuthState | null {
   try {
@@ -49,6 +59,10 @@ export class AuthClient {
 
   get userId(): string {
     return this.state.user_id;
+  }
+
+  get role(): string {
+    return this.state.role ?? "user";
   }
 
   get serverUrl(): string {
@@ -98,11 +112,16 @@ export class AuthClient {
     return data;
   }
 
-  async register(serverUrl: string, email: string, password: string): Promise<void> {
+  async register(
+    serverUrl: string,
+    email: string,
+    password: string,
+    inviteCode: string,
+  ): Promise<void> {
     const res = await fetch(`${serverUrl}/auth/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, invite_code: inviteCode.trim() }),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
@@ -127,6 +146,7 @@ export class AuthClient {
       refresh_token: data.refresh_token,
       user_id: data.user_id,
       email,
+      role: data.role,
     };
     this.state = state;
     saveAuth(state);

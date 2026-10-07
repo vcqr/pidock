@@ -19,6 +19,8 @@ pub struct Config {
     pub kafka_topic: String,
     pub pipeline: String,
     pub jwt_secret: String,
+    /// 首个管理员的引导邀请码：用它注册即成为 admin；一旦存在任何管理员即失效
+    pub bootstrap_invite: String,
     pub web_dir: String,
     pub rustfs: RustfsCfg,
 }
@@ -55,6 +57,8 @@ struct ServerSection {
     pipeline: String,
     #[serde(default)]
     jwt_secret: String,
+    #[serde(default)]
+    bootstrap_invite: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -132,6 +136,7 @@ impl Config {
                 &file.server.jwt_secret,
                 "dev-secret-change-me",
             ),
+            bootstrap_invite: pick("PIDOCK_BOOTSTRAP_INVITE", &file.server.bootstrap_invite, ""),
             web_dir: pick("PIDOCK_WEB_DIR", &file.web.dir, ""),
             rustfs: RustfsCfg {
                 endpoint: pick(
@@ -191,6 +196,7 @@ mod tests {
         assert_eq!(f.redis.url, "redis://localhost:6379");
         assert_eq!(f.rustfs.bucket, "pidock-attachments");
         assert!(f.web.dir.is_empty());
+        assert!(f.server.bootstrap_invite.is_empty());
     }
 
     /// 优先级：env > file > default（env 只在本测试内改，别并行读 env）

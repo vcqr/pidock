@@ -156,7 +156,18 @@ async fn me(
     let claims = auth::verify_token(&state, &q.token, "access")
         .await
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
-    Ok(Json(json!({"user_id": claims.sub})))
+    let user = state
+        .mongo
+        .collection::<BsonDoc>("users")
+        .find_one(doc! { "_id": &claims.sub })
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "user not found"))?;
+    Ok(Json(json!({
+        "user_id": claims.sub,
+        "email": user.get_str("email").unwrap_or_default(),
+        "role": user.get_str("role").unwrap_or("user"),
+    })))
 }
 
 /// machines list: Mongo archive + Redis online status merged
@@ -488,6 +499,58 @@ async fn main() {
         tracing::warn!("s3 bucket ensure failed (attachments disabled until fixed): {e}");
     }
 
+    // users.email 唯一索引：注册的防重靠 duplicate 报错，历史上一直缺这个索引
+    // （已存在重复邮箱时建索引会失败，只告警不挡启动，修复后重启即可补上）
+    // 顺带做一次性迁移：还没有管理员时把最早注册的用户提为 admin（老部署平滑升级）
+    {
+        let users = state.mongo.collection::<BsonDoc>("users");
+        let idx = mongodb::IndexModel::builder()
+            .keys(doc! { "email": 1 })
+            .options(
+                mongodb::options::IndexOptions::builder()
+                    .unique(true)
+                    .build(),
+            )
+            .build();
+        if let Err(e) = users.create_index(idx).await {
+            tracing::warn!("users.email 唯一索引创建失败（可能已有重复邮箱）: {e}");
+        }
+        let total = users.count_documents(doc! {}).await.unwrap_or(0);
+        let admins = users
+            .count_documents(doc! { "role": "admin" })
+            .await
+            .unwrap_or(0);
+        if total > 0 && admins == 0 {
+            if let Some(Some(oldest_id)) = users
+                .find_one(doc! {})
+                .with_options(
+                    mongodb::options::FindOneOptions::builder()
+                        .sort(doc! { "created_at": 1 })
+                        .build(),
+                )
+                .await
+                .ok()
+                .map(|d| d.and_then(|d| d.get_str("_id").ok().map(|s| s.to_string())))
+            {
+                if users
+                    .update_one(
+                        doc! { "_id": &oldest_id },
+                        doc! { "$set": { "role": "admin" } },
+                    )
+                    .await
+                    .is_ok()
+                {
+                    tracing::info!("历史部署迁移：已将首个注册用户 {oldest_id} 提升为管理员");
+                }
+            }
+        } else if total == 0 && state.cfg.bootstrap_invite.is_empty() {
+            tracing::warn!(
+                "还没有任何用户：请设置 PIDOCK_BOOTSTRAP_INVITE=<邀请码>（或配置文件 [server].bootstrap_invite）后重启，\
+                 用该邀请码注册的第一个账号即管理员"
+            );
+        }
+    }
+
     // ensure unique index + start ingest consumer in background
     tokio::spawn(async move {
         if let Err(e) = ingest::run(state_for_ingest).await {
@@ -519,6 +582,7 @@ async fn main() {
         .route("/ws/desktop", get(gateway::ws_desktop))
         .route("/ws/web", get(gateway::ws_web))
         .merge(auth::router())
+        .merge(auth::admin_router())
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
     let app = if web_dir.is_empty() {
