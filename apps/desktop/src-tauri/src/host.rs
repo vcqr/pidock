@@ -63,12 +63,15 @@ impl Supervisor {
                 .ok()
                 .and_then(|p| p.parent().map(|p| p.to_path_buf()))
                 .unwrap_or_default();
+            // tauri externalBin 落盘名：unix 是 "pidock-host"，Windows 才带 .exe
+            let sidecar = if cfg!(windows) {
+                "pidock-host.exe"
+            } else {
+                "pidock-host"
+            };
             (
                 String::new(),
-                exe_dir
-                    .join("pidock-host.exe")
-                    .to_string_lossy()
-                    .into_owned(),
+                exe_dir.join(sidecar).to_string_lossy().into_owned(),
                 String::new(),
             )
         };
