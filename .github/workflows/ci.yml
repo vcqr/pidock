@@ -1,8 +1,7 @@
 name: CI
 
+# 用户拍板：main 的直接 push 不跑 CI（发布以 tag 为准）；PR 和手动触发才检查
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
