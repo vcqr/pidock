@@ -12,7 +12,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 先把 release 建好再让矩阵并发上传——tauri-action 的 get-or-create 有竞态，
+  # tag 重打后旧 release 变 draft 时查不到，并发 create 会撞 already_exists
+  prepare-release:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: 确保 release 存在
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ github.ref_name }}" --repo "$GITHUB_REPOSITORY" 2>/dev/null \
+            || gh release create "${{ github.ref_name }}" --repo "$GITHUB_REPOSITORY" \
+                 --title "${{ github.ref_name }}" --notes "See assets to download and install."
+
   publish-tauri:
+    needs: prepare-release
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
     permissions:
       contents: write
     strategy:
@@ -137,12 +155,18 @@ jobs:
   # server 单文件发布：web dist 在编译期嵌入 pidock-server，VPS 解压即用。
   # 用 ubuntu-22.04 压低 glibc 基线（2.35），产物兼容 debian12+ 等主流发行版。
   release-server:
+    needs: prepare-release
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
     runs-on: ubuntu-22.04
     timeout-minutes: 40
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
+      # librdkafka 的 cmake 构建需要 curl 头文件（22.04 runner 未预装）
+      - name: 安装构建依赖
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
 
       - uses: pnpm/action-setup@v4
 
