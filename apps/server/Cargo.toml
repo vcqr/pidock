@@ -10,6 +10,9 @@ pidock-protocol = { path = "../../crates/pidock-protocol" }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
+rust-embed = "8"
+mime_guess = "2"
+bytes = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

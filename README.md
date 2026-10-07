@@ -87,10 +87,12 @@ pnpm --filter @pidock/desktop tauri dev
 ### Docker 部署 server（生产形态）
 
 ```bash
-# server 镜像内置 web 静态资源（PIDOCK_WEB_DIR），单容器同时提供 REST/WS 与 web
-pnpm --filter @pidock/web build          # 先构建 web（Dockerfile 会 COPY dist）
+# web 前端在镜像内构建并嵌入 server 二进制（单文件），容器同时提供 REST/WS 与 web
 cd docker && docker compose up -d --build server
 ```
+
+不打 Docker 的话，GitHub Release 页有 `pidock-server-x86_64-linux.tar.gz`
+（web 已嵌入，解压即用）；本地/特殊目录托管仍可用 `PIDOCK_WEB_DIR` 覆盖嵌入资源。
 
 可配置项（docker-compose 已给默认值）：`PIDOCK_JWT_SECRET`、
 `RUSTFS_ROOT_USER` / `RUSTFS_ROOT_PASSWORD`、`PIDOCK_PIPELINE`（kafka，可选 redis 降级）。

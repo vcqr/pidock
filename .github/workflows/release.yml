@@ -133,3 +133,43 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }} --bundles ${{ matrix.bundles }}
+
+  # server 单文件发布：web dist 在编译期嵌入 pidock-server，VPS 解压即用。
+  # 用 ubuntu-22.04 压低 glibc 基线（2.35），产物兼容 debian12+ 等主流发行版。
+  release-server:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: 构建 web console（编译期嵌入）
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @pidock/web build
+
+      - name: 构建 server
+        run: cargo build --release -p pidock-server
+
+      - name: 打包
+        run: tar -czf pidock-server-x86_64-linux.tar.gz -C target/release pidock-server
+
+      - name: 上传 release 资产
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: pidock-server-x86_64-linux.tar.gz

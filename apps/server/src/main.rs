@@ -10,7 +10,8 @@ mod state;
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, StatusCode, Uri},
+    response::{IntoResponse, Response},
     routing::{delete, get, get_service, post},
     Json, Router,
 };
@@ -18,6 +19,7 @@ use futures_util::TryStreamExt;
 use mongodb::bson::{doc, Document as BsonDoc};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
@@ -25,6 +27,40 @@ use crate::state::AppState;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> (StatusCode, Json<Value>) {
     (status, Json(json!({"error": msg.into()})))
+}
+
+// ------------------------------------------------------- embedded web console
+
+/// apps/web/dist 嵌入（路径相对 apps/server）。debug 构建默认从磁盘实时读，
+/// release 构建才是真嵌入——本地开发体验不变，发布产物单文件。
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../web/dist"]
+struct WebAssets;
+
+fn embedded(p: &str) -> Option<(mime_guess::Mime, bytes::Bytes)> {
+    WebAssets::get(p).map(|f| {
+        let data = match f.data {
+            Cow::Borrowed(b) => bytes::Bytes::from_static(b),
+            Cow::Owned(v) => bytes::Bytes::from(v),
+        };
+        (mime_guess::from_path(p).first_or_octet_stream(), data)
+    })
+}
+
+/// SPA 兜底：命中资源文件直接返回；末段带点的路径（.js/.css 等资源）缺失才 404；
+/// 其余未知路径一律回 index.html。
+async fn web_console(uri: Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    if let Some((mime, body)) = embedded(path).filter(|_| !path.is_empty()) {
+        return ([(header::CONTENT_TYPE, mime.as_ref())], body).into_response();
+    }
+    let last_seg = path.rsplit('/').next().unwrap_or("");
+    if !last_seg.contains('.') {
+        if let Some((mime, body)) = embedded("index.html") {
+            return ([(header::CONTENT_TYPE, mime.as_ref())], body).into_response();
+        }
+    }
+    (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
 #[derive(Deserialize)]
@@ -444,8 +480,9 @@ async fn main() {
         }
     });
 
-    // web UI static hosting (optional; docker image ships apps/web/dist):
-    // API 路由优先，未命中的路径交给 ServeDir（SPA 单页，index.html 兜底目录）
+    // web UI static hosting：PIDOCK_WEB_DIR 显式指定目录时走 ServeDir（本地改前端即
+    // 生效）；否则用编译期嵌入的 apps/web/dist——debug 构建走磁盘、release 构建真嵌入，
+    // 产物即单文件。API 路由优先，未命中路径交给兜底。
     let web_dir = std::env::var("PIDOCK_WEB_DIR").unwrap_or_default();
 
     let app = Router::new()
@@ -471,7 +508,8 @@ async fn main() {
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
     let app = if web_dir.is_empty() {
-        app
+        tracing::info!("hosting web console from embedded assets");
+        app.fallback(web_console)
     } else {
         tracing::info!("hosting web console from {web_dir}");
         app.fallback_service(get_service(
@@ -483,4 +521,55 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&bind).await.expect("bind");
     tracing::info!("pidock-server listening on {bind}");
     axum::serve(listener, app).await.expect("serve");
+}
+
+#[cfg(test)]
+mod web_console_tests {
+    use super::*;
+    use axum::http::Uri;
+
+    async fn status_of(target: &str) -> (u16, String) {
+        let uri = target.parse::<Uri>().unwrap();
+        let resp = web_console(uri).await;
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default();
+        (resp.status().as_u16(), ct)
+    }
+
+    #[tokio::test]
+    async fn root_serves_index_html() {
+        let (status, ct) = status_of("/").await;
+        assert_eq!(status, 200);
+        assert!(ct.starts_with("text/html"), "content-type = {ct}");
+    }
+
+    #[tokio::test]
+    async fn spa_route_falls_back_to_index() {
+        let (status, ct) = status_of("/some/spa/route").await;
+        assert_eq!(status, 200);
+        assert!(ct.starts_with("text/html"), "content-type = {ct}");
+    }
+
+    #[tokio::test]
+    async fn missing_asset_404s() {
+        let (status, _) = status_of("/assets/definitely-missing.js").await;
+        assert_eq!(status, 404);
+    }
+
+    #[tokio::test]
+    async fn js_asset_has_js_content_type() {
+        // 占位 dist（只有 index.html）时无 js 资源，跳过
+        let Some(js) = WebAssets::iter().find(|p| p.ends_with(".js")) else {
+            return;
+        };
+        let (status, ct) = status_of(&format!("/{js}")).await;
+        assert_eq!(status, 200);
+        assert!(
+            ct.starts_with("text/javascript") || ct.starts_with("application/javascript"),
+            "content-type = {ct}"
+        );
+    }
 }
