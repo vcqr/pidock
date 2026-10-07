@@ -241,8 +241,10 @@ mod tests {
 
     #[test]
     fn frame_untagged_dispatch() {
-        let resp: HostFrame =
-            serde_json::from_str(r#"{"id":"0192b4a1-7c2f-7000-8000-000000000000","ok":true,"result":1}"#).unwrap();
+        let resp: HostFrame = serde_json::from_str(
+            r#"{"id":"0192b4a1-7c2f-7000-8000-000000000000","ok":true,"result":1}"#,
+        )
+        .unwrap();
         assert!(matches!(resp, HostFrame::Response(_)));
 
         let ev: HostFrame = serde_json::from_str(

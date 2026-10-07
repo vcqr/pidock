@@ -98,9 +98,15 @@ async fn http_json(method: &str, url: &str, body: &Value) -> Result<Value, Strin
         .await
         .map_err(|e| format!("{method} {url} failed: {e}"))?;
     let status = resp.status();
-    let data: Value = resp.json().await.map_err(|e| format!("bad json from {url}: {e}"))?;
+    let data: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("bad json from {url}: {e}"))?;
     if !status.is_success() {
-        let msg = data.get("error").and_then(|v| v.as_str()).unwrap_or("request failed");
+        let msg = data
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("request failed");
         return Err(format!("{status}: {msg}"));
     }
     Ok(data)
@@ -156,10 +162,16 @@ fn collect_attachments(value: &Value, out: &mut Vec<(String, i64)>) {
     match value {
         Value::Object(map) => {
             let sha = map.get("attachment_id").and_then(|v| v.as_str());
-            let truncated = map.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false);
+            let truncated = map
+                .get("truncated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if let (Some(sha), Some(_)) = (sha, map.get("size")) {
                 if truncated && sha.len() == 64 {
-                    out.push((sha.to_string(), map.get("size").and_then(|v| v.as_i64()).unwrap_or(0)));
+                    out.push((
+                        sha.to_string(),
+                        map.get("size").and_then(|v| v.as_i64()).unwrap_or(0),
+                    ));
                     return;
                 }
             }
@@ -190,7 +202,10 @@ async fn upload_attachments(
     }
     let agent_dir = {
         let supervisor = app.state::<Supervisor>();
-        match supervisor.request(app.clone(), "config.get".into(), json!({})).await {
+        match supervisor
+            .request(app.clone(), "config.get".into(), json!({}))
+            .await
+        {
             Ok(v) => v
                 .get("agent_dir")
                 .and_then(|v| v.as_str())
@@ -204,7 +219,10 @@ async fn upload_attachments(
         if uploaded.contains(sha.as_str()) {
             continue;
         }
-        let path = PathBuf::from(&agent_dir).join("pidock").join("attachments").join(&sha);
+        let path = PathBuf::from(&agent_dir)
+            .join("pidock")
+            .join("attachments")
+            .join(&sha);
         let presign = json!({"token": access, "sha256": sha, "size": size});
         let resp = client
             .post(format!("{server_url}/attachments/presign"))
@@ -248,9 +266,15 @@ async fn upload_attachments(
     }
 }
 
-fn command_result_envelope(session_id: &str, command_id: &str, result: &Result<Option<Value>, String>) -> Value {
+fn command_result_envelope(
+    session_id: &str,
+    command_id: &str,
+    result: &Result<Option<Value>, String>,
+) -> Value {
     let payload = match result {
-        Ok(r) => json!({"command_id": command_id, "ok": true, "result": r.clone().unwrap_or(json!({}))}),
+        Ok(r) => {
+            json!({"command_id": command_id, "ok": true, "result": r.clone().unwrap_or(json!({}))})
+        }
         Err(e) => json!({"command_id": command_id, "ok": false, "error": e}),
     };
     json!({
@@ -284,21 +308,32 @@ async fn execute_command(
             }
             ("agent.prompt", p)
         }
-        "agent.steer" => ("agent.steer", json!({"session_id": session_id, "text": payload.get("text").and_then(|t| t.as_str()).unwrap_or("")})),
-        "agent.follow_up" => ("agent.follow_up", json!({"session_id": session_id, "text": payload.get("text").and_then(|t| t.as_str()).unwrap_or("")})),
+        "agent.steer" => (
+            "agent.steer",
+            json!({"session_id": session_id, "text": payload.get("text").and_then(|t| t.as_str()).unwrap_or("")}),
+        ),
+        "agent.follow_up" => (
+            "agent.follow_up",
+            json!({"session_id": session_id, "text": payload.get("text").and_then(|t| t.as_str()).unwrap_or("")}),
+        ),
         "agent.abort" => ("agent.abort", json!({"session_id": session_id})),
         "session.create" => {
             let mut p = json!({"cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or(""), "model": payload.get("model")});
             // 雇佣专家建会话（web 端雇佣 chip 与桌面共享 UI）
             if let Some(v) = payload.get("expert_id") {
-                if v.is_string() { p["expert_id"] = v.clone(); }
+                if v.is_string() {
+                    p["expert_id"] = v.clone();
+                }
             }
             ("session.create", p)
         }
-        "session.resolve_approval" => ("session.resolve_approval", json!({
-            "approval_id": payload.get("approval_id").and_then(|v| v.as_str()).unwrap_or(""),
-            "approved": payload.get("approved").and_then(|v| v.as_bool()).unwrap_or(false),
-        })),
+        "session.resolve_approval" => (
+            "session.resolve_approval",
+            json!({
+                "approval_id": payload.get("approval_id").and_then(|v| v.as_str()).unwrap_or(""),
+                "approved": payload.get("approved").and_then(|v| v.as_bool()).unwrap_or(false),
+            }),
+        ),
         "session.resolve_ask" => ("session.resolve_ask", {
             let mut p = json!({
                 "ask_id": payload.get("ask_id").and_then(|v| v.as_str()).unwrap_or(""),
@@ -306,48 +341,64 @@ async fn execute_command(
             });
             // labels/text 可选：取消回答时两者皆缺
             if let Some(v) = payload.get("labels") {
-                if v.is_array() { p["labels"] = v.clone(); }
+                if v.is_array() {
+                    p["labels"] = v.clone();
+                }
             }
             if let Some(v) = payload.get("text") {
-                if v.is_string() { p["text"] = v.clone(); }
+                if v.is_string() {
+                    p["text"] = v.clone();
+                }
             }
             p
         }),
-        "session.rename" => ("session.rename", json!({"session_id": session_id, "name": payload.get("name").and_then(|t| t.as_str()).unwrap_or("")})),
+        "session.rename" => (
+            "session.rename",
+            json!({"session_id": session_id, "name": payload.get("name").and_then(|t| t.as_str()).unwrap_or("")}),
+        ),
         // 移除项目/删除会话：session_ids 数组原样透传
-        "session.remove" => ("session.remove", json!({"session_ids": payload.get("session_ids").cloned().unwrap_or(json!([]))})),
+        "session.remove" => (
+            "session.remove",
+            json!({"session_ids": payload.get("session_ids").cloned().unwrap_or(json!([]))}),
+        ),
         // 文件浏览（@ 提及与文件面板共用）
-        "workspace.files" => ("workspace.files", json!({"cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or("")})),
-        "workspace.read_file" => ("workspace.read_file", json!({
-            "cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or(""),
-            "path": payload.get("path").and_then(|t| t.as_str()).unwrap_or(""),
-        })),
+        "workspace.files" => (
+            "workspace.files",
+            json!({"cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or("")}),
+        ),
+        "workspace.read_file" => (
+            "workspace.read_file",
+            json!({
+                "cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or(""),
+                "path": payload.get("path").and_then(|t| t.as_str()).unwrap_or(""),
+            }),
+        ),
         // 会话级新命令（上下文用量/压缩/队列/导出/开关/工具/树/prompts/thinking/信任/
         // 分叉/权限模式/思考级别/模型/文件变更审查）：与 host TS Method 同名，
         // 注入 session_id 后原样透传
         passthrough @ ("agent.context_usage"
-            | "agent.compact"
-            | "agent.clear_queue"
-            | "agent.abort_retry"
-            | "session.export"
-            | "session.set_auto_compaction"
-            | "session.set_auto_retry"
-            | "session.list_tools"
-            | "session.set_active_tools"
-            | "session.tree"
-            | "session.navigate_tree"
-            | "config.prompts.list"
-            | "config.reload_runtime"
-            | "session.thinking_info"
-            | "session.trust"
-            | "session.fork"
-            | "session.set_permission_mode"
-            | "session.set_thinking_level"
-            | "session.set_model"
-            | "session.file_changes"
-            | "session.file_diff"
-            | "session.revert_files"
-            | "session.pending") => {
+        | "agent.compact"
+        | "agent.clear_queue"
+        | "agent.abort_retry"
+        | "session.export"
+        | "session.set_auto_compaction"
+        | "session.set_auto_retry"
+        | "session.list_tools"
+        | "session.set_active_tools"
+        | "session.tree"
+        | "session.navigate_tree"
+        | "config.prompts.list"
+        | "config.reload_runtime"
+        | "session.thinking_info"
+        | "session.trust"
+        | "session.fork"
+        | "session.set_permission_mode"
+        | "session.set_thinking_level"
+        | "session.set_model"
+        | "session.file_changes"
+        | "session.file_diff"
+        | "session.revert_files"
+        | "session.pending") => {
             let mut p = payload.clone();
             p["session_id"] = json!(session_id);
             (passthrough, p)
@@ -356,47 +407,47 @@ async fn execute_command(
         // 无 session_id，载荷原样透传。web 与桌面共享同一控制面 —— web 能发
         // agent.prompt 即可在桌面执行代码，config 写不构成新增权限面
         passthrough @ ("config.get"
-            | "config.settings.set"
-            | "config.providers.list"
-            | "config.providers.set_key"
-            | "config.providers.remove_key"
-            | "config.providers.custom.get"
-            | "config.providers.custom.set"
-            | "config.providers.custom.remove"
-            | "config.providers.fetch_models"
-            | "config.models.list"
-            | "config.models.set_default"
-            | "config.model_override.set"
-            | "config.extensions.list"
-            | "config.extensions.toggle"
-            | "config.extensions.read"
-            | "config.extensions.install"
-            | "config.skills.list"
-            | "config.skills.toggle"
-            | "config.skills.files"
-            | "config.skills.read"
-            | "config.skills.install"
-            | "config.mcp.get"
-            | "config.mcp.set"
-            | "config.agents.read"
-            | "config.agents.write"
-            | "stats.usage"
-            | "pidock.settings.get"
-            | "pidock.settings.set"
-            | "experts.list"
-            | "experts.get"
-            | "experts.save"
-            | "experts.delete"
-            | "experts.private_list"
-            | "experts.install_resource"
-            | "experts.remove_resource") => (passthrough, payload.clone()),
+        | "config.settings.set"
+        | "config.providers.list"
+        | "config.providers.set_key"
+        | "config.providers.remove_key"
+        | "config.providers.custom.get"
+        | "config.providers.custom.set"
+        | "config.providers.custom.remove"
+        | "config.providers.fetch_models"
+        | "config.models.list"
+        | "config.models.set_default"
+        | "config.model_override.set"
+        | "config.extensions.list"
+        | "config.extensions.toggle"
+        | "config.extensions.read"
+        | "config.extensions.install"
+        | "config.skills.list"
+        | "config.skills.toggle"
+        | "config.skills.files"
+        | "config.skills.read"
+        | "config.skills.install"
+        | "config.mcp.get"
+        | "config.mcp.set"
+        | "config.agents.read"
+        | "config.agents.write"
+        | "stats.usage"
+        | "pidock.settings.get"
+        | "pidock.settings.set"
+        | "experts.list"
+        | "experts.get"
+        | "experts.save"
+        | "experts.delete"
+        | "experts.private_list"
+        | "experts.install_resource"
+        | "experts.remove_resource") => (passthrough, payload.clone()),
         // 本地定时任务管理：调度器在桌面 Rust 侧，不经 host —— 直连 SchedulerManager
         automation @ ("automation.list"
-            | "automation.save"
-            | "automation.delete"
-            | "automation.set_enabled"
-            | "automation.run_now"
-            | "automation.peek") => {
+        | "automation.save"
+        | "automation.delete"
+        | "automation.set_enabled"
+        | "automation.run_now"
+        | "automation.peek") => {
             let sched = app.state::<crate::scheduler::SchedulerManager>();
             let result =
                 crate::scheduler::dispatch_automation(app, &sched, automation, payload.clone())
@@ -404,7 +455,9 @@ async fn execute_command(
             return Ok(Some(result));
         }
         other => {
-            return Err(format!("command type \"{other}\" not supported by this desktop"));
+            return Err(format!(
+                "command type \"{other}\" not supported by this desktop"
+            ));
         }
     };
     supervisor
@@ -414,7 +467,11 @@ async fn execute_command(
 }
 
 /// run the sync loop until disabled or control message
-async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_protocol::Envelope>, mut control_rx: mpsc::Receiver<SyncControl>) {
+async fn sync_loop(
+    app: AppHandle,
+    mut event_rx: broadcast::Receiver<pidock_protocol::Envelope>,
+    mut control_rx: mpsc::Receiver<SyncControl>,
+) {
     let supervisor = app.state::<Supervisor>();
     let sync = app.state::<SyncManager>();
     let mut backoff_secs = 1u64;
@@ -426,7 +483,13 @@ async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_prot
             (c.clone(), c.enabled && !c.refresh_token.is_empty())
         };
         if !enabled {
-            sync.set_status(SyncStatus { enabled: false, connected: false, machine_id: cfg.machine_id.clone(), error: None }).await;
+            sync.set_status(SyncStatus {
+                enabled: false,
+                connected: false,
+                machine_id: cfg.machine_id.clone(),
+                error: None,
+            })
+            .await;
             // wait for re-enable
             match control_rx.recv().await {
                 Some(SyncControl::Restart) => continue,
@@ -439,18 +502,26 @@ async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_prot
         let (access, new_refresh) = match refresh_access(&cfg).await {
             Ok(pair) => pair,
             Err(e) => {
-                let user_msg = if e.contains("revoked") || e.contains("expired") || e.contains("Unauthorized") {
-                    // the stored token is dead: drop it so the next configure
-                    // requires a fresh password login
-                    let mut c = sync.cfg.lock().await;
-                    c.refresh_token.clear();
-                    sync.save(&c);
-                    cfg.refresh_token.clear();
-                    "登录已过期，请重新输入密码后点击「连接并同步」".to_string()
-                } else {
-                    e.clone()
-                };
-                sync.set_status(SyncStatus { enabled: true, connected: false, machine_id: cfg.machine_id.clone(), error: Some(user_msg.clone()) }).await;
+                let user_msg =
+                    if e.contains("revoked") || e.contains("expired") || e.contains("Unauthorized")
+                    {
+                        // the stored token is dead: drop it so the next configure
+                        // requires a fresh password login
+                        let mut c = sync.cfg.lock().await;
+                        c.refresh_token.clear();
+                        sync.save(&c);
+                        cfg.refresh_token.clear();
+                        "登录已过期，请重新输入密码后点击「连接并同步」".to_string()
+                    } else {
+                        e.clone()
+                    };
+                sync.set_status(SyncStatus {
+                    enabled: true,
+                    connected: false,
+                    machine_id: cfg.machine_id.clone(),
+                    error: Some(user_msg.clone()),
+                })
+                .await;
                 tracing::warn!("sync: refresh failed: {e}");
                 tokio::time::sleep(std::time::Duration::from_secs(backoff_secs.min(30))).await;
                 backoff_secs *= 2;
@@ -467,13 +538,21 @@ async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_prot
         // 2) ws connect
         let ws_url = format!(
             "{}/ws/desktop?token={}",
-            cfg.server_url.trim_end_matches('/').replacen("http", "ws", 1),
+            cfg.server_url
+                .trim_end_matches('/')
+                .replacen("http", "ws", 1),
             access
         );
         let (ws, _) = match tokio_tungstenite::connect_async(&ws_url).await {
             Ok(pair) => pair,
             Err(e) => {
-                sync.set_status(SyncStatus { enabled: true, connected: false, machine_id: cfg.machine_id.clone(), error: Some(format!("connect: {e}")) }).await;
+                sync.set_status(SyncStatus {
+                    enabled: true,
+                    connected: false,
+                    machine_id: cfg.machine_id.clone(),
+                    error: Some(format!("connect: {e}")),
+                })
+                .await;
                 tokio::time::sleep(std::time::Duration::from_secs(backoff_secs.min(30))).await;
                 backoff_secs *= 2;
                 continue;
@@ -496,10 +575,20 @@ async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_prot
             "home_dir": home_dir,
             "local_ip": local_ip(),
         });
-        if ws_sink.send(WsMessage::Text(register.to_string().into())).await.is_err() {
+        if ws_sink
+            .send(WsMessage::Text(register.to_string().into()))
+            .await
+            .is_err()
+        {
             continue;
         }
-        sync.set_status(SyncStatus { enabled: true, connected: true, machine_id: cfg.machine_id.clone(), error: None }).await;
+        sync.set_status(SyncStatus {
+            enabled: true,
+            connected: true,
+            machine_id: cfg.machine_id.clone(),
+            error: None,
+        })
+        .await;
         tracing::info!("sync: connected to {}", cfg.server_url);
 
         // 4) backfill open sessions (server dedupes via (session_id, seq) upsert)
@@ -512,7 +601,11 @@ async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_prot
                     for s in sessions {
                         // backfill ALL known sessions so the web list is complete,
                         // not just the ones currently open on this desktop
-                        let sid = s.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let sid = s
+                            .get("session_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         if sid.is_empty() {
                             continue;
                         }
@@ -534,7 +627,11 @@ async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_prot
                             let _ = ws_sink.send(WsMessage::Text(meta.to_string().into())).await;
                         }
                         if let Ok(replay) = supervisor
-                            .request(app.clone(), "session.events".into(), json!({"session_id": sid}))
+                            .request(
+                                app.clone(),
+                                "session.events".into(),
+                                json!({"session_id": sid}),
+                            )
                             .await
                         {
                             if let Some(events) = replay.get("events").and_then(|v| v.as_array()) {
@@ -548,8 +645,16 @@ async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_prot
                                         "kind": ev.get("kind").cloned().unwrap_or(json!("")),
                                         "payload": ev.get("payload").cloned().unwrap_or(json!({})),
                                     });
-                                    upload_attachments(&app, &access, &cfg.server_url, &env, &mut uploaded).await;
-                                    let _ = ws_sink.send(WsMessage::Text(env.to_string().into())).await;
+                                    upload_attachments(
+                                        &app,
+                                        &access,
+                                        &cfg.server_url,
+                                        &env,
+                                        &mut uploaded,
+                                    )
+                                    .await;
+                                    let _ =
+                                        ws_sink.send(WsMessage::Text(env.to_string().into())).await;
                                 }
                             }
                         }
@@ -632,7 +737,13 @@ async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_prot
                 }
             }
             if closed {
-                sync.set_status(SyncStatus{enabled: true, connected: false, machine_id: cfg.machine_id.clone(), error: Some("connection lost".into())}).await;
+                sync.set_status(SyncStatus {
+                    enabled: true,
+                    connected: false,
+                    machine_id: cfg.machine_id.clone(),
+                    error: Some("connection lost".into()),
+                })
+                .await;
                 break; // reconnect via backoff
             }
         }

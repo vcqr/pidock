@@ -36,7 +36,13 @@ impl Supervisor {
     fn spawn(&self, app: AppHandle) -> Result<(), String> {
         let mut guard = self.inner.lock().map_err(|e| e.to_string())?;
         if let Some(running) = guard.as_ref() {
-            if running.child.lock().map_err(|e| e.to_string())?.id().is_some() {
+            if running
+                .child
+                .lock()
+                .map_err(|e| e.to_string())?
+                .id()
+                .is_some()
+            {
                 return Ok(()); // already running
             }
         }
@@ -57,7 +63,14 @@ impl Supervisor {
                 .ok()
                 .and_then(|p| p.parent().map(|p| p.to_path_buf()))
                 .unwrap_or_default();
-            (String::new(), exe_dir.join("pidock-host.exe").to_string_lossy().into_owned(), String::new())
+            (
+                String::new(),
+                exe_dir
+                    .join("pidock-host.exe")
+                    .to_string_lossy()
+                    .into_owned(),
+                String::new(),
+            )
         };
         let host_dir = normalize_path(std::path::Path::new(
             &std::env::var("PIDOCK_HOST_DIR").unwrap_or(default_dir),
@@ -183,11 +196,19 @@ impl Supervisor {
             stdin: Arc::new(tokio::sync::Mutex::new(Some(stdin))),
             pending,
         }));
-        eprintln!("[supervisor] pi-host spawned: {host_cmd} {}", host_args.join(" "));
+        eprintln!(
+            "[supervisor] pi-host spawned: {host_cmd} {}",
+            host_args.join(" ")
+        );
         Ok(())
     }
 
-    pub async fn request(&self, app: AppHandle, method: String, params: Value) -> Result<Value, String> {
+    pub async fn request(
+        &self,
+        app: AppHandle,
+        method: String,
+        params: Value,
+    ) -> Result<Value, String> {
         if let Err(e) = self.spawn(app) {
             return Err(e);
         }
@@ -249,7 +270,12 @@ impl Supervisor {
         if closed {
             let deadline = std::time::Instant::now() + Duration::from_millis(1200);
             while std::time::Instant::now() < deadline {
-                match running.child.lock().ok().and_then(|mut c| c.try_wait().ok()) {
+                match running
+                    .child
+                    .lock()
+                    .ok()
+                    .and_then(|mut c| c.try_wait().ok())
+                {
                     Some(Some(_)) => return, // host 已自行退出
                     Some(None) => std::thread::sleep(Duration::from_millis(50)),
                     None => break,
@@ -305,7 +331,10 @@ fn resolve_command(cmd: &str) -> (String, Vec<String>) {
     let path_var = std::env::var("PATH").unwrap_or_default();
     for dir in path_var.split(';').filter(|d| !d.is_empty()) {
         let base = PathBuf::from(dir.trim_matches('"')).join(cmd);
-        if let Some(exe) = [&base.with_extension("exe")].into_iter().find(|p| p.is_file()) {
+        if let Some(exe) = [&base.with_extension("exe")]
+            .into_iter()
+            .find(|p| p.is_file())
+        {
             return (exe.to_string_lossy().into_owned(), Vec::new());
         }
         // extensionless files on PATH (sh scripts) are not spawnable from
@@ -389,7 +418,10 @@ fn load_proxy_conf() -> Option<ProxyConf> {
     Some(ProxyConf {
         mode: p.get("mode")?.as_str()?.to_string(),
         url: p.get("url").and_then(|v| v.as_str()).map(str::to_string),
-        no_proxy: p.get("noProxy").and_then(|v| v.as_str()).map(str::to_string),
+        no_proxy: p
+            .get("noProxy")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         ca_path: p.get("caPath").and_then(|v| v.as_str()).map(str::to_string),
     })
 }
@@ -560,7 +592,11 @@ mod tests {
     #[test]
     fn no_proxy_merges_and_dedupes() {
         assert_eq!(
-            merge_no_proxy(Some("localhost, 127.0.0.1"), Some("*.local;localhost;<local>")).as_deref(),
+            merge_no_proxy(
+                Some("localhost, 127.0.0.1"),
+                Some("*.local;localhost;<local>")
+            )
+            .as_deref(),
             Some("localhost,127.0.0.1,*.local,<local>")
         );
         assert_eq!(merge_no_proxy(None, None), None);
@@ -575,7 +611,10 @@ mod tests {
             assert_eq!(prefix.len(), 2);
             assert!(prefix[1].to_lowercase().ends_with("bun.cmd"));
         } else {
-            assert!(program.to_lowercase().ends_with(".exe"), "unexpected: {program}");
+            assert!(
+                program.to_lowercase().ends_with(".exe"),
+                "unexpected: {program}"
+            );
         }
     }
 }

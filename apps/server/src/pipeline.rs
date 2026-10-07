@@ -52,7 +52,10 @@ pub mod kafka {
                 .set("bootstrap.servers", brokers)
                 .set("message.timeout.ms", "10000")
                 .create()?;
-            Ok(Self { producer, topic: topic.into() })
+            Ok(Self {
+                producer,
+                topic: topic.into(),
+            })
         }
     }
 
@@ -84,7 +87,9 @@ pub mod kafka {
             .create()
             .expect("kafka admin client");
         let new_topic = NewTopic::new(topic, 1, TopicReplication::Fixed(1));
-        let results = admin.create_topics([&new_topic], &AdminOptions::new()).await;
+        let results = admin
+            .create_topics([&new_topic], &AdminOptions::new())
+            .await;
         match results {
             Ok(entries) => {
                 for entry in entries {
@@ -242,10 +247,14 @@ pub mod redis_stream {
     }
 }
 
-pub async fn make_sink(cfg: &crate::config::Config) -> anyhow::Result<std::sync::Arc<dyn EventSink>> {
+pub async fn make_sink(
+    cfg: &crate::config::Config,
+) -> anyhow::Result<std::sync::Arc<dyn EventSink>> {
     if cfg.pipeline == "redis" {
         tracing::info!("event pipeline: redis-streams");
-        Ok(std::sync::Arc::new(redis_stream::RedisSink::connect(&cfg.redis_url).await?))
+        Ok(std::sync::Arc::new(
+            redis_stream::RedisSink::connect(&cfg.redis_url).await?,
+        ))
     } else {
         #[cfg(feature = "kafka")]
         {
@@ -263,7 +272,10 @@ pub async fn make_sink(cfg: &crate::config::Config) -> anyhow::Result<std::sync:
     }
 }
 
-pub async fn run_source(cfg: &crate::config::Config, handler: Box<dyn FnMut(String) + Send>) -> anyhow::Result<()> {
+pub async fn run_source(
+    cfg: &crate::config::Config,
+    handler: Box<dyn FnMut(String) + Send>,
+) -> anyhow::Result<()> {
     if cfg.pipeline == "redis" {
         let src = redis_stream::RedisSource::connect(&cfg.redis_url).await?;
         src.run(handler).await;

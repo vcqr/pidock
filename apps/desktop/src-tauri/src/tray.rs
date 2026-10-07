@@ -153,7 +153,11 @@ fn update_attention(app: &AppHandle) {
 fn apply_autostart(app: &AppHandle, enable: bool) {
     use tauri_plugin_autostart::ManagerExt;
     let launch = app.autolaunch();
-    let r = if enable { launch.enable() } else { launch.disable() };
+    let r = if enable {
+        launch.enable()
+    } else {
+        launch.disable()
+    };
     if let Err(e) = r {
         eprintln!("[tray] 设置开机自启失败: {e}");
     }
@@ -210,7 +214,8 @@ fn maybe_notify(app: &AppHandle, title: &str, body: &str) {
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
     let config = load_config(app);
     let icon_normal = Image::from_bytes(include_bytes!("../icons/tray.png"))?.to_owned();
-    let icon_attention = Image::from_bytes(include_bytes!("../icons/tray-attention.png"))?.to_owned();
+    let icon_attention =
+        Image::from_bytes(include_bytes!("../icons/tray-attention.png"))?.to_owned();
     let initial_icon = icon_normal.clone();
     app.manage(TrayState {
         config: Mutex::new(config),
@@ -229,44 +234,46 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         .tooltip("PiDock")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| {
-            match event.id().0.as_str() {
-                "show" => show_main(app),
-                "quit" => app.exit(0),
-                "toggle-notify" => {
-                    let cfg = {
-                        let state = app.state::<TrayState>();
-                        let mut c = state.config.lock().unwrap();
-                        c.notifications = !c.notifications;
-                        c.clone()
-                    };
-                    save_config(app, &cfg);
-                    refresh_menu(app);
-                }
-                "close-hide" => {
-                    let cfg = {
-                        let state = app.state::<TrayState>();
-                        let mut c = state.config.lock().unwrap();
-                        c.close_action =
-                            if c.close_action == "hide" { "exit" } else { "hide" }.into();
-                        c.clone()
-                    };
-                    save_config(app, &cfg);
-                    refresh_menu(app);
-                }
-                "toggle-autostart" => {
-                    let (cfg, enable) = {
-                        let state = app.state::<TrayState>();
-                        let mut c = state.config.lock().unwrap();
-                        c.autostart = !c.autostart;
-                        (c.clone(), c.autostart)
-                    };
-                    apply_autostart(app, enable);
-                    save_config(app, &cfg);
-                    refresh_menu(app);
-                }
-                _ => {}
+        .on_menu_event(|app, event| match event.id().0.as_str() {
+            "show" => show_main(app),
+            "quit" => app.exit(0),
+            "toggle-notify" => {
+                let cfg = {
+                    let state = app.state::<TrayState>();
+                    let mut c = state.config.lock().unwrap();
+                    c.notifications = !c.notifications;
+                    c.clone()
+                };
+                save_config(app, &cfg);
+                refresh_menu(app);
             }
+            "close-hide" => {
+                let cfg = {
+                    let state = app.state::<TrayState>();
+                    let mut c = state.config.lock().unwrap();
+                    c.close_action = if c.close_action == "hide" {
+                        "exit"
+                    } else {
+                        "hide"
+                    }
+                    .into();
+                    c.clone()
+                };
+                save_config(app, &cfg);
+                refresh_menu(app);
+            }
+            "toggle-autostart" => {
+                let (cfg, enable) = {
+                    let state = app.state::<TrayState>();
+                    let mut c = state.config.lock().unwrap();
+                    c.autostart = !c.autostart;
+                    (c.clone(), c.autostart)
+                };
+                apply_autostart(app, enable);
+                save_config(app, &cfg);
+                refresh_menu(app);
+            }
+            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -307,7 +314,11 @@ pub fn spawn_watcher(app: &AppHandle) {
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
             };
             if env.kind == ephemeral::AGENT_STATE_CHANGED {
-                let st = env.payload.get("state").and_then(|v| v.as_str()).unwrap_or("");
+                let st = env
+                    .payload
+                    .get("state")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let state = app.state::<TrayState>();
                 let changed = {
                     let mut waiting = state.waiting.lock().unwrap();
@@ -331,9 +342,16 @@ pub fn spawn_watcher(app: &AppHandle) {
                             format!("会话 {}", &env.session_id[..env.session_id.len().min(8)])
                         })
                     };
-                    let what =
-                        if st == "waiting_approval" { "等待你的确认" } else { "等待你的回答" };
-                    maybe_notify(&app, "PiDock · 需要你处理", &format!("会话「{title}」{what}"));
+                    let what = if st == "waiting_approval" {
+                        "等待你的确认"
+                    } else {
+                        "等待你的回答"
+                    };
+                    maybe_notify(
+                        &app,
+                        "PiDock · 需要你处理",
+                        &format!("会话「{title}」{what}"),
+                    );
                 }
             } else if env.kind == event::SESSION_META {
                 // host 生成/更新会话标题后推送，缓存给通知文案
@@ -348,8 +366,16 @@ pub fn spawn_watcher(app: &AppHandle) {
                     }
                 }
             } else if env.kind == "automation.run_finished" {
-                let status = env.payload.get("status").and_then(|v| v.as_str()).unwrap_or("");
-                let job_id = env.payload.get("job_id").and_then(|v| v.as_str()).unwrap_or("");
+                let status = env
+                    .payload
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let job_id = env
+                    .payload
+                    .get("job_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let name = crate::scheduler::SchedulerManager::job_name_of(&app, job_id).await;
                 let name = name.as_deref().unwrap_or("定时任务");
                 if status == "ok" {

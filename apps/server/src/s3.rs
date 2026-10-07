@@ -31,10 +31,14 @@ fn hex(bytes: &[u8]) -> String {
 impl S3Client {
     pub fn from_env() -> Self {
         Self {
-            endpoint: std::env::var("PIDOCK_RUSTFS_ENDPOINT").unwrap_or_else(|_| "http://localhost:7000".into()),
-            bucket: std::env::var("PIDOCK_RUSTFS_BUCKET").unwrap_or_else(|_| "pidock-attachments".into()),
-            access_key: std::env::var("PIDOCK_RUSTFS_ACCESS_KEY").unwrap_or_else(|_| "pidock".into()),
-            secret_key: std::env::var("PIDOCK_RUSTFS_SECRET_KEY").unwrap_or_else(|_| "pidock-secret".into()),
+            endpoint: std::env::var("PIDOCK_RUSTFS_ENDPOINT")
+                .unwrap_or_else(|_| "http://localhost:7000".into()),
+            bucket: std::env::var("PIDOCK_RUSTFS_BUCKET")
+                .unwrap_or_else(|_| "pidock-attachments".into()),
+            access_key: std::env::var("PIDOCK_RUSTFS_ACCESS_KEY")
+                .unwrap_or_else(|_| "pidock".into()),
+            secret_key: std::env::var("PIDOCK_RUSTFS_SECRET_KEY")
+                .unwrap_or_else(|_| "pidock-secret".into()),
         }
     }
 
@@ -65,7 +69,10 @@ impl S3Client {
         let region = "us-east-1";
         let service = "s3";
 
-        let credential = format!("{}/{}/{}/{}/aws4_request", self.access_key, date_stamp, region, service);
+        let credential = format!(
+            "{}/{}/{}/{}/aws4_request",
+            self.access_key, date_stamp, region, service
+        );
         let host = self
             .endpoint
             .trim_start_matches("http://")
@@ -100,7 +107,10 @@ impl S3Client {
             sha256_hex(canonical_request.as_bytes())
         );
         // SigV4 derivation starts from "AWS4" + secret
-        let k_date = hmac_sha256(format!("AWS4{}", self.secret_key).as_bytes(), date_stamp.as_bytes());
+        let k_date = hmac_sha256(
+            format!("AWS4{}", self.secret_key).as_bytes(),
+            date_stamp.as_bytes(),
+        );
         let k_region = hmac_sha256(&k_date, region.as_bytes());
         let k_service = hmac_sha256(&k_region, service.as_bytes());
         let k_signing = hmac_sha256(&k_service, b"aws4_request");
@@ -149,7 +159,9 @@ fn url_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }

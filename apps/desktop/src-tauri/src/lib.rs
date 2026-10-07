@@ -115,7 +115,9 @@ pub fn run() {
         .manage(supervisor)
         .manage(event_tx.clone())
         .manage(sync::SyncManager::new(default_sync_cfg_path(), sync_tx))
-        .manage(scheduler::SchedulerManager::new(scheduler::SchedulerManager::default_jobs_path()))
+        .manage(scheduler::SchedulerManager::new(
+            scheduler::SchedulerManager::default_jobs_path(),
+        ))
         .invoke_handler(tauri::generate_handler![
             host::host_request,
             scheduler::automation_request,

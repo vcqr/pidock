@@ -32,7 +32,9 @@ pub struct MachineRoute {
 
 impl AppState {
     pub async fn connect(cfg: Config, sink: Arc<dyn EventSink>) -> anyhow::Result<Self> {
-        let mongo = mongodb::Client::with_uri_str(&cfg.mongo_uri).await?.database("pidock");
+        let mongo = mongodb::Client::with_uri_str(&cfg.mongo_uri)
+            .await?
+            .database("pidock");
         let redis_client = redis::Client::open(cfg.redis_url.as_str())?;
         let redis = redis_client.get_multiplexed_tokio_connection().await?;
         Ok(Self {
@@ -86,7 +88,9 @@ impl AppState {
             .query_async(&mut conn)
             .await;
         let _: Result<(), _> = conn.expire(&key, 90).await;
-        let _: Result<(), _> = conn.sadd(format!("online:user:{user_id}"), machine_id).await;
+        let _: Result<(), _> = conn
+            .sadd(format!("online:user:{user_id}"), machine_id)
+            .await;
 
         let machines = self.mongo.collection::<mongodb::bson::Document>("machines");
         machines
@@ -106,7 +110,11 @@ impl AppState {
                     "$setOnInsert": { "created_at": chrono::Utc::now().to_rfc3339() }
                 },
             )
-            .with_options(mongodb::options::UpdateOptions::builder().upsert(true).build())
+            .with_options(
+                mongodb::options::UpdateOptions::builder()
+                    .upsert(true)
+                    .build(),
+            )
             .await?;
 
         let frame = serde_json::json!({
@@ -121,7 +129,9 @@ impl AppState {
     pub async fn machine_offline(&self, user_id: &str, machine_id: &str) {
         let mut conn = self.redis.clone();
         let _: Result<(), _> = conn.del(format!("online:machine:{machine_id}")).await;
-        let _: Result<(), _> = conn.srem(format!("online:user:{user_id}"), machine_id).await;
+        let _: Result<(), _> = conn
+            .srem(format!("online:user:{user_id}"), machine_id)
+            .await;
         let frame = serde_json::json!({
             "ctrl": "machine_status",
             "machine_id": machine_id,
@@ -132,6 +142,8 @@ impl AppState {
 
     pub async fn machine_heartbeat(&self, machine_id: &str) {
         let mut conn = self.redis.clone();
-        let _: Result<(), _> = conn.expire(format!("online:machine:{machine_id}"), 90).await;
+        let _: Result<(), _> = conn
+            .expire(format!("online:machine:{machine_id}"), 90)
+            .await;
     }
 }

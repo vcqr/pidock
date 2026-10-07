@@ -14,12 +14,12 @@ use axum::{
     routing::{delete, get, get_service, post},
     Json, Router,
 };
+use futures_util::TryStreamExt;
 use mongodb::bson::{doc, Document as BsonDoc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
-use futures_util::TryStreamExt;
 
 use crate::state::AppState;
 
@@ -68,7 +68,10 @@ async fn attachments_presign(
         if doc.get_str("user_id") != Ok(user_id.as_str()) {
             // content hash collision across users: allow but keep first owner
             // (content is addressed by hash; access control is on download)
-            return Err(err(StatusCode::CONFLICT, "attachment belongs to another account"));
+            return Err(err(
+                StatusCode::CONFLICT,
+                "attachment belongs to another account",
+            ));
         }
     } else {
         let _ = meta
@@ -81,7 +84,9 @@ async fn attachments_presign(
             .await;
     }
     let url = state.s3.presign_put(&body.sha256, 900);
-    Ok(Json(json!({"attachment_id": body.sha256, "upload_url": url, "exists": exists})))
+    Ok(Json(
+        json!({"attachment_id": body.sha256, "upload_url": url, "exists": exists}),
+    ))
 }
 
 async fn attachment_url(
@@ -103,7 +108,9 @@ async fn attachment_url(
         return Err(err(StatusCode::FORBIDDEN, "not your attachment"));
     }
     let url = state.s3.presign_get(&attachment_id, 900);
-    Ok(Json(json!({"url": url, "size": doc.get_i64("size").unwrap_or(0)})))
+    Ok(Json(
+        json!({"url": url, "size": doc.get_i64("size").unwrap_or(0)}),
+    ))
 }
 
 async fn me(
@@ -284,7 +291,9 @@ async fn delete_machine_session(
     state
         .mongo
         .collection::<BsonDoc>("session_events")
-        .delete_many(doc! {"session_id": &session_id, "user_id": &user_id, "machine_id": &machine_id})
+        .delete_many(
+            doc! {"session_id": &session_id, "user_id": &user_id, "machine_id": &machine_id},
+        )
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({"deleted": true})))
@@ -306,7 +315,8 @@ async fn session_events(
         .await
         .map(|c| c.sub)
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
-    let mut filter = doc! {"user_id": &user_id, "machine_id": &machine_id, "session_id": &session_id};
+    let mut filter =
+        doc! {"user_id": &user_id, "machine_id": &machine_id, "session_id": &session_id};
     if let Some(after) = q.after_seq {
         filter.insert("seq", doc! {"$gt": after});
     }

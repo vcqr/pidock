@@ -8,7 +8,10 @@
 //! user's channel), upstream nothing in v1 (commands go via POST /commands).
 
 use axum::{
-    extract::{Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
+    extract::{
+        ws::{Message, WebSocket},
+        Query, State, WebSocketUpgrade,
+    },
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -54,7 +57,11 @@ async fn desktop_socket(state: AppState, user_id: String, socket: WebSocket) {
     // forward downstream frames (commands) to the websocket
     let forward = tokio::spawn(async move {
         while let Some(frame) = out_rx.recv().await {
-            if ws_tx.send(Message::Text(frame.to_string().into())).await.is_err() {
+            if ws_tx
+                .send(Message::Text(frame.to_string().into()))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -91,7 +98,10 @@ async fn desktop_socket(state: AppState, user_id: String, socket: WebSocket) {
                 }
                 state.routes.lock().await.insert(
                     mid.clone(),
-                    crate::state::MachineRoute { user_id: user_id.clone(), tx: out_tx.clone() },
+                    crate::state::MachineRoute {
+                        user_id: user_id.clone(),
+                        tx: out_tx.clone(),
+                    },
                 );
                 let _ = out_tx.send(json!({"ctrl":"registered","machine_id": mid}));
                 machine_id = Some(mid);
@@ -151,7 +161,11 @@ async fn web_socket(state: AppState, user_id: String, socket: WebSocket) {
             return;
         }
     };
-    if pubsub.subscribe(AppState::user_events_channel(&user_id)).await.is_err() {
+    if pubsub
+        .subscribe(AppState::user_events_channel(&user_id))
+        .await
+        .is_err()
+    {
         return;
     }
     let mut stream = pubsub.into_on_message();

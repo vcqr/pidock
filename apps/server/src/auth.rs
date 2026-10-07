@@ -5,7 +5,13 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
-use axum::{extract::State, http::StatusCode, response::{IntoResponse, Response}, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::post,
+    Json, Router,
+};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use mongodb::bson::{doc, Document as BsonDoc};
@@ -26,13 +32,17 @@ fn api_err(status: StatusCode, msg: impl Into<String>) -> Response {
 
 #[derive(Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String,   // user id
-    pub kind: String,  // "access" | "refresh"
+    pub sub: String,  // user id
+    pub kind: String, // "access" | "refresh"
     pub jti: String,
     pub exp: i64,
 }
 
-pub fn make_token(state: &AppState, user_id: &str, kind: &str) -> Result<(String, String, i64), String> {
+pub fn make_token(
+    state: &AppState,
+    user_id: &str,
+    kind: &str,
+) -> Result<(String, String, i64), String> {
     let jti = Uuid::now_v7().to_string();
     let exp = if kind == "access" {
         (Utc::now() + Duration::minutes(ACCESS_TTL_MIN)).timestamp()
@@ -41,14 +51,23 @@ pub fn make_token(state: &AppState, user_id: &str, kind: &str) -> Result<(String
     };
     let token = encode(
         &Header::default(),
-        &Claims { sub: user_id.into(), kind: kind.into(), jti: jti.clone(), exp },
+        &Claims {
+            sub: user_id.into(),
+            kind: kind.into(),
+            jti: jti.clone(),
+            exp,
+        },
         &EncodingKey::from_secret(state.cfg.jwt_secret.as_bytes()),
     )
     .map_err(|e| e.to_string())?;
     Ok((token, jti, exp))
 }
 
-pub async fn verify_token(state: &AppState, token: &str, expected_kind: &str) -> Result<Claims, String> {
+pub async fn verify_token(
+    state: &AppState,
+    token: &str,
+    expected_kind: &str,
+) -> Result<Claims, String> {
     let data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(state.cfg.jwt_secret.as_bytes()),
@@ -82,7 +101,11 @@ fn hash_password(password: &str) -> Result<String, String> {
 
 fn verify_password(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
-        .map(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
+        .map(|parsed| {
+            Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok()
+        })
         .unwrap_or(false)
 }
 
@@ -103,14 +126,18 @@ pub struct RefreshBody {
     pub refresh_token: String,
 }
 
-async fn register(State(state): State<AppState>, Json(body): Json<RegisterBody>) -> Result<Json<Value>, Response> {
+async fn register(
+    State(state): State<AppState>,
+    Json(body): Json<RegisterBody>,
+) -> Result<Json<Value>, Response> {
     if !body.email.contains('@') {
         return Err(api_err(StatusCode::BAD_REQUEST, "邮箱格式不正确"));
     }
     if body.password.chars().count() < 8 {
         return Err(api_err(StatusCode::BAD_REQUEST, "密码至少需要 8 个字符"));
     }
-    let hash = hash_password(&body.password).map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let hash =
+        hash_password(&body.password).map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let user_id = Uuid::now_v7().to_string();
     let user: BsonDoc = doc! {
         "_id": &user_id,
@@ -133,7 +160,10 @@ async fn register(State(state): State<AppState>, Json(body): Json<RegisterBody>)
     Ok(Json(serde_json::json!({"user_id": user_id})))
 }
 
-async fn login(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Result<Json<Value>, Response> {
+async fn login(
+    State(state): State<AppState>,
+    Json(body): Json<LoginBody>,
+) -> Result<Json<Value>, Response> {
     let users = state.mongo.collection::<BsonDoc>("users");
     let user = users
         .find_one(doc! {"email": body.email.to_lowercase()})
@@ -153,7 +183,10 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Re
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
-async fn refresh(State(state): State<AppState>, Json(body): Json<RefreshBody>) -> Result<Json<Value>, Response> {
+async fn refresh(
+    State(state): State<AppState>,
+    Json(body): Json<RefreshBody>,
+) -> Result<Json<Value>, Response> {
     let claims = verify_token(&state, &body.refresh_token, "refresh")
         .await
         .map_err(|e| api_err(StatusCode::UNAUTHORIZED, e))?;

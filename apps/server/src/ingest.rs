@@ -28,7 +28,11 @@ pub async fn run(state: AppState) -> anyhow::Result<()> {
     let events = state.mongo.collection::<BsonDoc>("session_events");
     let index = mongodb::IndexModel::builder()
         .keys(doc! {"session_id": 1, "seq": 1})
-        .options(mongodb::options::IndexOptions::builder().unique(true).build())
+        .options(
+            mongodb::options::IndexOptions::builder()
+                .unique(true)
+                .build(),
+        )
         .build();
     events.create_index(index).await?;
 
@@ -60,8 +64,16 @@ async fn handle_frame(state: &AppState, payload: &str) {
             return;
         }
     };
-    let user_id = frame.get("user_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let machine_id = frame.get("machine_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let user_id = frame
+        .get("user_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let machine_id = frame
+        .get("machine_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let envelope = frame.get("envelope").cloned().unwrap_or_else(|| json!({}));
 
     ingest_one(state, &user_id, &machine_id, &envelope).await;
@@ -71,7 +83,10 @@ async fn handle_frame(state: &AppState, payload: &str) {
 }
 
 async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope: &Value) {
-    let session_id = envelope.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let session_id = envelope
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let kind = envelope.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     if session_id.is_empty() {
         return;
@@ -84,9 +99,7 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
         if let Err(e) = events.delete_many(doc! {"session_id": session_id}).await {
             tracing::error!("ingest: resync delete failed: {e}");
         }
-        let _ = sessions
-            .delete_one(doc! {"_id": session_id})
-            .await;
+        let _ = sessions.delete_one(doc! {"_id": session_id}).await;
         tracing::info!("ingest: session {session_id} resynced, history cleared");
         return;
     }
@@ -101,7 +114,10 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
         return;
     }
 
-    let persist = envelope.get("persist").and_then(|v| v.as_bool()).unwrap_or(false);
+    let persist = envelope
+        .get("persist")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if persist {
         let seq = envelope.get("seq").and_then(|v| v.as_i64()).unwrap_or(0);
         let event_doc = doc! {
@@ -128,7 +144,11 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
         }
     }
 
-    let existing = sessions.find_one(doc! {"_id": session_id}).await.ok().flatten();
+    let existing = sessions
+        .find_one(doc! {"_id": session_id})
+        .await
+        .ok()
+        .flatten();
     let prev_status = existing
         .as_ref()
         .and_then(|d| d.get_str("status").ok())
@@ -153,7 +173,10 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
         set.insert("status", s);
     }
     if kind == "message_complete" && !named {
-        if let Some(text) = envelope.pointer("/payload/blocks/0/text").and_then(|t| t.as_str()) {
+        if let Some(text) = envelope
+            .pointer("/payload/blocks/0/text")
+            .and_then(|t| t.as_str())
+        {
             set.insert("title", text.chars().take(60).collect::<String>());
         }
     }
@@ -187,13 +210,17 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
     }
     if let Err(e) = sessions
         .update_one(
-                doc! {"_id": session_id},
-                doc! {
+            doc! {"_id": session_id},
+            doc! {
                 "$set": set.clone(),
                 "$setOnInsert": {"created_at": chrono::Utc::now().to_rfc3339()},
             },
-            )
-            .with_options(mongodb::options::UpdateOptions::builder().upsert(true).build())
+        )
+        .with_options(
+            mongodb::options::UpdateOptions::builder()
+                .upsert(true)
+                .build(),
+        )
         .await
     {
         tracing::error!("ingest: session upsert failed: {e}");

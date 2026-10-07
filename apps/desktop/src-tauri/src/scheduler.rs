@@ -265,7 +265,12 @@ impl SchedulerManager {
     }
 
     /// 把一个任务注册进调度器（本地时区语义）。
-    async fn register(&self, sched: &JobScheduler, app: &AppHandle, job: &ScheduledJob) -> Result<(), String> {
+    async fn register(
+        &self,
+        sched: &JobScheduler,
+        app: &AppHandle,
+        job: &ScheduledJob,
+    ) -> Result<(), String> {
         parse_cron(&job.cron)?;
         let app2 = app.clone();
         let job_id = job.id.clone();
@@ -375,7 +380,10 @@ impl SchedulerManager {
         } else {
             "automation.run_finished"
         };
-        push_event(app, auto_envelope(rec.session_id.as_deref().unwrap_or(""), kind, payload));
+        push_event(
+            app,
+            auto_envelope(rec.session_id.as_deref().unwrap_or(""), kind, payload),
+        );
     }
 
     /// 登记完成追踪 + 超时兜底
@@ -397,14 +405,29 @@ impl SchedulerManager {
                 w.get(&sid).map_or(false, |e| e.run_id == run_id)
             };
             if still {
-                mgr.finalize(&app2, &job_id, &run_id, Some(&sid), "failed", Some("运行超时（30 分钟无响应）".into()))
-                    .await;
+                mgr.finalize(
+                    &app2,
+                    &job_id,
+                    &run_id,
+                    Some(&sid),
+                    "failed",
+                    Some("运行超时（30 分钟无响应）".into()),
+                )
+                .await;
             }
         });
     }
 
     /// 终结一次运行：更新记录、保存、推事件、清理追踪
-    async fn finalize(&self, app: &AppHandle, job_id: &str, run_id: &str, session_id: Option<&str>, status: &str, error: Option<String>) {
+    async fn finalize(
+        &self,
+        app: &AppHandle,
+        job_id: &str,
+        run_id: &str,
+        session_id: Option<&str>,
+        status: &str,
+        error: Option<String>,
+    ) {
         if let Some(sid) = session_id {
             self.watching.lock().await.remove(sid);
         }
@@ -419,7 +442,11 @@ impl SchedulerManager {
             let Some(job) = jobs.iter_mut().find(|j| j.id == job_id) else {
                 return;
             };
-            let Some(rec) = job.runs.iter_mut().find(|r| r.run_id == run_id && r.status == "running") else {
+            let Some(rec) = job
+                .runs
+                .iter_mut()
+                .find(|r| r.run_id == run_id && r.status == "running")
+            else {
                 return;
             };
             rec.status = status.into();
@@ -444,7 +471,10 @@ impl SchedulerManager {
             }
             payload
         };
-        push_event(app, auto_envelope(session_id.unwrap_or(""), "automation.run_finished", payload));
+        push_event(
+            app,
+            auto_envelope(session_id.unwrap_or(""), "automation.run_finished", payload),
+        );
     }
 
     /// 托盘通知用：按任务 id 取名字
@@ -481,12 +511,22 @@ impl SchedulerManager {
         };
         if let Some(status) = status {
             let error = if status == "failed" {
-                env.payload.get("message").and_then(|v| v.as_str()).map(|s| s.to_string())
+                env.payload
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
             } else {
                 None
             };
-            self.finalize(app, &entry.job_id, &entry.run_id, Some(&env.session_id), status, error)
-                .await;
+            self.finalize(
+                app,
+                &entry.job_id,
+                &entry.run_id,
+                Some(&env.session_id),
+                status,
+                error,
+            )
+            .await;
         }
     }
 
@@ -520,7 +560,10 @@ impl SchedulerManager {
         for job in jobs {
             let mut v = serde_json::to_value(&job).map_err(|e| e.to_string())?;
             let next = if job.enabled {
-                parse_cron(&job.cron).ok().and_then(|c| c.find_next_occurrence(&now, false).ok()).map(|t| t.timestamp_millis())
+                parse_cron(&job.cron)
+                    .ok()
+                    .and_then(|c| c.find_next_occurrence(&now, false).ok())
+                    .map(|t| t.timestamp_millis())
             } else {
                 None
             };
@@ -531,7 +574,8 @@ impl SchedulerManager {
     }
 
     async fn save_job(&self, app: &AppHandle, params: &Value) -> Result<Value, String> {
-        let mut job: ScheduledJob = serde_json::from_value(params.clone()).map_err(|e| format!("参数无效: {e}"))?;
+        let mut job: ScheduledJob =
+            serde_json::from_value(params.clone()).map_err(|e| format!("参数无效: {e}"))?;
         job.name = job.name.trim().to_string();
         job.prompt = job.prompt.trim().to_string();
         job.cron = job.cron.trim().to_string();
@@ -596,7 +640,10 @@ impl SchedulerManager {
 
     async fn set_enabled(&self, app: &AppHandle, params: &Value) -> Result<Value, String> {
         let id = params.get("id").and_then(|v| v.as_str()).ok_or("缺少 id")?;
-        let enabled = params.get("enabled").and_then(|v| v.as_bool()).ok_or("缺少 enabled")?;
+        let enabled = params
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .ok_or("缺少 enabled")?;
         let job = {
             let mut jobs = self.jobs.lock().await;
             let Some(j) = jobs.iter_mut().find(|j| j.id == id) else {
@@ -636,8 +683,15 @@ impl SchedulerManager {
     }
 
     async fn peek(&self, params: &Value) -> Result<Value, String> {
-        let expr = params.get("cron").and_then(|v| v.as_str()).ok_or("缺少 cron")?;
-        let count = params.get("count").and_then(|v| v.as_u64()).unwrap_or(3).clamp(1, 10) as usize;
+        let expr = params
+            .get("cron")
+            .and_then(|v| v.as_str())
+            .ok_or("缺少 cron")?;
+        let count = params
+            .get("count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3)
+            .clamp(1, 10) as usize;
         let cron = parse_cron(expr)?;
         let times = next_n_fire_ms(&cron, count).ok_or("无法计算下一次触发时间")?;
         Ok(json!({ "times": times }))
@@ -679,7 +733,11 @@ async fn execute_run(app: &AppHandle, job: ScheduledJob, mut run: RunRecord) {
         }
         // 命名便于在侧栏识别定时任务的会话
         supervisor
-            .request(app.clone(), "session.rename".into(), json!({ "session_id": sid, "name": format!("⏰ {}", job.name) }))
+            .request(
+                app.clone(),
+                "session.rename".into(),
+                json!({ "session_id": sid, "name": format!("⏰ {}", job.name) }),
+            )
             .await?;
         let mut prompt_params = json!({ "session_id": sid, "text": job.prompt });
         if let Some(imgs) = &job.images {
@@ -698,7 +756,8 @@ async fn execute_run(app: &AppHandle, job: ScheduledJob, mut run: RunRecord) {
     match exec {
         Ok(sid) => {
             mgr.push_record(app, &job.id, run.clone()).await;
-            mgr.watch_run(app, &sid, job.id.clone(), run.run_id.clone()).await;
+            mgr.watch_run(app, &sid, job.id.clone(), run.run_id.clone())
+                .await;
         }
         Err(e) => {
             mgr.push_record(
@@ -787,9 +846,18 @@ mod tests {
     fn window_states() {
         let now = 1_000_000i64;
         assert!(matches!(window_of(None, None, now), Window::Active));
-        assert!(matches!(window_of(Some(2_000_000), None, now), Window::NotStarted));
-        assert!(matches!(window_of(None, Some(500_000), now), Window::Expired));
-        assert!(matches!(window_of(Some(500_000), Some(2_000_000), now), Window::Active));
+        assert!(matches!(
+            window_of(Some(2_000_000), None, now),
+            Window::NotStarted
+        ));
+        assert!(matches!(
+            window_of(None, Some(500_000), now),
+            Window::Expired
+        ));
+        assert!(matches!(
+            window_of(Some(500_000), Some(2_000_000), now),
+            Window::Active
+        ));
         // 边界：恰好等于结束时间视为过期
         assert!(matches!(window_of(None, Some(now), now), Window::Expired));
     }
@@ -845,7 +913,10 @@ mod tests {
             workspace: Some("D:\\work".into()),
             model: None,
             thinking_level: Some("medium".into()),
-            images: Some(vec![JobImage { data: "aGk=".into(), mime_type: "image/png".into() }]),
+            images: Some(vec![JobImage {
+                data: "aGk=".into(),
+                mime_type: "image/png".into(),
+            }]),
             permission_mode: default_permission_mode(),
             starts_at: None,
             ends_at: Some(1798761600000),
