@@ -21,12 +21,15 @@ export function createWebBus(auth: AuthClient): DataBus & {
   onMachineStatus: (cb: (machineId: string, status: string) => void) => void;
   onRawFrame: (cb: (frame: any) => void) => void;
   onSessionUpserted: (cb: (machineId: string, session: any) => void) => void;
+  /** WS（重）连成功后回调：推送通道不留底，断线窗口内丢的帧在此对账 */
+  onReconnect: (cb: () => void) => void;
 } {
   let activeMachine: string | null = null;
   let machineStatusCb: ((machineId: string, status: string) => void) | null = null;
   let rawFrameCb: ((frame: any) => void) | null = null;
   let sessionUpsertedCb: ((machineId: string, session: any) => void) | null = null;
   let eventHandler: ((e: Envelope) => void) | null = null;
+  const reconnectCbs: Array<() => void> = [];
   let ws: WebSocket | null = null;
   let wsOpen = false;
   let closedByUs = false;
@@ -81,6 +84,8 @@ export function createWebBus(auth: AuthClient): DataBus & {
     ws = socket;
     socket.onopen = () => {
       wsOpen = true;
+      // 重连对账：断线窗口内丢的推送（machine_status/session_upserted 等）不会补发
+      for (const cb of reconnectCbs) cb();
       // gap-fill: refetch everything after the last seen seq per session
       if (GAP_FILL_AFTER_SEQ && eventHandler) {
         for (const [sessionId, seq] of lastSeqBySession) {
@@ -381,6 +386,9 @@ export function createWebBus(auth: AuthClient): DataBus & {
     },
     onSessionUpserted(cb: (machineId: string, session: any) => void): void {
       sessionUpsertedCb = cb;
+    },
+    onReconnect(cb: () => void): void {
+      reconnectCbs.push(cb);
     },
   };
 }

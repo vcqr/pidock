@@ -454,11 +454,17 @@ export function createAgentStore(bus: DataBus) {
       }
     }
     if (e.kind === "tool_approval") {
+      // 空载荷 = 结算信号（远端已审批/中止）：清审批等待，不新立卡
+      if (!e.payload?.approval_id) {
+        pendingBySession.value = withoutKey(pendingBySession.value, e.session_id);
+        if (e.session_id === activeId.value) pendingApproval.value = null;
+        return;
+      }
       pendingBySession.value = {
         ...pendingBySession.value,
         [e.session_id]: {
           kind: "approval",
-          approvalId: e.payload?.approval_id ?? "",
+          approvalId: e.payload.approval_id,
           toolName: e.payload?.tool_name ?? "",
           args: e.payload?.args ?? "",
         },
@@ -556,11 +562,14 @@ export function createAgentStore(bus: DataBus) {
         break;
       case "tool_approval":
         if (e.session_id && e.session_id === activeId.value) {
-          pendingApproval.value = {
-            approvalId: e.payload?.approval_id ?? "",
-            toolName: e.payload?.tool_name ?? "",
-            args: e.payload?.args ?? "",
-          };
+          // 空载荷 = 结算信号：清除审批卡（与 ask_user_question 空载荷语义一致）
+          pendingApproval.value = e.payload?.approval_id
+            ? {
+                approvalId: e.payload.approval_id,
+                toolName: e.payload?.tool_name ?? "",
+                args: e.payload?.args ?? "",
+              }
+            : null;
         }
         break;
       case "ask_user_question": {

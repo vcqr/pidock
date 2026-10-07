@@ -209,6 +209,11 @@ function boot(state: any, client: AuthClient): void {
       });
       if (machineId !== activeMachineId.value) void refreshMachines();
     });
+    // WS（重）连成功即对账：机器在线状态与会话列表不用等 10s/30s 轮询兜底
+    b.onReconnect(() => {
+      void refreshMachines();
+      void s.refreshSessions();
+    });
     setInterval(() => void s.refreshSessions(), 30000);
   });
 }

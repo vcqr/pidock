@@ -954,6 +954,8 @@ export class SessionPool {
   private askUser(sessionId: string, question: AskQuestion): Promise<AskAnswer | "timeout" | null> {
     if (!sessionId || !this.sessions.has(sessionId)) return Promise.resolve(null);
     const askId = randomUUID();
+    // timeoutMs 必须先于 pending 创建（executor 同步执行，后置声明会 TDZ 炸掉整个提问）
+    const timeoutMs = this.askTimeoutMs();
     const pending = new Promise<AskAnswer | "timeout" | null>((resolve) => {
       this.pendingAsks.set(askId, {
         sessionId,
@@ -962,7 +964,6 @@ export class SessionPool {
         resolve,
       });
     });
-    const timeoutMs = this.askTimeoutMs();
     emitEvent(
       sessionId,
       Event.ASK_USER_QUESTION,
@@ -1235,6 +1236,8 @@ export class SessionPool {
     if (!pending) return { ok: false };
     this.pendingApprovals.delete(params.approval_id);
     pending.resolve(params.approved);
+    // 结算广播（空载荷 = 清卡信号）：另一端（web/桌面）不等 toolResult 落盘就确定性关卡
+    emitEvent(pending.sessionId, Event.TOOL_APPROVAL, {}, { persist: false });
     return { ok: true };
   }
 
@@ -1268,6 +1271,8 @@ export class SessionPool {
     if (!pending) return false;
     this.pendingAsks.delete(askId);
     pending.resolve(answer);
+    // 结算广播（空载荷 = 清卡信号）：另一端（web/桌面）不等 toolResult 落盘就确定性关卡
+    emitEvent(pending.sessionId, Event.ASK_USER_QUESTION, {}, { persist: false });
     return true;
   }
 
@@ -1285,22 +1290,28 @@ export class SessionPool {
   }
 
   private denyApprovals(sessionId: string): void {
+    let denied = false;
     for (const [id, pending] of this.pendingApprovals) {
       if (pending.sessionId === sessionId) {
         this.pendingApprovals.delete(id);
         pending.resolve(false);
+        denied = true;
       }
     }
+    if (denied) emitEvent(sessionId, Event.TOOL_APPROVAL, {}, { persist: false });
   }
 
   /** 会话中止/关闭时把挂起提问按用户取消处理，避免工具卡死在等待 */
   private denyAsks(sessionId: string): void {
+    let denied = false;
     for (const [id, pending] of this.pendingAsks) {
       if (pending.sessionId === sessionId) {
         this.pendingAsks.delete(id);
         pending.resolve(null);
+        denied = true;
       }
     }
+    if (denied) emitEvent(sessionId, Event.ASK_USER_QUESTION, {}, { persist: false });
   }
 
   async setThinkingLevel(params: { session_id: string; level: string }): Promise<{ ok: true }> {
