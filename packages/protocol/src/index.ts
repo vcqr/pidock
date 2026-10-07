@@ -243,6 +243,12 @@ export interface PendingStatePayload {
   ask: PendingAskInfo | null;
 }
 
+/** session_settings_changed 载荷：任一字段变化时携带（权限模式/思考级别） */
+export interface SessionSettingsChangedPayload {
+  permission_mode?: string;
+  thinking_level?: string;
+}
+
 export interface PendingApprovalInfo {
   approval_id: string;
   tool_name: string;
@@ -323,6 +329,10 @@ export const Event = {
   TODO_UPDATED: "todo_updated",
   TOOL_APPROVAL: "tool_approval",
   ASK_USER_QUESTION: "ask_user_question",
+  /** 会话已从注册表移除（桌面 UI 实时摘除；云端 ingest 删镜像行与事件） */
+  SESSION_REMOVED: "session_removed",
+  /** 会话级设置变化（权限模式/思考级别），两端 UI chip 实时跟随 */
+  SESSION_SETTINGS_CHANGED: "session_settings_changed",
   /** web 命令的执行结果回执（bus 按 command_id 关联 resolve/reject） */
   COMMAND_RESULT: "command_result",
   ERROR: "error",

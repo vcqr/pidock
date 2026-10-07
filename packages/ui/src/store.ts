@@ -244,6 +244,13 @@ export function createAgentStore(bus: DataBus) {
   let liveTools = new Map<string, UiToolItem>();
   let streaming: UiMessageItem | null = null;
 
+  /** 浅拷贝并移除一个 key（按会话清理缓存 map 用） */
+  function withoutKey<T>(rec: Record<string, T>, sid: string): Record<string, T> {
+    const next = { ...rec };
+    delete next[sid];
+    return next;
+  }
+
   function ensureStreaming(messageId: string): UiMessageItem {
     if (streaming && streaming.key === messageId) return streaming;
     streaming = pushItem(items.value, {
@@ -401,6 +408,42 @@ export function createAgentStore(bus: DataBus) {
       };
       return;
     }
+    if (e.kind === "session_settings_changed") {
+      // 会话级设置变化（权限模式/思考级别）：web 改 → 桌面跟随，反向亦然
+      const p = e.payload ?? {};
+      if (e.session_id && typeof p.permission_mode === "string" && p.permission_mode) {
+        permissionModes.value = { ...permissionModes.value, [e.session_id]: p.permission_mode as PermissionMode };
+      }
+      if (e.session_id && typeof p.thinking_level === "string" && p.thinking_level) {
+        thinkingLevels.value = { ...thinkingLevels.value, [e.session_id]: p.thinking_level };
+      }
+      return;
+    }
+    if (e.kind === "session_removed") {
+      // 会话已从 host 注册表移除（本端或另一端发起）：实时摘除，不等轮询
+      const sid = e.session_id;
+      sessions.value = sessions.value.filter((s) => s.session_id !== sid);
+      todosBySession.value = withoutKey(todosBySession.value, sid);
+      queueBySession.value = withoutKey(queueBySession.value, sid);
+      contextBySession.value = withoutKey(contextBySession.value, sid);
+      thinkingBySession.value = withoutKey(thinkingBySession.value, sid);
+      pendingBySession.value = withoutKey(pendingBySession.value, sid);
+      autoRetryBySession.value = withoutKey(autoRetryBySession.value, sid);
+      compactingBySession.value = withoutKey(compactingBySession.value, sid);
+      const { [sid]: _stale, ...restCompaction } = compactionBySession.value;
+      compactionBySession.value = restCompaction;
+      if (activeId.value === sid) {
+        activeId.value = null;
+        items.value = [];
+        liveTools = new Map();
+        streaming = null;
+        agentState.value = "idle";
+        lastError.value = null;
+        pendingApproval.value = null;
+        pendingAsk.value = null;
+      }
+      return;
+    }
     // ---- 全局层：不依赖活动会话（后台会话等待确认不再丢失） ----
     if (e.kind === "agent_state_changed") {
       const st = e.payload?.state;
@@ -535,11 +578,16 @@ export function createAgentStore(bus: DataBus) {
         break;
       }
       case "session_meta": {
-        // host 用首条用户消息自动生成标题后实时推送
+        // host 用首条用户消息自动生成标题后实时推送；set_model 推送模型变化
         const name = e.payload?.name;
         if (e.session_id && typeof name === "string" && name) {
           const s = sessions.value.find((x) => x.session_id === e.session_id);
           if (s) s.name = name;
+        }
+        const model = e.payload?.model;
+        if (e.session_id && typeof model === "string" && model) {
+          const s = sessions.value.find((x) => x.session_id === e.session_id);
+          if (s) s.model = model;
         }
         break;
       }

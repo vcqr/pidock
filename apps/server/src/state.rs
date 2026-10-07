@@ -96,6 +96,8 @@ impl AppState {
                         "hostname": meta.get("hostname").and_then(|v| v.as_str()).unwrap_or(""),
                         "os": meta.get("os").and_then(|v| v.as_str()).unwrap_or(""),
                         "version": meta.get("version").and_then(|v| v.as_str()).unwrap_or(""),
+                        // host 主目录：web 端据此把 cwd===home 的会话拆进「任务」分组
+                        "home": meta.get("home_dir").and_then(|v| v.as_str()).unwrap_or(""),
                         "last_seen": chrono::Utc::now().to_rfc3339(),
                     },
                     "$setOnInsert": { "created_at": chrono::Utc::now().to_rfc3339() }

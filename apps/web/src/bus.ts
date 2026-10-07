@@ -182,7 +182,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
             open: true, // never trigger session.open over the web
             state: s.status === "running" ? "responding" : s.status === "idle" ? "idle" : s.status,
           }));
-          return { sessions };
+          return { sessions, home: r.home || undefined };
         }
         case "session.events": {
           if (!activeMachine) return { events: [] };

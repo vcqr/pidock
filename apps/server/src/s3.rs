@@ -2,7 +2,6 @@
 //! bucket creation. No aws-sdk dependency; region us-east-1 semantics.
 
 use hmac::{Hmac, Mac};
-use serde_json::json;
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -143,13 +142,6 @@ impl S3Client {
                 anyhow::bail!("bucket create failed: {status} {body:.200}")
             }
         }
-    }
-
-    pub fn health_probe(&self) -> serde_json::Value {
-        json!({
-            "endpoint": self.endpoint,
-            "bucket": self.bucket,
-        })
     }
 }
 

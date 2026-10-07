@@ -11,13 +11,14 @@ mod state;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, get_service, post},
     Json, Router,
 };
 use mongodb::bson::{doc, Document as BsonDoc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 use futures_util::TryStreamExt;
 
 use crate::state::AppState;
@@ -214,6 +215,16 @@ async fn machine_sessions(
         .await
         .map(|c| c.sub)
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    // 机器注册帧带来的 host 主目录（侧栏「项目/任务」拆分依据；旧机器行没有该字段则为空）
+    let home = state
+        .mongo
+        .collection::<BsonDoc>("machines")
+        .find_one(doc! {"_id": &machine_id})
+        .await
+        .ok()
+        .flatten()
+        .and_then(|d| d.get_str("home").ok().map(str::to_string))
+        .unwrap_or_default();
     let docs = state
         .mongo
         .collection::<BsonDoc>("sessions")
@@ -246,7 +257,7 @@ async fn machine_sessions(
             })
         })
         .collect();
-    Ok(Json(json!({"sessions": sessions})))
+    Ok(Json(json!({"sessions": sessions, "home": home})))
 }
 
 /// 删除镜像里的单个会话及其事件（web 端「移除项目/删除会话」时，
@@ -422,7 +433,8 @@ async fn main() {
         }
     });
 
-    // web UI static hosting (optional; docker image ships apps/web/dist)
+    // web UI static hosting (optional; docker image ships apps/web/dist):
+    // API 路由优先，未命中的路径交给 ServeDir（SPA 单页，index.html 兜底目录）
     let web_dir = std::env::var("PIDOCK_WEB_DIR").unwrap_or_default();
 
     let app = Router::new()
@@ -447,6 +459,14 @@ async fn main() {
         .merge(auth::router())
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
+    let app = if web_dir.is_empty() {
+        app
+    } else {
+        tracing::info!("hosting web console from {web_dir}");
+        app.fallback_service(get_service(
+            ServeDir::new(&web_dir).append_index_html_on_directories(true),
+        ))
+    };
 
     let bind = state.cfg.bind.clone();
     let listener = tokio::net::TcpListener::bind(&bind).await.expect("bind");

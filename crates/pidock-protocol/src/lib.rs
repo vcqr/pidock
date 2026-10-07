@@ -119,6 +119,8 @@ pub mod ephemeral {
     pub const TODO_UPDATED: &str = "todo_updated";
     pub const TOOL_APPROVAL: &str = "tool_approval";
     pub const ASK_USER_QUESTION: &str = "ask_user_question";
+    pub const SESSION_REMOVED: &str = "session_removed";
+    pub const SESSION_SETTINGS_CHANGED: &str = "session_settings_changed";
     pub const COMMAND_RESULT: &str = "command_result";
     /// 上下文用量推送（agent_settled/compaction_end/会话打开时由 host 发）
     pub const CONTEXT_USAGE: &str = "context_usage";

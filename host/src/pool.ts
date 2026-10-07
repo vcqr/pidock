@@ -289,6 +289,10 @@ export class SessionPool {
       if (ids.has(e.session_id)) this.closeSession({ session_id: e.session_id });
     }
     writeFileSync(this.registryPath(), JSON.stringify({ sessions: kept }, null, 2));
+    // 逐会话广播移除事件：桌面 UI 实时摘除（不等轮询），云端 ingest 删镜像行
+    for (const e of all) {
+      if (ids.has(e.session_id)) emitEvent(e.session_id, Event.SESSION_REMOVED, {});
+    }
     return { removed };
   }
 
@@ -523,12 +527,19 @@ export class SessionPool {
   }
 
   async openSession(params: { file: string }): Promise<{ session_id: string; file: string; cwd: string; expert_id?: string; expert_name?: string }> {
-    const sessionManager = SessionManager.open(params.file);
+    return this.openSessionManager(SessionManager.open(params.file), params.file);
+  }
+
+  /** openSession 的主体（接受外部构造好的 SessionManager，供 ensureOpen 强制会话 id 复用） */
+  private async openSessionManager(
+    sessionManager: SessionManager,
+    file: string,
+  ): Promise<{ session_id: string; file: string; cwd: string; expert_id?: string; expert_name?: string }> {
     const cwd = sessionManager.getCwd() || process.cwd();
     this.requireTrustDecision(cwd);
     // 重开会话按注册表里的 expert_id 重放专家配置（专家已被删除则回退普通会话）；
     // 注册表条目同时供 session_meta 带出分叉溯源（parent_session_id）
-    const registryEntry = this.readRegistry().find((e) => e.file === params.file);
+    const registryEntry = this.readRegistry().find((e) => e.file === file);
     const expertCfg = this.experts.resolveForSession(registryEntry?.expert_id);
     // 与 createSession 一致：权限模式不持久化，重开回到默认（专家会话回到专家预设）计划模式
     const permission = { mode: expertCfg?.expert.permission_mode ?? "plan" };
@@ -621,7 +632,7 @@ export class SessionPool {
     emitEvent(sessionId, Event.CONTEXT_USAGE, this.contextUsagePayload(tracked), { persist: false });
     return {
       session_id: sessionId,
-      file: params.file,
+      file,
       cwd,
       ...(expertCfg ? { expert_id: expertCfg.expert.id, expert_name: expertCfg.expert.name } : {}),
     };
@@ -856,6 +867,7 @@ export class SessionPool {
     /** 文档附件（txt/pdf/office 等），host 侧提取文本后追加到 prompt；图片类路由进 images */
     attachments?: IncomingAttachment[];
   }): Promise<{ accepted: boolean }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     this.autoTitle(params.session_id, params.text);
     const rawImages = (params.images ?? []).slice(0, 6).filter((img) => img?.data);
@@ -985,7 +997,8 @@ export class SessionPool {
     }
   }
 
-  setPermissionMode(params: { session_id: string; mode: PermissionMode }): { ok: true } {
+  async setPermissionMode(params: { session_id: string; mode: PermissionMode }): Promise<{ ok: true }> {
+    await this.ensureOpen(params.session_id);
     const state = this.permissionStates.get(params.session_id);
     if (!state) throw new RpcError("session_not_found", `unknown session "${params.session_id}"`);
     if (!PERMISSION_MODES.includes(params.mode)) {
@@ -997,6 +1010,8 @@ export class SessionPool {
       this.applyPlanToolFilter(params.session_id, tracked, params.mode === "plan" && state.mode !== "plan");
     }
     state.mode = params.mode;
+    // 广播设置变化：web 与桌面 UI 权限 chip 实时跟随（web 改 → 桌面跟随，反向亦然）
+    emitEvent(params.session_id, Event.SESSION_SETTINGS_CHANGED, { permission_mode: params.mode });
     return { ok: true };
   }
 
@@ -1288,7 +1303,8 @@ export class SessionPool {
     }
   }
 
-  setThinkingLevel(params: { session_id: string; level: string }): { ok: true } {
+  async setThinkingLevel(params: { session_id: string; level: string }): Promise<{ ok: true }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     // 按当前模型的能力集校验（getAvailableThinkingLevels），不支持思考的模型直接报错
     const levels = tracked.session.getAvailableThinkingLevels() as string[];
@@ -1299,6 +1315,7 @@ export class SessionPool {
       );
     }
     tracked.session.setThinkingLevel(params.level as never);
+    emitEvent(params.session_id, Event.SESSION_SETTINGS_CHANGED, { thinking_level: params.level });
     return { ok: true };
   }
 
@@ -1346,6 +1363,8 @@ export class SessionPool {
       entry.model = `${match.provider}/${match.id}`;
       this.writeRegistryEntry(entry);
     }
+    // 模型变化广播（web 端会话列表/桌面侧栏跟随；云端镜像存 model）
+    emitEvent(params.session_id, Event.SESSION_META, { model: `${match.provider}/${match.id}` });
     return { ok: true, model: `${match.provider}/${match.id}` };
   }
 
@@ -1668,7 +1687,8 @@ export class SessionPool {
     emitEvent(sessionId, Event.SESSION_META, { name: title });
   }
 
-  steer(params: { session_id: string; text: string }): { accepted: boolean } {
+  async steer(params: { session_id: string; text: string }): Promise<{ accepted: boolean }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     tracked.session
       .steer(params.text)
@@ -1676,7 +1696,8 @@ export class SessionPool {
     return { accepted: true };
   }
 
-  followUp(params: { session_id: string; text: string }): { accepted: boolean } {
+  async followUp(params: { session_id: string; text: string }): Promise<{ accepted: boolean }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     tracked.session
       .followUp(params.text)
@@ -1685,6 +1706,7 @@ export class SessionPool {
   }
 
   async abort(params: { session_id: string }): Promise<{ aborted: boolean }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     // 中断时挂起的工具审批全部按拒绝处理，避免工具卡在等待状态
     this.denyApprovals(params.session_id);
@@ -1702,7 +1724,8 @@ export class SessionPool {
   // -------------------------------------------------------- context/queue
 
   /** 手动压缩上下文：fire-and-forget（耗时可达数十秒），进度/结果走 compaction_lifecycle 与 compaction_summary 事件 */
-  compactSession(params: { session_id: string; instructions?: string }): { accepted: boolean } {
+  async compactSession(params: { session_id: string; instructions?: string }): Promise<{ accepted: boolean }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     if (tracked.session.isCompacting) return { accepted: false };
     tracked.session
@@ -1712,7 +1735,8 @@ export class SessionPool {
   }
 
   /** 当前上下文用量 + 会话统计摘要（仪表条数据源；开关状态随事件/本响应一起返回） */
-  contextUsage(params: { session_id: string }): Record<string, unknown> {
+  async contextUsage(params: { session_id: string }): Promise<Record<string, unknown>> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     const s = tracked.session;
     const stats = s.getSessionStats();
@@ -1747,18 +1771,23 @@ export class SessionPool {
   }
 
   /** 开关自动压缩（内存态，重开会话回到 SDK 默认开启） */
-  setAutoCompaction(params: { session_id: string; enabled: boolean }): { ok: true; enabled: boolean } {
+  async setAutoCompaction(params: { session_id: string; enabled: boolean }): Promise<{ ok: true; enabled: boolean }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     const enabled = Boolean(params.enabled);
     tracked.session.setAutoCompactionEnabled(enabled);
+    // 开关随 context_usage 载荷广播（单一数据源，两端仪表条/设置弹窗跟随）
+    emitEvent(params.session_id, Event.CONTEXT_USAGE, this.contextUsagePayload(tracked), { persist: false });
     return { ok: true, enabled };
   }
 
   /** 开关自动重试（内存态） */
-  setAutoRetry(params: { session_id: string; enabled: boolean }): { ok: true; enabled: boolean } {
+  async setAutoRetry(params: { session_id: string; enabled: boolean }): Promise<{ ok: true; enabled: boolean }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     const enabled = Boolean(params.enabled);
     tracked.session.setAutoRetryEnabled(enabled);
+    emitEvent(params.session_id, Event.CONTEXT_USAGE, this.contextUsagePayload(tracked), { persist: false });
     return { ok: true, enabled };
   }
 
@@ -1907,6 +1936,28 @@ export class SessionPool {
     const tracked = this.sessions.get(sessionId);
     if (!tracked) throw new RpcError("session_not_found", `session "${sessionId}" is not open`);
     return tracked;
+  }
+
+  /**
+   * 交互命令（prompt/steer/follow_up/abort/compact/context_usage）前确保会话在
+   * 本 host 进程内打开：web/云中继可能命中一个本进程从未打开过的会话（桌面
+   * 重启后尤其如此），按注册表兜底重开，避免 session_not_found。
+   * 聊过天的会话文件在盘上、头里就是原 id，直接 open；从未聊过的会话 pi 首条
+   * 消息才落盘（无文件），open 会翻新 id —— 用 newSession({id}) 强制沿用注册表
+   * 身份，首个会话条目落盘时头即正确。项目不信任等 openSession 自身错误原样上抛。
+   */
+  private async ensureOpen(sessionId: string): Promise<void> {
+    if (this.sessions.has(sessionId)) return;
+    const entry = this.readRegistry().find((e) => e.session_id === sessionId);
+    if (!entry?.file)
+      throw new RpcError("session_not_found", `session "${sessionId}" is not open`);
+    if (existsSync(entry.file)) {
+      await this.openSession({ file: entry.file });
+      return;
+    }
+    const sm = SessionManager.open(entry.file);
+    sm.newSession({ id: entry.session_id });
+    await this.openSessionManager(sm, entry.file);
   }
 
   /** subscribe to pi session events and map them to pidock envelopes */

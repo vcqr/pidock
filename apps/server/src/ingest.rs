@@ -91,6 +91,16 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
         return;
     }
 
+    // removal marker: drop the mirror row + events entirely (session 已从 host 注册表移除)
+    if kind == "session_removed" {
+        if let Err(e) = events.delete_many(doc! {"session_id": session_id}).await {
+            tracing::error!("ingest: remove delete failed: {e}");
+        }
+        let _ = sessions.delete_one(doc! {"_id": session_id}).await;
+        tracing::info!("ingest: session {session_id} removed, mirror cleared");
+        return;
+    }
+
     let persist = envelope.get("persist").and_then(|v| v.as_bool()).unwrap_or(false);
     if persist {
         let seq = envelope.get("seq").and_then(|v| v.as_i64()).unwrap_or(0);

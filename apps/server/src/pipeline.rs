@@ -32,9 +32,12 @@ pub trait EventSource: Send + Sync {
 pub mod kafka {
     use super::*;
     use rdkafka::{
+        admin::{AdminClient, AdminOptions, NewTopic, TopicReplication},
+        client::DefaultClientContext,
         config::ClientConfig,
         consumer::{Consumer, StreamConsumer},
         producer::{FutureProducer, FutureRecord},
+        types::RDKafkaErrorCode,
         Message,
     };
 
@@ -70,9 +73,35 @@ pub mod kafka {
 
     pub struct KafkaSource {
         consumer: StreamConsumer,
-        topic: String,
     }
 
+    /// 预建 topic（单分区：ingest 单 worker 保序）。broker 侧自动建 topic 是
+    /// 惰性的，消费端在 topic 缺位时会持续报 UnknownTopicOrPartition，
+    /// 启动时显式建掉，失败不阻塞（消费端每秒重试）。
+    pub async fn ensure_topic(brokers: &str, topic: &str) {
+        let admin: AdminClient<DefaultClientContext> = ClientConfig::new()
+            .set("bootstrap.servers", brokers)
+            .create()
+            .expect("kafka admin client");
+        let new_topic = NewTopic::new(topic, 1, TopicReplication::Fixed(1));
+        let results = admin.create_topics([&new_topic], &AdminOptions::new()).await;
+        match results {
+            Ok(entries) => {
+                for entry in entries {
+                    match entry {
+                        Ok(_) => tracing::info!("kafka topic ready: {topic}"),
+                        Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => {
+                            tracing::info!("kafka topic exists: {topic}")
+                        }
+                        Err((name, code)) => {
+                            tracing::warn!("kafka ensure topic {name} failed: {code}")
+                        }
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("kafka ensure topic failed (non-fatal): {e}"),
+        }
+    }
 
     impl KafkaSource {
         pub fn connect(brokers: &str, topic: &str) -> anyhow::Result<Self> {
@@ -86,7 +115,7 @@ pub mod kafka {
                 .set("heartbeat.interval.ms", "3000")
                 .create()?;
             consumer.subscribe(&[topic])?;
-            Ok(Self { consumer, topic: topic.into() })
+            Ok(Self { consumer })
         }
     }
 
@@ -221,6 +250,7 @@ pub async fn make_sink(cfg: &crate::config::Config) -> anyhow::Result<std::sync:
         #[cfg(feature = "kafka")]
         {
             tracing::info!("event pipeline: kafka");
+            kafka::ensure_topic(&cfg.kafka_brokers, &cfg.kafka_topic).await;
             Ok(std::sync::Arc::new(kafka::KafkaSink::connect(
                 &cfg.kafka_brokers,
                 &cfg.kafka_topic,

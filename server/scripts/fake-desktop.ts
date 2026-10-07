@@ -86,7 +86,7 @@ async function main(): Promise<number> {
   const machineId = `e2e-machine-${Date.now()}`;
   const sessionId = `e2e-session-${Date.now()}`;
   wsDesktop.send(
-    JSON.stringify({ ctrl: "register", machine_id: machineId, hostname: "e2e-host", os: "linux", version: "0.1.0" }),
+    JSON.stringify({ ctrl: "register", machine_id: machineId, hostname: "e2e-host", os: "linux", version: "0.1.0", home_dir: "/home/e2e" }),
   );
   const registered = await nextMessage(wsDesktop);
   check("desktop register ack", registered.ctrl === "registered" && registered.machine_id === machineId);
@@ -139,6 +139,8 @@ async function main(): Promise<number> {
   const sessions = await api("GET", `/machines/${machineId}/sessions?token=${token}`);
   const s = sessions.sessions?.find((x: any) => x.session_id === sessionId);
   check("session row exists with status", s !== undefined && s.status === "running", s?.status);
+  // 注册帧的 home_dir 落到机器文档并透出（web 侧栏「项目/任务」拆分依据）
+  check("session list carries home", sessions.home === "/home/e2e", sessions.home);
 
   // --- web live push: ingest of a new event should arrive over /ws/web
   const pushPromise = nextEnvelope(wsWeb, 10000);
@@ -238,6 +240,12 @@ async function main(): Promise<number> {
     if (rebuilt.length === 2 && rebuilt[0]?.payload?.blocks?.[0]?.text === "压缩后摘要") break;
   }
   check("compaction resync rebuilds history", rebuilt.length === 2 && rebuilt[0]?.payload?.blocks?.[0]?.text === "压缩后摘要", `${rebuilt.length} events after resync`);
+
+  // session removal: host 注册表移除后广播 session_removed，云端镜像行与事件同删
+  wsDesktop.send(JSON.stringify(envelope(0, "session_removed", {}, false)));
+  await sleep(1500);
+  const afterRemove = await api("GET", `/machines/${machineId}/sessions?token=${token}`);
+  check("session removal clears mirror", !(afterRemove.sessions ?? []).some((x: any) => x.session_id === sessionId));
 
   // command to an offline machine is refused
   const offline = await api("POST", "/commands", undefined, {

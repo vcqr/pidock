@@ -142,6 +142,8 @@ fn cloud_worthy(kind: &str) -> bool {
             | "auto_retry"
             | "compaction_lifecycle"
             | "todo_updated"
+            | "session_removed"
+            | "session_settings_changed"
             | "command_result"
             | "context_usage"
             | "queue_changed"
@@ -480,14 +482,18 @@ async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_prot
         backoff_secs = 1;
         let (mut ws_sink, mut ws_stream) = ws.split();
 
-        // 3) register machine
+        // 3) register machine（home_dir 供云端镜像做「项目/任务」拆分，与 host homedir 同源）
         let hostname = hostname();
+        let home_dir = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_default();
         let register = json!({
             "ctrl": "register",
             "machine_id": cfg.machine_id,
             "hostname": hostname,
             "os": std::env::consts::OS,
             "version": env!("CARGO_PKG_VERSION"),
+            "home_dir": home_dir,
         });
         if ws_sink.send(WsMessage::Text(register.to_string().into())).await.is_err() {
             continue;
