@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, provide, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
 import { darkTheme, NConfigProvider } from "naive-ui";
 import {
   appConfirm,
@@ -19,6 +19,9 @@ import {
 } from "@pidock/ui";
 import { ApiError, AuthClient, loadAuth, clearAuth } from "./auth.js";
 import { createWebBus, type WebBus } from "./bus.js";
+import MachineCard from "./components/MachineCard.vue";
+import MachinePopover from "./components/MachinePopover.vue";
+import { osMeta, type MachineUi } from "./machine.js";
 
 initTheme();
 const naiveTheme = computed(() => (themeMode.value === "dark" ? darkTheme : undefined));
@@ -36,17 +39,36 @@ const loginBusy = ref(false);
 const loginError = ref<string | null>(null);
 const registerMode = ref(false);
 
-// machines
-interface MachineUi {
-  machine_id: string;
-  hostname: string;
-  os: string;
-  online: boolean;
-  last_seen: string;
+/** 首页节点搜索过滤（主机名/系统/版本/ID），Ctrl+K 聚焦 */
+const nodeFilter = ref("");
+const searchInput = ref<HTMLInputElement | null>(null);
+const filteredMachines = computed(() => {
+  const q = nodeFilter.value.trim().toLowerCase();
+  if (!q) return machines.value;
+  return machines.value.filter(
+    (m) =>
+      [m.hostname, m.machine_id, m.os, m.version ?? ""].some((v) => v.toLowerCase().includes(q)) ||
+      osMeta(m.os).name.toLowerCase().includes(q),
+  );
+});
+
+function onGlobalKey(e: KeyboardEvent): void {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && view.value === "home") {
+    e.preventDefault();
+    searchInput.value?.focus();
+  }
 }
+
+// machines（类型与 OS 元数据见 machine.ts）
 const machines = ref<MachineUi[]>([]);
 const activeMachineId = ref<string | null>(null);
 const activeMachine = computed(() => machines.value.find((m) => m.machine_id === activeMachineId.value));
+const activeOsMeta = computed(() => osMeta(activeMachine.value?.os));
+/** 每台机器的会话数（首页卡片与机器详情浮层用），null=尚未取到 */
+const sessionCounts = ref<Record<string, number | null>>({});
+/** home=机器卡片墙；ws=会话工作区（登录后先见 home） */
+const view = ref<"home" | "ws">("home");
+const showMachineInfo = ref(false);
 
 async function refreshMachines(): Promise<void> {
   if (!auth.value || !bus.value) return;
@@ -65,7 +87,7 @@ async function refreshMachines(): Promise<void> {
 
 async function deleteMachine(m: MachineUi): Promise<void> {
   if (!auth.value) return;
-  if (!(await appConfirm({ title: `删除机器「${m.hostname || m.machine_id.slice(0, 8)}」？`, message: "将删除该机器及其全部同步数据。", danger: true }))) return;
+  if (!(await appConfirm({ title: `删除节点「${m.hostname || m.machine_id.slice(0, 8)}」？`, message: "将删除该节点及其全部同步数据。", danger: true }))) return;
   try {
     await auth.value.request(`/machines/${m.machine_id}?token=${auth.value.token}`, { method: "DELETE" });
     if (activeMachineId.value === m.machine_id) {
@@ -82,6 +104,36 @@ async function selectMachine(machineId: string): Promise<void> {
   activeMachineId.value = machineId;
   bus.value?.setMachine(machineId);
   await store.value?.refreshSessions();
+}
+
+/** 拉取每台机器的会话数（首页卡片/详情浮层），单台失败保留旧值 */
+async function refreshSessionCounts(): Promise<void> {
+  if (!auth.value) return;
+  await Promise.all(
+    machines.value.map(async (m) => {
+      try {
+        const r = await auth.value!.request(`/machines/${m.machine_id}/sessions?token=${auth.value!.token}`);
+        sessionCounts.value[m.machine_id] = (r.sessions ?? []).length;
+      } catch {
+        /* 保留上次计数 */
+      }
+    }),
+  );
+}
+
+/** 首页卡片点击：选中机器并进入工作区 */
+async function enterMachine(machineId: string): Promise<void> {
+  await selectMachine(machineId);
+  showMachineInfo.value = false;
+  view.value = "ws";
+}
+
+/** 返回机器卡片墙 */
+function goHome(): void {
+  showMachineInfo.value = false;
+  view.value = "home";
+  void refreshMachines();
+  void refreshSessionCounts();
 }
 
 /** 项目文件浏览面板（侧栏项目右键「查看项目文件」）；seq 自增支持同项目重复触发刷新 */
@@ -163,6 +215,9 @@ function logout(): void {
   store.value = null;
   machines.value = [];
   activeMachineId.value = null;
+  sessionCounts.value = {};
+  showMachineInfo.value = false;
+  view.value = "home";
 }
 
 // provide must happen at setup level; the bus may attach later
@@ -183,12 +238,14 @@ function boot(state: any, client: AuthClient): void {
       const m = machines.value.find((x) => x.machine_id === machineId);
       if (m) m.online = status === "online";
       else void refreshMachines();
+      void refreshSessionCounts();
       if (machineId === activeMachineId.value) {
         // online/offline affects composer state; refresh session statuses too
         void s.refreshSessions();
       }
     });
     await refreshMachines();
+    void refreshSessionCounts();
     // periodic machines refresh for liveness
     setInterval(refreshMachines, 10000);
 
@@ -212,6 +269,7 @@ function boot(state: any, client: AuthClient): void {
     // WS（重）连成功即对账：机器在线状态与会话列表不用等 10s/30s 轮询兜底
     b.onReconnect(() => {
       void refreshMachines();
+      void refreshSessionCounts();
       void s.refreshSessions();
     });
     setInterval(() => void s.refreshSessions(), 30000);
@@ -219,12 +277,15 @@ function boot(state: any, client: AuthClient): void {
 }
 
 onMounted(() => {
+  window.addEventListener("keydown", onGlobalKey);
   const saved = loadAuth();
   if (saved) {
     const client = new AuthClient(saved, () => logout());
     boot(saved, client);
   }
 });
+
+onBeforeUnmount(() => window.removeEventListener("keydown", onGlobalKey));
 
 const sessionsEmpty = computed(() => {
   const items = store.value?.sessions ?? [];
@@ -251,45 +312,59 @@ const sessionsEmpty = computed(() => {
     </form>
   </div>
 
-  <!-- main -->
-  <div v-else-if="store" class="layout">
-    <aside class="machines">
-      <div class="side-head">
-        <span class="brand-sm">π</span>
-        <b>机器</b>
+  <!-- home：机器卡片墙 -->
+  <div v-else-if="store && view === 'home'" class="home">
+    <header class="home-head">
+      <div class="home-brand">
+        <span class="logo">π</span>
+        <b>节点</b>
+        <span class="home-sub">选择一台 Agent 开始工作</span>
+      </div>
+      <div class="home-search">
+        <Icon name="search-line" :size="14" />
+        <input
+          ref="searchInput"
+          v-model="nodeFilter"
+          placeholder="搜索节点…（Ctrl+K）"
+          spellcheck="false"
+        />
+        <button v-if="nodeFilter" class="clear" title="清空" @click="nodeFilter = ''">✕</button>
+      </div>
+      <div class="home-actions">
         <button class="ghost" :title="themeMode === 'dark' ? '切换亮色' : '切换暗色'" @click="toggleTheme()">
           <Icon :name="themeMode === 'dark' ? 'sun-line' : 'moon-line'" :size="15" />
         </button>
         <button class="ghost" @click="logout">退出</button>
       </div>
-      <div
-        v-for="m in machines"
-        :key="m.machine_id"
-        class="machine"
-        :class="{ active: m.machine_id === activeMachineId }"
-        @click="selectMachine(m.machine_id)"
-      >
-        <div class="m-name">
-          <span class="dot" :class="{ on: m.online }" />
-          {{ m.hostname || m.machine_id.slice(0, 8) }}
-          <button
-            v-if="!m.online"
-            class="del"
-            title="删除该机器及其同步数据"
-            @click.stop="deleteMachine(m)"
-          >✕</button>
-        </div>
-        <div class="m-sub">{{ m.os }} · {{ m.online ? "在线" : "离线" }}</div>
+    </header>
+    <div class="home-body">
+      <div v-if="machines.length && filteredMachines.length" class="mgrid">
+        <MachineCard
+          v-for="m in filteredMachines"
+          :key="m.machine_id"
+          :machine="m"
+          :session-count="sessionCounts[m.machine_id] ?? null"
+          @enter="enterMachine(m.machine_id)"
+          @delete="deleteMachine(m)"
+        />
       </div>
-      <div v-if="!machines.length" class="empty">
-        还没有机器上线。启动桌面端并在「☁ 云同步」里登录同一账号。
+      <div v-else-if="machines.length" class="home-empty">
+        <p><b>没有匹配「{{ nodeFilter.trim() }}」的节点</b></p>
+        <p>换个关键词试试，或清空搜索条件。</p>
       </div>
-    </aside>
+      <div v-else class="home-empty">
+        <svg class="he-icon" viewBox="0 0 24 24" fill="currentColor"><path :d="osMeta().path" /></svg>
+        <p><b>还没有节点上线</b></p>
+        <p>启动桌面端并在「☁ 云同步」里登录同一账号，<br />节点会自动注册到这里。</p>
+      </div>
+    </div>
+  </div>
 
+  <!-- workspace -->
+  <div v-else-if="store" class="layout">
     <div class="col">
       <div class="side-head sessions-head">
         <b>会话</b>
-        <StatePill :state="activeMachine?.online ? store.agentState : 'idle'" />
       </div>
       <SessionSidebar
         :sessions="store.sessions"
@@ -314,19 +389,39 @@ const sessionsEmpty = computed(() => {
 
     <main class="main">
       <header class="topbar">
-        <StatePill :state="store.agentState" />
-        <span class="transport">{{ bus?.transport }} · {{ activeMachine?.hostname || "未选机器" }}</span>
+        <button class="tb-btn" title="返回节点列表" @click="goHome">
+          <Icon name="arrow-left-line" :size="15" />
+        </button>
+        <div class="mchip-wrap">
+          <button class="mchip" title="节点详情" @click="showMachineInfo = !showMachineInfo">
+            <span class="mchip-os" :style="{ color: activeOsMeta.color }">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path :d="activeOsMeta.path" /></svg>
+            </span>
+            <span class="mchip-name">{{ activeMachine?.hostname || "未选节点" }}</span>
+            <span v-if="activeMachine" class="dot" :class="{ on: activeMachine.online }" />
+            <Icon name="arrow-down-s-line" :size="13" />
+          </button>
+          <MachinePopover
+            v-if="showMachineInfo && activeMachine"
+            :machine="activeMachine"
+            :session-count="sessionCounts[activeMachine.machine_id] ?? null"
+            :home-dir="store.homeDir ?? undefined"
+            @close="showMachineInfo = false"
+          />
+        </div>
+        <StatePill :state="activeMachine?.online ? store.agentState : 'idle'" />
+        <span class="transport">{{ bus?.transport }}</span>
         <span v-if="store.lastError" class="err" :title="store.lastError">{{ store.lastError }}</span>
         <span class="who">{{ auth?.userId.slice(0, 8) }}…</span>
       </header>
       <div v-if="sessionsEmpty && !showAutomation && !showExperts" class="hint">
-        该机器还没有同步的会话，或在桌面端新建后开启同步。
+        该节点还没有同步的会话，或在桌面端新建后开启同步。
       </div>
       <ChatView
         v-show="!sessionsEmpty && !showAutomation && !showExperts"
         :store="store"
         :disabled="!activeMachine?.online"
-        :disabled-hint="'机器离线，无法远程控制'"
+        :disabled-hint="'节点离线，无法远程控制'"
         :files-cwd="browseCwd"
         :new-task="newTaskMode"
         :new-task-cwd="newTaskCwd"

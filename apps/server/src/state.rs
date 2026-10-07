@@ -79,6 +79,8 @@ impl AppState {
             .arg(meta.get("os").and_then(|v| v.as_str()).unwrap_or(""))
             .arg("version")
             .arg(meta.get("version").and_then(|v| v.as_str()).unwrap_or(""))
+            .arg("local_ip")
+            .arg(meta.get("local_ip").and_then(|v| v.as_str()).unwrap_or(""))
             .arg("connected_at")
             .arg(chrono::Utc::now().to_rfc3339())
             .query_async(&mut conn)
@@ -98,6 +100,7 @@ impl AppState {
                         "version": meta.get("version").and_then(|v| v.as_str()).unwrap_or(""),
                         // host 主目录：web 端据此把 cwd===home 的会话拆进「任务」分组
                         "home": meta.get("home_dir").and_then(|v| v.as_str()).unwrap_or(""),
+                        "local_ip": meta.get("local_ip").and_then(|v| v.as_str()).unwrap_or(""),
                         "last_seen": chrono::Utc::now().to_rfc3339(),
                     },
                     "$setOnInsert": { "created_at": chrono::Utc::now().to_rfc3339() }

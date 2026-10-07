@@ -304,8 +304,6 @@ onBeforeUnmount(() => {
   <aside class="sidebar" :style="width ? { width: width + 'px', minWidth: width + 'px' } : undefined">
     <div class="sb-head">
       <div class="logo">π</div>
-      <button class="icon-btn" disabled title="后退"><Icon name="arrow-left-line" :size="16" /></button>
-      <button class="icon-btn" disabled title="前进"><Icon name="arrow-right-line" :size="16" /></button>
       <span class="flex-sp"></span>
       <slot name="actions" />
     </div>

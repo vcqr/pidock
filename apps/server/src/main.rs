@@ -150,6 +150,7 @@ async fn machines(
             "hostname": d.get_str("hostname").unwrap_or(""),
             "os": d.get_str("os").unwrap_or(""),
             "version": d.get_str("version").unwrap_or(""),
+            "local_ip": d.get_str("local_ip").unwrap_or(""),
             "last_seen": d.get_str("last_seen").unwrap_or(""),
             "online": online,
         }));

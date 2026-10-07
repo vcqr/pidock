@@ -494,6 +494,7 @@ async fn sync_loop(app: AppHandle, mut event_rx: broadcast::Receiver<pidock_prot
             "os": std::env::consts::OS,
             "version": env!("CARGO_PKG_VERSION"),
             "home_dir": home_dir,
+            "local_ip": local_ip(),
         });
         if ws_sink.send(WsMessage::Text(register.to_string().into())).await.is_err() {
             continue;
@@ -644,6 +645,18 @@ fn hostname() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown".into())
+}
+
+/// 探测本机局域网 IP：对公共地址做 UDP connect（不发包），取默认路由出口网卡的源地址；
+/// 探测失败（完全离线等）回退 127.0.0.1
+fn local_ip() -> String {
+    std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| {
+            s.connect("8.8.8.8:80")?;
+            s.local_addr()
+        })
+        .map(|a| a.ip().to_string())
+        .unwrap_or_else(|_| "127.0.0.1".into())
 }
 
 // ------------------------------------------------------------- tauri API ---

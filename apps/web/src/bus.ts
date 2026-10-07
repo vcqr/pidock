@@ -127,7 +127,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
   }
 
   async function command(sessionId: string, type: string, payload: unknown): Promise<any> {
-    if (!activeMachine) throw new Error("未选择机器");
+    if (!activeMachine) throw new Error("未选择节点");
     const res = await auth.request("/commands", {
       method: "POST",
       body: JSON.stringify({
@@ -139,10 +139,10 @@ export function createWebBus(auth: AuthClient): DataBus & {
       }),
     });
     if (res.status === "refused_offline") {
-      throw new Error("机器离线，无法远程控制");
+      throw new Error("节点离线，无法远程控制");
     }
     if (res.status === "forbidden") {
-      throw new Error("无权控制该机器");
+      throw new Error("无权控制该节点");
     }
     if (res.status !== "sent" || !res.command_id) {
       throw new Error(res.error ?? "command failed");
