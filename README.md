@@ -92,7 +92,15 @@ cd docker && docker compose up -d --build server
 ```
 
 不打 Docker 的话，GitHub Release 页有 `pidock-server-x86_64-linux.tar.gz`
-（web 已嵌入，解压即用）；本地/特殊目录托管仍可用 `PIDOCK_WEB_DIR` 覆盖嵌入资源。
+（web 已嵌入，解压即用，附带 `pidock.example.toml` 配置示例）。
+
+### server 配置
+
+全部走环境变量即可运行（`PIDOCK_MONGO_URI` / `PIDOCK_REDIS_URL` /
+`PIDOCK_KAFKA_BROKERS` / `PIDOCK_JWT_SECRET` / `PIDOCK_RUSTFS_*` 等，均有默认值）。
+要用配置文件：把 `pidock.example.toml` 复制为 `pidock.toml` 修改后
+`./pidock-server --config pidock.toml`（不指定参数时自动读当前目录的
+`pidock.toml`；优先级 **环境变量 > 配置文件 > 内置默认值**）。
 
 可配置项（docker-compose 已给默认值）：`PIDOCK_JWT_SECRET`、
 `RUSTFS_ROOT_USER` / `RUSTFS_ROOT_PASSWORD`、`PIDOCK_PIPELINE`（kafka，可选 redis 降级）。

@@ -442,6 +442,20 @@ async fn post_command(
     }
 }
 
+/// 解析 --config <path> / --config=<path>；不指定时 Config::load 自行兜底
+fn cli_config_path() -> Option<String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    for (i, a) in args.iter().enumerate() {
+        if let Some(v) = a.strip_prefix("--config=") {
+            return Some(v.to_string());
+        }
+        if a == "--config" {
+            return args.get(i + 1).cloned();
+        }
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -451,7 +465,8 @@ async fn main() {
         )
         .init();
 
-    let cfg = config::Config::from_env();
+    let cfg = config::Config::load(cli_config_path()).expect("配置加载失败");
+    let web_dir = cfg.web_dir.clone(); // cfg 随后 move 进 AppState，先取出
     let sink = match pipeline::make_sink(&cfg).await {
         Ok(p) => p,
         Err(e) => {
@@ -480,10 +495,9 @@ async fn main() {
         }
     });
 
-    // web UI static hosting：PIDOCK_WEB_DIR 显式指定目录时走 ServeDir（本地改前端即
-    // 生效）；否则用编译期嵌入的 apps/web/dist——debug 构建走磁盘、release 构建真嵌入，
-    // 产物即单文件。API 路由优先，未命中路径交给兜底。
-    let web_dir = std::env::var("PIDOCK_WEB_DIR").unwrap_or_default();
+    // web UI static hosting：PIDOCK_WEB_DIR / 配置文件 [web].dir 显式指定目录时走
+    // ServeDir（本地改前端即生效）；否则用编译期嵌入的 apps/web/dist——debug 构建走
+    // 磁盘、release 构建真嵌入，产物即单文件。API 路由优先，未命中路径交给兜底。
 
     let app = Router::new()
         .route("/health", get(health))

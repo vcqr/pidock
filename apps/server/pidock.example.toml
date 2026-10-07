@@ -1,0 +1,29 @@
+# PiDock server 配置示例：复制为 pidock.toml 按需修改
+# 优先级：环境变量（同名 PIDOCK_* 变量）> 本文件 > 内置默认值
+# 定位：--config 路径 > PIDOCK_CONFIG 环境变量 > 当前目录 pidock.toml
+
+[server]
+bind = "0.0.0.0:8080"            # 监听地址
+pipeline = "kafka"               # kafka | redis（Redis Streams 平替，免装 Kafka）
+jwt_secret = "change-me-please"  # ⚠️ 公网部署必改，建议 openssl rand -hex 32
+
+[mongo]
+uri = "mongodb://localhost:27017"
+
+[redis]
+url = "redis://localhost:6379"
+
+[kafka]
+brokers = "localhost:9092"
+topic = "pidock.events"
+
+# 附件存储（可选；不配只影响附件功能，服务正常启动）
+[rustfs]
+endpoint = "http://localhost:7000"
+bucket = "pidock-attachments"
+access_key = "pidock"
+secret_key = "pidock-secret"
+
+# Web 控制台静态目录（留空 = 用二进制内嵌的前端）
+[web]
+dir = ""

@@ -29,16 +29,12 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 impl S3Client {
-    pub fn from_env() -> Self {
+    pub fn new(endpoint: String, bucket: String, access_key: String, secret_key: String) -> Self {
         Self {
-            endpoint: std::env::var("PIDOCK_RUSTFS_ENDPOINT")
-                .unwrap_or_else(|_| "http://localhost:7000".into()),
-            bucket: std::env::var("PIDOCK_RUSTFS_BUCKET")
-                .unwrap_or_else(|_| "pidock-attachments".into()),
-            access_key: std::env::var("PIDOCK_RUSTFS_ACCESS_KEY")
-                .unwrap_or_else(|_| "pidock".into()),
-            secret_key: std::env::var("PIDOCK_RUSTFS_SECRET_KEY")
-                .unwrap_or_else(|_| "pidock-secret".into()),
+            endpoint,
+            bucket,
+            access_key,
+            secret_key,
         }
     }
 

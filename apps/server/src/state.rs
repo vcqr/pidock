@@ -37,12 +37,18 @@ impl AppState {
             .database("pidock");
         let redis_client = redis::Client::open(cfg.redis_url.as_str())?;
         let redis = redis_client.get_multiplexed_tokio_connection().await?;
+        let s3 = crate::s3::S3Client::new(
+            cfg.rustfs.endpoint.clone(),
+            cfg.rustfs.bucket.clone(),
+            cfg.rustfs.access_key.clone(),
+            cfg.rustfs.secret_key.clone(),
+        );
         Ok(Self {
             cfg: Arc::new(cfg),
             mongo,
             redis,
             redis_client: redis_client.clone(),
-            s3: crate::s3::S3Client::from_env(),
+            s3,
             sink,
             routes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         })
