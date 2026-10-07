@@ -51,6 +51,18 @@ function nextMessage(ws: WebSocket, timeoutMs = 8000): Promise<any> {
   });
 }
 
+/** 下一条 envelope；ctrl 帧（machine_status/session_upserted/…）可任意插序，跳过并记录 */
+async function nextEnvelope(ws: WebSocket, timeoutMs = 8000): Promise<{ frame: any; sawUpserted: boolean }> {
+  let sawUpserted = false;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const frame = await nextMessage(ws, deadline - Date.now());
+    if (frame?.ctrl === "session_upserted") sawUpserted = true;
+    if (frame?.envelope) return { frame, sawUpserted };
+  }
+  throw new Error("ws message timeout");
+}
+
 async function main(): Promise<number> {
   console.log(`== PiDock M4 e2e against ${BASE} ==`);
 
@@ -129,17 +141,20 @@ async function main(): Promise<number> {
   check("session row exists with status", s !== undefined && s.status === "running", s?.status);
 
   // --- web live push: ingest of a new event should arrive over /ws/web
-  const pushPromise = nextMessage(wsWeb, 10000);
+  const pushPromise = nextEnvelope(wsWeb, 10000);
   wsDesktop.send(JSON.stringify(envelope(3, "message_complete", {
     role: "user",
     blocks: [{ type: "text", text: "第二条" }],
     entry_id: "e3",
   })));
   try {
-    const pushed = await pushPromise;
-    check("live push via /ws/web", pushed?.envelope?.session_id === sessionId || pushed?.kind === "message_complete");
+    const { frame: pushed, sawUpserted } = await pushPromise;
+    check("live push via /ws/web", pushed?.envelope?.session_id === sessionId || pushed?.envelope?.kind === "message_complete");
+    // ingest 在会话行更新后会补发 session_upserted 控制帧（web 侧栏实时驱动）
+    check("session_upserted push", sawUpserted);
   } catch {
     check("live push via /ws/web", false, "no push received");
+    check("session_upserted push", false, "no push received");
   }
 
   // --- command routing: web -> server -> desktop

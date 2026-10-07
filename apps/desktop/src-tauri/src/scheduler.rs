@@ -716,6 +716,25 @@ async fn execute_run(app: &AppHandle, job: ScheduledJob, mut run: RunRecord) {
     }
 }
 
+/// automation.* 分发主体：Tauri 命令（本地 UI）与 sync.rs 云中继（web 远程管理）共用
+pub async fn dispatch_automation(
+    app: &AppHandle,
+    state: &SchedulerManager,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    state.ensure_started(app).await?;
+    match method {
+        "automation.list" => state.list().await,
+        "automation.save" => state.save_job(app, &params).await,
+        "automation.delete" => state.delete_job(app, &params).await,
+        "automation.set_enabled" => state.set_enabled(app, &params).await,
+        "automation.run_now" => state.run_now(app, &params).await,
+        "automation.peek" => state.peek(&params).await,
+        other => Err(format!("unknown automation method \"{other}\"")),
+    }
+}
+
 #[tauri::command]
 pub async fn automation_request(
     app: AppHandle,
@@ -723,16 +742,7 @@ pub async fn automation_request(
     method: String,
     params: Value,
 ) -> Result<Value, String> {
-    state.ensure_started(&app).await?;
-    match method.as_str() {
-        "automation.list" => state.list().await,
-        "automation.save" => state.save_job(&app, &params).await,
-        "automation.delete" => state.delete_job(&app, &params).await,
-        "automation.set_enabled" => state.set_enabled(&app, &params).await,
-        "automation.run_now" => state.run_now(&app, &params).await,
-        "automation.peek" => state.peek(&params).await,
-        other => Err(format!("unknown automation method \"{other}\"")),
-    }
+    dispatch_automation(&app, &state, &method, params).await
 }
 
 #[cfg(test)]

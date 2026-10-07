@@ -139,6 +139,22 @@ const queuedCount = computed(() => {
   const q = props.store.activeId ? props.store.queueBySession[props.store.activeId] : undefined;
   return (q?.steering ?? 0) + (q?.follow_up ?? 0);
 });
+/** 压缩进行中（compaction_lifecycle start/end） */
+const compacting = computed(() => {
+  const sid = props.store.activeId;
+  return !!(sid && props.store.compactingBySession[sid]);
+});
+/** 自动重试状态（auto_retry 事件；非 null = 重试中） */
+const retryInfo = computed(() => {
+  const sid = props.store.activeId;
+  return sid ? props.store.autoRetryBySession[sid] ?? null : null;
+});
+/** 最近一次压缩摘要（compaction_summary 落库事件，对话顶部折叠条） */
+const compactionSummary = computed(() => {
+  const sid = props.store.activeId;
+  return sid ? props.store.compactionBySession[sid] ?? null : null;
+});
+const csOpen = ref(false);
 /** 清空排队消息；被清的文本回填输入框（preset 是 Composer 的受控草稿通道） */
 async function clearQueueToComposer(): Promise<void> {
   const texts = await props.store.clearQueue();
@@ -780,6 +796,13 @@ watch(
       <div class="chat-main">
       <div ref="scroller" class="scroll">
         <div v-if="store.loadingHistory" class="hint">加载历史中…</div>
+        <div v-if="compactionSummary" class="compaction-strip">
+          <button class="cs-toggle" @click="csOpen = !csOpen">
+            <Icon name="arrow-down-s-line" :size="13" :class="{ fold: !csOpen }" />
+            已压缩上下文<template v-if="compactionSummary.tokens_before"> · 压缩前 {{ compactionSummary.tokens_before }} tokens</template>
+          </button>
+          <pre v-if="csOpen" class="cs-body">{{ compactionSummary.summary }}</pre>
+        </div>
         <template v-for="(item, index) in store.items" :key="item.key">
           <button v-if="showHeader(index)" class="turn-header" @click="toggleHeader(index)">
             <span>已工作<template v-if="headerDuration(index)"> · {{ headerDuration(index) }}</template></span>
@@ -883,6 +906,12 @@ watch(
           <button v-if="queuedCount" class="queue-chip" title="清空排队中的消息（原文回填输入框）" @click="clearQueueToComposer">
             <Icon name="time-line" :size="13" />排队 {{ queuedCount }} · 清空
           </button>
+          <span v-if="compacting" class="retry-chip" title="正在压缩上下文">
+            <Icon name="loader-2-line" :size="13" class="spin" />压缩中…
+          </span>
+          <span v-if="retryInfo" class="retry-chip" :title="retryInfo.error || '请求失败后自动重试'">
+            <Icon name="loader-2-line" :size="13" class="spin" />自动重试 {{ retryInfo.attempt ?? "?" }}<template v-if="retryInfo.max_attempts">/{{ retryInfo.max_attempts }}</template>
+          </span>
           <span class="flex-sp"></span>
           <button class="ctx-gear" title="会话设置" @click="showSessionSettings = true">
             <Icon name="settings-3-line" :size="15" />
@@ -1204,6 +1233,54 @@ export default { components: { ToolCard, MessageItem } };
   white-space: nowrap;
 }
 .queue-chip:hover { filter: brightness(1.1); }
+.retry-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--pd-amber, #e6a23c);
+  color: var(--pd-amber, #e6a23c);
+  font-size: calc(11px * var(--pd-font-scale, 1));
+  white-space: nowrap;
+}
+.retry-chip .spin { animation: pd-spin 1s linear infinite; }
+@keyframes pd-spin {
+  to { transform: rotate(360deg); }
+}
+.compaction-strip {
+  margin: 0 0 10px;
+  border: 1px solid var(--pd-border);
+  border-radius: 8px;
+  background: var(--pd-bg-panel);
+  overflow: hidden;
+}
+.cs-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  color: var(--pd-text-3);
+  font-size: calc(12px * var(--pd-font-scale, 1));
+  cursor: pointer;
+  text-align: left;
+}
+.cs-toggle:hover { color: var(--pd-text-2); }
+.cs-toggle .fold { transform: rotate(-90deg); }
+.cs-body {
+  margin: 0;
+  padding: 8px 12px 10px 28px;
+  border-top: 1px dashed var(--pd-border);
+  color: var(--pd-text-2);
+  font-size: calc(12.5px * var(--pd-font-scale, 1));
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
 .ctx-gear {
   display: grid;
   place-items: center;

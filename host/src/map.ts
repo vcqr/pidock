@@ -174,9 +174,15 @@ export function metaPayloadFromSession(s: {
   cwd: string;
   provider?: string;
   model?: string;
+  expert_id?: string;
+  expert_name?: string;
+  parent_session_id?: string;
 }): SessionMetaPayload {
   const meta: SessionMetaPayload = { cwd: s.cwd };
   if (s.provider) meta.provider = s.provider;
   if (s.model) meta.model = s.model;
+  if (s.expert_id) meta.expert_id = s.expert_id;
+  if (s.expert_name) meta.expert_name = s.expert_name;
+  if (s.parent_session_id) meta.parent_session_id = s.parent_session_id;
   return meta;
 }

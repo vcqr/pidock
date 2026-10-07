@@ -53,6 +53,9 @@ export function createWebBus(auth: AuthClient): DataBus & {
     if (frame?.envelope) {
       const env = frame.envelope as Envelope;
       trackSeq(env);
+      // 压缩/分叉重同步：服务端已清空该会话事件并按新 seq 重灌，本地游标作废，
+      // 否则重连后的 after_seq 补拉会漏掉重灌的低序号事件
+      if (env.kind === "session_resynced") lastSeqBySession.delete(env.session_id);
       if (env.kind === "command_result") {
         const commandId = (env.payload as any)?.command_id;
         const pending = commandId ? pendingCommands.get(commandId) : undefined;
@@ -133,6 +136,9 @@ export function createWebBus(auth: AuthClient): DataBus & {
     if (res.status === "refused_offline") {
       throw new Error("机器离线，无法远程控制");
     }
+    if (res.status === "forbidden") {
+      throw new Error("无权控制该机器");
+    }
     if (res.status !== "sent" || !res.command_id) {
       throw new Error(res.error ?? "command failed");
     }
@@ -169,6 +175,9 @@ export function createWebBus(auth: AuthClient): DataBus & {
             cwd: s.cwd || s.title || "",
             name: s.title || undefined,
             model: s.model || undefined,
+            expert_id: s.expert_id || undefined,
+            expert_name: s.expert_name || undefined,
+            parent_session_id: s.parent_session_id || undefined,
             created_at: s.created_at,
             open: true, // never trigger session.open over the web
             state: s.status === "running" ? "responding" : s.status === "idle" ? "idle" : s.status,
@@ -188,6 +197,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
           const result = await command(params?.session_id ?? "", "session.create", {
             cwd: params?.cwd,
             model: params?.model,
+            expert_id: params?.expert_id,
           });
           return result ?? {};
         }
@@ -263,15 +273,66 @@ export function createWebBus(auth: AuthClient): DataBus & {
         case "config.prompts.list":
         case "session.thinking_info":
         case "config.reload_runtime":
-        case "session.trust": {
-          // 新一代会话级命令：桌面端按同名 method 透传给 host
+        case "session.trust":
+        case "session.fork":
+        case "session.set_permission_mode":
+        case "session.set_thinking_level":
+        case "session.set_model":
+        case "session.file_changes":
+        case "session.file_diff":
+        case "session.revert_files":
+        case "session.pending": {
+          // 会话级命令：桌面端按同名 method 透传给 host
           const { session_id, ...payload } = params ?? {};
           const result = await command(session_id ?? "", method, payload);
           return result ?? {};
         }
         case "config.get":
-          // config is a desktop-local concept in v1
-          throw new Error("配置管理仅在桌面端可用");
+        case "config.settings.set":
+        case "config.providers.list":
+        case "config.providers.set_key":
+        case "config.providers.remove_key":
+        case "config.providers.custom.get":
+        case "config.providers.custom.set":
+        case "config.providers.custom.remove":
+        case "config.providers.fetch_models":
+        case "config.models.list":
+        case "config.models.set_default":
+        case "config.model_override.set":
+        case "config.extensions.list":
+        case "config.extensions.toggle":
+        case "config.extensions.read":
+        case "config.extensions.install":
+        case "config.skills.list":
+        case "config.skills.toggle":
+        case "config.skills.files":
+        case "config.skills.read":
+        case "config.skills.install":
+        case "config.mcp.get":
+        case "config.mcp.set":
+        case "config.agents.read":
+        case "config.agents.write":
+        case "stats.usage":
+        case "pidock.settings.get":
+        case "pidock.settings.set":
+        case "experts.list":
+        case "experts.get":
+        case "experts.save":
+        case "experts.delete":
+        case "experts.private_list":
+        case "experts.install_resource":
+        case "experts.remove_resource":
+        case "automation.list":
+        case "automation.save":
+        case "automation.delete":
+        case "automation.set_enabled":
+        case "automation.run_now":
+        case "automation.peek": {
+          // 非会话级命令（配置中心/专家/自动化等）：无 session_id，原样透传。
+          // web 能发 agent.prompt 即可在桌面执行代码，config 写不构成新增权限面
+          const result = await command("", method, params ?? {});
+          return result ?? {};
+        }
         default:
           throw new Error(`web bus: unsupported method "${method}"`);
       }

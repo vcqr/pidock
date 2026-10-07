@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, provide, ref, watch } from "vue";
 import { darkTheme, NConfigProvider } from "naive-ui";
 import {
   appConfirm,
+  AutomationView,
   ChatView,
+  ExpertsView,
   Icon,
   SessionSidebar,
+  SettingsView,
   StatePill,
   ATTACHMENT_LOADER,
   createAgentStore,
@@ -14,7 +17,6 @@ import {
   toggleTheme,
   type AgentStore,
 } from "@pidock/ui";
-import { provide } from "vue";
 import { ApiError, AuthClient, loadAuth, clearAuth } from "./auth.js";
 import { createWebBus, type WebBus } from "./bus.js";
 
@@ -92,6 +94,51 @@ function removeProject(cwd: string): void {
   void s.removeSessions(s.sessions.filter((x) => x.cwd === cwd).map((x) => x.session_id));
 }
 
+// ---- 页面模式（与桌面 App 同构）：自动化/专家页与聊天共用主区 ----
+const showSettings = ref(false);
+/** 设置中心打开时定位的页面（接受新 pane id 与旧 tab 名） */
+const settingsPane = ref("general");
+const showAutomation = ref(false);
+const showExperts = ref(false);
+/** 新建任务模式：发送首条消息后自动创建会话并退出该模式 */
+const newTaskMode = ref(false);
+/** 新任务预雇佣的专家（专家页「雇佣」进入） */
+const newTaskExpert = ref<{ id: string; name: string } | null>(null);
+/** 新建任务预选的项目目录（侧栏项目分组点击） */
+const newTaskCwd = ref<{ cwd: string; seq: number } | null>(null);
+
+function startNewTask(cwd?: string, expert?: { id: string; name: string } | null): void {
+  newTaskMode.value = true;
+  newTaskExpert.value = expert ?? null;
+  newTaskCwd.value = cwd ? { cwd, seq: (newTaskCwd.value?.seq ?? 0) + 1 } : null;
+}
+
+function openSettings(tab?: string): void {
+  settingsPane.value = tab ?? "general";
+  showSettings.value = true;
+}
+
+/** 专家页「对话」：立即创建绑定该专家的会话并进入聊天（host 落主目录，测试环境纯净） */
+async function testExpert(e: { id: string; name: string }): Promise<void> {
+  showExperts.value = false;
+  showAutomation.value = false;
+  const s = store.value;
+  if (!s) return;
+  try {
+    await s.newSession(undefined, undefined, e.id);
+  } catch (err) {
+    s.lastError = err instanceof Error ? err.message : String(err);
+  }
+}
+
+// 会话打开（新建/点选）后退出新建任务模式
+watch(
+  () => store.value?.activeId,
+  (v) => {
+    if (v) newTaskMode.value = false;
+  },
+);
+
 async function doLogin(): Promise<void> {
   loginBusy.value = true;
   loginError.value = null;
@@ -153,6 +200,9 @@ function boot(state: any, client: AuthClient): void {
         cwd: session.cwd || "",
         name: session.title || undefined,
         model: session.model || undefined,
+        expert_id: session.expert_id || undefined,
+        expert_name: session.expert_name || undefined,
+        parent_session_id: session.parent_session_id || undefined,
         created_at: session.created_at || new Date().toISOString(),
         state: session.status === "running" ? "responding" : (session.status || "idle"),
         open: true,
@@ -240,12 +290,20 @@ const sessionsEmpty = computed(() => {
         :sessions="store.sessions"
         :active-id="store.activeId"
         :home-dir="store.homeDir"
-        :show-settings-btn="false"
-        @select="(id) => store?.openSession(id)"
+        :show-settings-btn="true"
+        :show-automation="true"
+        :show-experts="true"
+        :active-tool="showAutomation ? 'automation' : showExperts ? 'experts' : undefined"
+        @select="(id) => { showAutomation = false; showExperts = false; store?.openSession(id); }"
+        @new-task="() => { showAutomation = false; showExperts = false; startNewTask(); }"
+        @open-project="(cwd) => { showAutomation = false; showExperts = false; startNewTask(cwd); }"
         @browse-project="(cwd) => { browseCwd = { cwd, seq: (browseCwd?.seq ?? 0) + 1 }; }"
         @remove-project="removeProject"
         @remove-session="(id) => store?.removeSessions([id])"
         @rename="(id, name) => store?.renameSession(id, name)"
+        @open-settings="(tab) => openSettings(tab)"
+        @open-automation="() => { showAutomation = !showAutomation; if (showAutomation) showExperts = false; }"
+        @open-experts="() => { showExperts = !showExperts; if (showExperts) showAutomation = false; }"
       />
     </div>
 
@@ -253,16 +311,47 @@ const sessionsEmpty = computed(() => {
       <header class="topbar">
         <StatePill :state="store.agentState" />
         <span class="transport">{{ bus?.transport }} · {{ activeMachine?.hostname || "未选机器" }}</span>
+        <span v-if="store.lastError" class="err" :title="store.lastError">{{ store.lastError }}</span>
         <span class="who">{{ auth?.userId.slice(0, 8) }}…</span>
       </header>
-      <div v-if="sessionsEmpty" class="hint">该机器还没有同步的会话，或在桌面端新建后开启同步。</div>
+      <div v-if="sessionsEmpty && !showAutomation && !showExperts" class="hint">
+        该机器还没有同步的会话，或在桌面端新建后开启同步。
+      </div>
       <ChatView
-        v-else
+        v-show="!sessionsEmpty && !showAutomation && !showExperts"
         :store="store"
         :disabled="!activeMachine?.online"
         :disabled-hint="'机器离线，无法远程控制'"
         :files-cwd="browseCwd"
+        :new-task="newTaskMode"
+        :new-task-cwd="newTaskCwd"
+        :new-task-expert="newTaskExpert"
+        :model="store.sessions.find((s) => s.session_id === store?.activeId)?.model"
         @close-files="browseCwd = null"
+        @open-settings="(tab) => openSettings(tab)"
+        @open-providers="() => openSettings('providers')"
+      />
+      <!-- 自动化/专家页与聊天共用主区（自动化调度器在桌面本地，经 /commands 远程管理） -->
+      <AutomationView
+        v-if="showAutomation"
+        :bus="bus!"
+        @close="showAutomation = false"
+        @open-providers="() => openSettings('providers')"
+      />
+      <ExpertsView
+        v-if="showExperts"
+        :bus="bus!"
+        @close="showExperts = false"
+        @open-providers="() => openSettings('providers')"
+        @hire="(expert) => { showExperts = false; startNewTask(undefined, expert); }"
+        @test="testExpert"
+      />
+      <SettingsView
+        v-if="showSettings"
+        :bus="bus!"
+        :initial-pane="settingsPane"
+        @close="showSettings = false"
+        @reset-layout="() => {}"
       />
     </main>
   </div>

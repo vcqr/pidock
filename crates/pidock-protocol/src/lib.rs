@@ -117,26 +117,120 @@ pub mod ephemeral {
     pub const AUTO_RETRY: &str = "auto_retry";
     pub const COMPACTION_LIFECYCLE: &str = "compaction_lifecycle";
     pub const TODO_UPDATED: &str = "todo_updated";
-    pub const APPROVAL_REQUEST: &str = "approval_request";
+    pub const TOOL_APPROVAL: &str = "tool_approval";
+    pub const ASK_USER_QUESTION: &str = "ask_user_question";
     pub const COMMAND_RESULT: &str = "command_result";
     /// 上下文用量推送（agent_settled/compaction_end/会话打开时由 host 发）
     pub const CONTEXT_USAGE: &str = "context_usage";
     pub const ERROR: &str = "error";
 }
 
-/// core -> host command methods (v1 set).
+/// core -> host command methods（与 packages/protocol TS Method 全量同步，勿手改单边）
 pub mod method {
+
+    // ---- PING ----
     pub const PING: &str = "ping";
+
+    // ---- SESSION ----
     pub const SESSION_CREATE: &str = "session.create";
     pub const SESSION_LIST: &str = "session.list";
     pub const SESSION_OPEN: &str = "session.open";
     pub const SESSION_CLOSE: &str = "session.close";
     pub const SESSION_EVENTS: &str = "session.events";
+    pub const SESSION_RENAME: &str = "session.rename";
+    pub const SESSION_FORK: &str = "session.fork";
+    pub const SESSION_REMOVE: &str = "session.remove";
+
+    // ---- MODEL ----
+    pub const MODEL_OVERRIDE_SET: &str = "config.model_override.set";
+
+    // ---- WORKSPACE ----
+    pub const WORKSPACE_FILES: &str = "workspace.files";
+    pub const WORKSPACE_READ_FILE: &str = "workspace.read_file";
+
+    // ---- SESSION ----
+    pub const SESSION_SET_PERMISSION_MODE: &str = "session.set_permission_mode";
+    pub const SESSION_RESOLVE_APPROVAL: &str = "session.resolve_approval";
+    pub const SESSION_RESOLVE_ASK: &str = "session.resolve_ask";
+    pub const SESSION_SET_THINKING_LEVEL: &str = "session.set_thinking_level";
+    pub const SESSION_SET_MODEL: &str = "session.set_model";
+    pub const SESSION_FILE_CHANGES: &str = "session.file_changes";
+    pub const SESSION_FILE_DIFF: &str = "session.file_diff";
+    pub const SESSION_REVERT_FILES: &str = "session.revert_files";
+
+    // ---- AGENT ----
     pub const AGENT_PROMPT: &str = "agent.prompt";
     pub const AGENT_STEER: &str = "agent.steer";
     pub const AGENT_FOLLOW_UP: &str = "agent.follow_up";
     pub const AGENT_ABORT: &str = "agent.abort";
+    pub const AGENT_COMPACT: &str = "agent.compact";
+    pub const AGENT_CONTEXT_USAGE: &str = "agent.context_usage";
+    pub const AGENT_CLEAR_QUEUE: &str = "agent.clear_queue";
+    pub const AGENT_ABORT_RETRY: &str = "agent.abort_retry";
+
+    // ---- SESSION ----
+    pub const SESSION_EXPORT: &str = "session.export";
+    pub const SESSION_SET_AUTO_COMPACTION: &str = "session.set_auto_compaction";
+    pub const SESSION_SET_AUTO_RETRY: &str = "session.set_auto_retry";
+    pub const SESSION_LIST_TOOLS: &str = "session.list_tools";
+    pub const SESSION_SET_ACTIVE_TOOLS: &str = "session.set_active_tools";
+    pub const SESSION_TREE: &str = "session.tree";
+    pub const SESSION_NAVIGATE_TREE: &str = "session.navigate_tree";
+
+    // ---- CONFIG ----
+    pub const CONFIG_PROMPTS_LIST: &str = "config.prompts.list";
+
+    // ---- SESSION ----
+    pub const SESSION_THINKING_INFO: &str = "session.thinking_info";
+    pub const SESSION_TRUST: &str = "session.trust";
+    pub const SESSION_PENDING: &str = "session.pending";
+
+    // ---- CONFIG ----
     pub const CONFIG_GET: &str = "config.get";
+    pub const CONFIG_SETTINGS_SET: &str = "config.settings.set";
+    pub const CONFIG_PROVIDERS_LIST: &str = "config.providers.list";
+    pub const CONFIG_PROVIDER_SET_KEY: &str = "config.providers.set_key";
+    pub const CONFIG_PROVIDER_REMOVE_KEY: &str = "config.providers.remove_key";
+    pub const CONFIG_MODELS_LIST: &str = "config.models.list";
+    pub const CONFIG_MODELS_SET_DEFAULT: &str = "config.models.set_default";
+    pub const CONFIG_RELOAD_RUNTIME: &str = "config.reload_runtime";
+    pub const CONFIG_EXTENSIONS_LIST: &str = "config.extensions.list";
+    pub const CONFIG_EXTENSIONS_TOGGLE: &str = "config.extensions.toggle";
+    pub const CONFIG_EXTENSION_READ: &str = "config.extensions.read";
+    pub const CONFIG_SKILLS_LIST: &str = "config.skills.list";
+    pub const CONFIG_SKILLS_TOGGLE: &str = "config.skills.toggle";
+    pub const CONFIG_SKILL_FILES: &str = "config.skills.files";
+    pub const CONFIG_SKILL_READ: &str = "config.skills.read";
+    pub const CONFIG_SKILLS_INSTALL: &str = "config.skills.install";
+    pub const CONFIG_EXTENSIONS_INSTALL: &str = "config.extensions.install";
+    pub const CONFIG_PROVIDERS_CUSTOM_GET: &str = "config.providers.custom.get";
+    pub const CONFIG_PROVIDERS_CUSTOM_SET: &str = "config.providers.custom.set";
+    pub const CONFIG_PROVIDERS_CUSTOM_REMOVE: &str = "config.providers.custom.remove";
+    pub const CONFIG_PROVIDERS_FETCH_MODELS: &str = "config.providers.fetch_models";
+    pub const CONFIG_MCP_GET: &str = "config.mcp.get";
+    pub const CONFIG_MCP_SET: &str = "config.mcp.set";
+    pub const CONFIG_AGENTS_READ: &str = "config.agents.read";
+    pub const CONFIG_AGENTS_WRITE: &str = "config.agents.write";
+
+    // ---- STATS ----
+    pub const STATS_USAGE: &str = "stats.usage";
+
+    // ---- PIDOCK ----
+    pub const PIDOCK_SETTINGS_GET: &str = "pidock.settings.get";
+    pub const PIDOCK_SETTINGS_SET: &str = "pidock.settings.set";
+
+    // ---- ATTACHMENT ----
+    pub const ATTACHMENT_GET: &str = "attachment.get";
+
+    // ---- EXPERTS ----
+    pub const EXPERTS_LIST: &str = "experts.list";
+    pub const EXPERTS_GET: &str = "experts.get";
+    pub const EXPERTS_SAVE: &str = "experts.save";
+    pub const EXPERTS_DELETE: &str = "experts.delete";
+    pub const EXPERTS_INSTALL_RESOURCE: &str = "experts.install_resource";
+    pub const EXPERTS_PRIVATE_LIST: &str = "experts.private_list";
+    pub const EXPERTS_REMOVE_RESOURCE: &str = "experts.remove_resource";
+    pub const EXPERTS_READ_AVATAR_FILE: &str = "experts.read_avatar_file";
 }
 
 #[cfg(test)]

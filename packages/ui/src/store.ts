@@ -1,6 +1,6 @@
 import { reactive, ref, watch } from "vue";
 import type { DataBus } from "./databus.js";
-import type { AskQuestion, TodoItem } from "@pidock/protocol";
+import type { AskQuestion, TodoItem, PendingApprovalInfo, PendingAskInfo } from "@pidock/protocol";
 import { appConfirm } from "./confirm.js";
 
 /**
@@ -232,6 +232,14 @@ export function createAgentStore(bus: DataBus) {
   const queueBySession = ref<Record<string, { steering: number; follow_up: number }>>({});
   /** 每会话思考能力（session.thinking_info，openSession 时拉取） */
   const thinkingBySession = ref<Record<string, ThinkingInfoUi>>({});
+  /** 每会话自动重试状态（auto_retry 事件；非 null = 重试中），对话顶部提示条 */
+  const autoRetryBySession = ref<
+    Record<string, { attempt?: number; max_attempts?: number; error?: string } | null>
+  >({});
+  /** 每会话压缩进行中（compaction_lifecycle start/end），上下文条显示进度态 */
+  const compactingBySession = ref<Record<string, boolean>>({});
+  /** 每会话最近一次压缩摘要（compaction_summary 落库事件），对话顶部可展开查看 */
+  const compactionBySession = ref<Record<string, { summary: string; tokens_before?: number }>>({});
 
   let liveTools = new Map<string, UiToolItem>();
   let streaming: UiMessageItem | null = null;
@@ -535,6 +543,56 @@ export function createAgentStore(bus: DataBus) {
         }
         break;
       }
+      case "auto_retry": {
+        // 自动重试生命周期：start 挂提示条（含尝试次数/错误），end 清除
+        if (e.session_id) {
+          const p = e.payload ?? {};
+          autoRetryBySession.value = {
+            ...autoRetryBySession.value,
+            [e.session_id]:
+              p?.phase === "start"
+                ? { attempt: p.attempt, max_attempts: p.max_attempts, error: p.error }
+                : null,
+          };
+        }
+        break;
+      }
+      case "compaction_lifecycle": {
+        if (e.session_id) {
+          compactingBySession.value = {
+            ...compactingBySession.value,
+            [e.session_id]: e.payload?.phase === "start",
+          };
+        }
+        break;
+      }
+      case "compaction_summary": {
+        if (e.session_id) {
+          compactionBySession.value = {
+            ...compactionBySession.value,
+            [e.session_id]: {
+              summary: String(e.payload?.summary ?? ""),
+              ...(Number.isFinite(e.payload?.tokens_before)
+                ? { tokens_before: Number(e.payload.tokens_before) }
+                : {}),
+            },
+          };
+        }
+        break;
+      }
+      case "session_resynced": {
+        // 压缩/分叉重同步：镜像与本地内存态作废，host 会从 seq=0 重灌全量条目重建
+        const sid = e.session_id;
+        todosBySession.value = { ...todosBySession.value, [sid]: [] };
+        const { [sid]: _stale, ...restCompaction } = compactionBySession.value;
+        compactionBySession.value = restCompaction;
+        if (activeId.value === sid) {
+          items.value = [];
+          liveTools = new Map();
+          streaming = null;
+        }
+        break;
+      }
       case "error":
         lastError.value = e.payload?.message ?? "unknown error";
         break;
@@ -600,6 +658,17 @@ export function createAgentStore(bus: DataBus) {
     if (ev.kind === "message_complete") applyMessageComplete(ev.payload, ev.ts);
     else if (ev.kind === "session_meta" && ev.payload?.name !== undefined) {
       /* name shown from sessions list */
+    } else if (ev.kind === "compaction_summary" && activeId.value) {
+      // 历史回放恢复压缩摘要（与实时 applyEnvelope 同一落点）
+      compactionBySession.value = {
+        ...compactionBySession.value,
+        [activeId.value]: {
+          summary: String(ev.payload?.summary ?? ""),
+          ...(Number.isFinite(ev.payload?.tokens_before)
+            ? { tokens_before: Number(ev.payload.tokens_before) }
+            : {}),
+        },
+      };
     }
   }
 
@@ -704,6 +773,58 @@ export function createAgentStore(bus: DataBus) {
         ...(rec.timeoutSec ? { timeoutSec: rec.timeoutSec } : {}),
       };
     }
+    // 以 host 实际挂起状态对账兜底（web 刷新后内存 stash 为空；后台可能已解决/超时）
+    void fetchPending();
+  }
+
+  /**
+   * 拉取活动会话挂起的审批/提问（session.pending），并同步回 pendingBySession：
+   * host 是唯一事实源 —— 有则恢复卡片（timeout_sec 为剩余秒数），无则清掉本地残留。
+   * 旧 host 无此 RPC 时静默跳过。
+   */
+  async function fetchPending(): Promise<void> {
+    const sid = activeId.value;
+    if (!sid) return;
+    let r: { approval?: PendingApprovalInfo | null; ask?: PendingAskInfo | null };
+    try {
+      r = await bus.request("session.pending", { session_id: sid });
+    } catch {
+      return;
+    }
+    const next = { ...pendingBySession.value };
+    if (r?.approval?.approval_id) {
+      pendingApproval.value = {
+        approvalId: r.approval.approval_id,
+        toolName: r.approval.tool_name ?? "",
+        args: r.approval.args ?? "",
+      };
+      next[sid] = {
+        kind: "approval",
+        approvalId: r.approval.approval_id,
+        toolName: r.approval.tool_name ?? "",
+        args: r.approval.args ?? "",
+      };
+    } else {
+      pendingApproval.value = null;
+      if (next[sid]?.kind === "approval") delete next[sid];
+    }
+    if (r?.ask?.ask_id && r.ask.question) {
+      pendingAsk.value = {
+        askId: r.ask.ask_id,
+        question: r.ask.question,
+        ...(r.ask.timeout_sec ? { timeoutSec: r.ask.timeout_sec } : {}),
+      };
+      next[sid] = {
+        kind: "ask",
+        askId: r.ask.ask_id,
+        question: r.ask.question,
+        ...(r.ask.timeout_sec ? { timeoutSec: r.ask.timeout_sec } : {}),
+      };
+    } else {
+      pendingAsk.value = null;
+      if (next[sid]?.kind === "ask") delete next[sid];
+    }
+    pendingBySession.value = next;
   }
 
   async function newSession(cwd?: string, model?: string, expertId?: string): Promise<void> {
@@ -1225,6 +1346,9 @@ export function createAgentStore(bus: DataBus) {
     contextBySession,
     queueBySession,
     thinkingBySession,
+    autoRetryBySession,
+    compactingBySession,
+    compactionBySession,
     // actions
     start,
     refreshSessions,
@@ -1233,6 +1357,7 @@ export function createAgentStore(bus: DataBus) {
     openSession,
     newSession,
     forkSession,
+    fetchPending,
     send,
     abort,
     setPermissionMode,

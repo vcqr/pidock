@@ -51,6 +51,7 @@ const handlers: Record<string, Handler> = {
   [Method.CONFIG_PROMPTS_LIST]: (p) => pool.promptsList(p),
   [Method.SESSION_THINKING_INFO]: (p) => pool.thinkingInfo(p),
   [Method.SESSION_TRUST]: (p) => pool.setProjectTrust(p),
+  [Method.SESSION_PENDING]: (p) => pool.pendingState(p),
   [Method.CONFIG_GET]: () => config.get(),
   [Method.CONFIG_SETTINGS_SET]: (p) => config.set(p),
   [Method.CONFIG_PROVIDERS_LIST]: () => config.providersList(),

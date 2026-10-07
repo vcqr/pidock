@@ -119,6 +119,16 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
     }
 
     let existing = sessions.find_one(doc! {"_id": session_id}).await.ok().flatten();
+    let prev_status = existing
+        .as_ref()
+        .and_then(|d| d.get_str("status").ok())
+        .map(str::to_string);
+    // 显式命名旗标：重命名/自动标题（session_meta.name）落地后，message_complete
+    // 的首行标题推导不再覆盖用户起的名字
+    let named = existing
+        .as_ref()
+        .and_then(|d| d.get_bool("named").ok())
+        .unwrap_or(false);
     let status = derive_status(
         kind,
         envelope.get("payload").unwrap_or(&json!({})),
@@ -132,22 +142,44 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
     if let Some(s) = &status {
         set.insert("status", s);
     }
-    if kind == "message_complete" {
+    if kind == "message_complete" && !named {
         if let Some(text) = envelope.pointer("/payload/blocks/0/text").and_then(|t| t.as_str()) {
             set.insert("title", text.chars().take(60).collect::<String>());
         }
     }
-    // session_meta 携带 cwd（web 端项目分组与文件浏览依赖它；桌面端回填时补发）
+    // session_meta 携带 cwd/model/命名/专家/分叉溯源（web 端项目分组、文件浏览、
+    // 侧栏分叉与专家徽标依赖；桌面端回填时补发）
     if kind == "session_meta" {
-        if let Some(cwd) = envelope.pointer("/payload/cwd").and_then(|t| t.as_str()) {
+        let empty_payload = json!({});
+        let payload = envelope.get("payload").unwrap_or(&empty_payload);
+        if let Some(cwd) = payload.get("cwd").and_then(|t| t.as_str()) {
             set.insert("cwd", cwd);
+        }
+        if let Some(m) = payload.get("model").and_then(|t| t.as_str()) {
+            set.insert("model", m);
+        }
+        match payload.get("name").and_then(|t| t.as_str()) {
+            Some(n) if !n.is_empty() => {
+                set.insert("title", n.to_string());
+                set.insert("named", true);
+            }
+            Some(_) => {
+                // 清空名字 = 恢复默认标题：解除命名旗标，等下一条 message_complete 重推
+                set.insert("named", false);
+            }
+            None => {}
+        }
+        for field in ["parent_session_id", "expert_id", "expert_name"] {
+            if let Some(v) = payload.get(field).and_then(|t| t.as_str()) {
+                set.insert(field, v.to_string());
+            }
         }
     }
     if let Err(e) = sessions
         .update_one(
                 doc! {"_id": session_id},
                 doc! {
-                "$set": set,
+                "$set": set.clone(),
                 "$setOnInsert": {"created_at": chrono::Utc::now().to_rfc3339()},
             },
             )
@@ -155,5 +187,48 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
         .await
     {
         tracing::error!("ingest: session upsert failed: {e}");
+        return;
+    }
+
+    // web 侧栏实时更新：session_upserted 控制帧（此前无人发送，web 只能靠 30s 轮询）。
+    // 只在有可见变化时推：消息落库 / 元数据到达 / 状态翻转，快照与工具事件不推。
+    let status_changed = match (&status, &prev_status) {
+        (Some(s), Some(p)) => s != p,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    if kind == "message_complete" || kind == "session_meta" || status_changed {
+        let now = chrono::Utc::now().to_rfc3339();
+        let get = |field: &str| -> String {
+            if let Some(v) = set.get(field).and_then(|v| v.as_str()) {
+                return v.to_string();
+            }
+            existing
+                .as_ref()
+                .and_then(|d| d.get_str(field).ok())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let session = json!({
+            "session_id": session_id,
+            "title": get("title"),
+            "status": status.clone().or(prev_status.clone()).unwrap_or_else(|| "idle".into()),
+            "model": get("model"),
+            "cwd": get("cwd"),
+            "expert_id": get("expert_id"),
+            "expert_name": get("expert_name"),
+            "parent_session_id": get("parent_session_id"),
+            "created_at": existing
+                .as_ref()
+                .and_then(|d| d.get_str("created_at").ok())
+                .unwrap_or(&now),
+            "updated_at": &now,
+        });
+        let frame = json!({
+            "ctrl": "session_upserted",
+            "machine_id": machine_id,
+            "session": session,
+        });
+        state.publish_to_user(user_id, &frame.to_string()).await;
     }
 }

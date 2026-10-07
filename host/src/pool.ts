@@ -135,15 +135,20 @@ export class SessionPool {
   >();
   /** bash 工具执行前的目录元数据扫描（执行后 diff 出新建文件补快照） */
   private bashPreScans = new Map<string, Map<string, { mtime: number; size: number }>>();
-  /** 等待用户审批的工具调用 */
+  /** 等待用户审批的工具调用（toolName/args 供 session.pending 恢复查询） */
   private pendingApprovals = new Map<
     string,
-    { sessionId: string; resolve: (approved: boolean) => void }
+    { sessionId: string; toolName: string; args: string; resolve: (approved: boolean) => void }
   >();
-  /** 等待用户回答的 AskUserQuestion 提问（"timeout" 哨兵 = 等待超时） */
+  /** 等待用户回答的 AskUserQuestion 提问（"timeout" 哨兵 = 等待超时；deadlineMs=0 不限时） */
   private pendingAsks = new Map<
     string,
-    { sessionId: string; resolve: (answer: AskAnswer | "timeout" | null) => void }
+    {
+      sessionId: string;
+      question: AskQuestion;
+      deadlineMs: number;
+      resolve: (answer: AskAnswer | "timeout" | null) => void;
+    }
   >();
   /** 项目信任决定存储（~/.pi/agent/trust.json，SDK 同源） */
   private trustStore = new ProjectTrustStore(getAgentDir());
@@ -496,9 +501,18 @@ export class SessionPool {
       created_at: new Date().toISOString(),
     });
 
-    emitEvent(sessionId, Event.SESSION_META, metaPayloadFromSession({ cwd, model: params.model ?? expertCfg?.expert.model }), {
-      persist: false,
-    });
+    emitEvent(
+      sessionId,
+      Event.SESSION_META,
+      metaPayloadFromSession({
+        cwd,
+        model: params.model ?? expertCfg?.expert.model,
+        ...(expertCfg ? { expert_id: expertCfg.expert.id, expert_name: expertCfg.expert.name } : {}),
+      }),
+      {
+        persist: false,
+      },
+    );
     emitEvent(sessionId, Event.CONTEXT_USAGE, this.contextUsagePayload(tracked), { persist: false });
     return {
       session_id: sessionId,
@@ -512,10 +526,10 @@ export class SessionPool {
     const sessionManager = SessionManager.open(params.file);
     const cwd = sessionManager.getCwd() || process.cwd();
     this.requireTrustDecision(cwd);
-    // 重开会话按注册表里的 expert_id 重放专家配置（专家已被删除则回退普通会话）
-    const expertCfg = this.experts.resolveForSession(
-      this.readRegistry().find((e) => e.file === params.file)?.expert_id,
-    );
+    // 重开会话按注册表里的 expert_id 重放专家配置（专家已被删除则回退普通会话）；
+    // 注册表条目同时供 session_meta 带出分叉溯源（parent_session_id）
+    const registryEntry = this.readRegistry().find((e) => e.file === params.file);
+    const expertCfg = this.experts.resolveForSession(registryEntry?.expert_id);
     // 与 createSession 一致：权限模式不持久化，重开回到默认（专家会话回到专家预设）计划模式
     const permission = { mode: expertCfg?.expert.permission_mode ?? "plan" };
     const sessionIdRef = { id: "" };
@@ -592,7 +606,18 @@ export class SessionPool {
       emitEvent(sessionId, Event.TODO_UPDATED, { todos: tracked.todos }, { persist: false });
     }
 
-    emitEvent(sessionId, Event.SESSION_META, metaPayloadFromSession({ cwd }), { persist: false });
+    emitEvent(
+      sessionId,
+      Event.SESSION_META,
+      metaPayloadFromSession({
+        cwd,
+        ...(registryEntry?.parent_session_id
+          ? { parent_session_id: registryEntry.parent_session_id }
+          : {}),
+        ...(expertCfg ? { expert_id: expertCfg.expert.id, expert_name: expertCfg.expert.name } : {}),
+      }),
+      { persist: false },
+    );
     emitEvent(sessionId, Event.CONTEXT_USAGE, this.contextUsagePayload(tracked), { persist: false });
     return {
       session_id: sessionId,
@@ -888,7 +913,7 @@ export class SessionPool {
     // confirm 模式（或 auto-edit 下的 bash）：请求用户审批并等待回复
     const approvalId = randomUUID();
     const pending = new Promise<boolean>((resolve) => {
-      this.pendingApprovals.set(approvalId, { sessionId, resolve });
+      this.pendingApprovals.set(approvalId, { sessionId, toolName, args: JSON.stringify(input ?? {}), resolve });
     });
     emitEvent(
       sessionId,
@@ -918,7 +943,12 @@ export class SessionPool {
     if (!sessionId || !this.sessions.has(sessionId)) return Promise.resolve(null);
     const askId = randomUUID();
     const pending = new Promise<AskAnswer | "timeout" | null>((resolve) => {
-      this.pendingAsks.set(askId, { sessionId, resolve });
+      this.pendingAsks.set(askId, {
+        sessionId,
+        question,
+        deadlineMs: timeoutMs > 0 ? Date.now() + timeoutMs : 0,
+        resolve,
+      });
     });
     const timeoutMs = this.askTimeoutMs();
     emitEvent(
@@ -979,6 +1009,8 @@ export class SessionPool {
     if (name) updated.name = name;
     else delete updated.name;
     this.writeRegistryEntry(updated);
+    // 实时推送命名变化（云镜像按 name 落 title 并置 named 旗标，防止被首行标题覆盖）
+    emitEvent(params.session_id, Event.SESSION_META, { name });
     return { ok: true, name };
   }
 
@@ -1040,6 +1072,14 @@ export class SessionPool {
       created_at: new Date().toISOString(),
     });
     const opened = await this.openSession({ file: newPath });
+    // 云镜像回填：分叉会话继承的历史条目在 openSession 里被视为"已灌过"，
+    // 云端却从没见过 —— 从 seq=0 强制重灌（走压缩重同步同一路径：先发
+    // session_resynced 清空镜像，再按序落库全部条目）。
+    const forked = this.sessions.get(opened.session_id);
+    if (forked) {
+      forked.lastSeq = 0;
+      forked.drain();
+    }
     const selectedText =
       position === "before" ? this.userMessageText(entry.message) : undefined;
     return {
@@ -1145,6 +1185,34 @@ export class SessionPool {
     } finally {
       closeSync(fd);
     }
+  }
+
+  /**
+   * 会话当前挂起的审批/提问（session.pending）：UI 重开或 web 端刷新后，
+   * ephemeral 的 tool_approval/ask_user_question 事件不会重放，用这个查询
+   * 恢复卡片。timeout_sec 返回剩余秒数（不限时缺省）。
+   */
+  pendingState(params: { session_id: string }): {
+    approval: { approval_id: string; tool_name: string; args: string } | null;
+    ask: { ask_id: string; question: AskQuestion; timeout_sec?: number } | null;
+  } {
+    let approval: { approval_id: string; tool_name: string; args: string } | null = null;
+    for (const [id, p] of this.pendingApprovals) {
+      if (p.sessionId === params.session_id) {
+        approval = { approval_id: id, tool_name: p.toolName, args: p.args };
+        break;
+      }
+    }
+    let ask: { ask_id: string; question: AskQuestion; timeout_sec?: number } | null = null;
+    for (const [id, p] of this.pendingAsks) {
+      if (p.sessionId === params.session_id) {
+        const remain =
+          p.deadlineMs > 0 ? Math.max(0, Math.round((p.deadlineMs - Date.now()) / 1000)) : undefined;
+        ask = { ask_id: id, question: p.question, ...(remain !== undefined ? { timeout_sec: remain } : {}) };
+        break;
+      }
+    }
+    return { approval, ask };
   }
 
   resolveApproval(params: { approval_id: string; approved: boolean }): { ok: boolean } {

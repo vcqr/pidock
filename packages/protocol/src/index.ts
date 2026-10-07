@@ -105,6 +105,11 @@ export interface SessionMetaPayload {
   name?: string;
   thinking_level?: string;
   entry_id?: string;
+  /** 雇佣专家建会话 / 分叉继承专家时携带（云镜像存 expert_id/expert_name 供 web 侧栏徽标） */
+  expert_id?: string;
+  expert_name?: string;
+  /** 分叉新会话记录源会话（云镜像存该字段供 web 侧栏分叉徽标） */
+  parent_session_id?: string;
 }
 
 export interface CompactionSummaryPayload {
@@ -232,6 +237,25 @@ export interface AskUserQuestionPayload {
   timeout_sec?: number;
 }
 
+/** session.pending 响应：会话当前挂起的审批/提问（恢复用，两者皆可缺省） */
+export interface PendingStatePayload {
+  approval: PendingApprovalInfo | null;
+  ask: PendingAskInfo | null;
+}
+
+export interface PendingApprovalInfo {
+  approval_id: string;
+  tool_name: string;
+  args: string;
+}
+
+export interface PendingAskInfo {
+  ask_id: string;
+  question: AskQuestion;
+  /** 剩余等待秒数（host 按 deadline 换算）；0/缺省 = 不限时 */
+  timeout_sec?: number;
+}
+
 export interface ErrorPayload {
   message: string;
   fatal?: boolean;
@@ -299,6 +323,8 @@ export const Event = {
   TODO_UPDATED: "todo_updated",
   TOOL_APPROVAL: "tool_approval",
   ASK_USER_QUESTION: "ask_user_question",
+  /** web 命令的执行结果回执（bus 按 command_id 关联 resolve/reject） */
+  COMMAND_RESULT: "command_result",
   ERROR: "error",
 } as const;
 
@@ -362,6 +388,8 @@ export const Method = {
   SESSION_THINKING_INFO: "session.thinking_info",
   /** 项目信任决定（ProjectTrustStore；trust_required 错误后 UI 确认回调） */
   SESSION_TRUST: "session.trust",
+  /** 会话当前挂起的审批/提问（UI 重开 / web 刷新后恢复卡片，ephemeral 事件不重放） */
+  SESSION_PENDING: "session.pending",
   CONFIG_GET: "config.get",
   CONFIG_SETTINGS_SET: "config.settings.set",
   CONFIG_PROVIDERS_LIST: "config.providers.list",

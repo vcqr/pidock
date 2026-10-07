@@ -238,6 +238,9 @@ async fn machine_sessions(
                 "status": d.get_str("status").unwrap_or("idle"),
                 "model": d.get_str("model").unwrap_or(""),
                 "cwd": d.get_str("cwd").unwrap_or(""),
+                "expert_id": d.get_str("expert_id").unwrap_or(""),
+                "expert_name": d.get_str("expert_name").unwrap_or(""),
+                "parent_session_id": d.get_str("parent_session_id").unwrap_or(""),
                 "created_at": d.get_str("created_at").unwrap_or(""),
                 "updated_at": d.get_str("updated_at").unwrap_or(""),
             })
@@ -369,7 +372,13 @@ async fn post_command(
             Ok(Json(json!({"command_id": command_id, "status": "sent"})))
         }
         Err(e) => {
-            let status = if e == "refused_offline" { "refused_offline" } else { "error" };
+            let status = if e == "refused_offline" {
+                "refused_offline"
+            } else if e == "forbidden" {
+                "forbidden"
+            } else {
+                "error"
+            };
             Ok(Json(json!({"status": status})))
         }
     }

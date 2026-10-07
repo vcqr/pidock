@@ -285,8 +285,14 @@ async fn execute_command(
         "agent.steer" => ("agent.steer", json!({"session_id": session_id, "text": payload.get("text").and_then(|t| t.as_str()).unwrap_or("")})),
         "agent.follow_up" => ("agent.follow_up", json!({"session_id": session_id, "text": payload.get("text").and_then(|t| t.as_str()).unwrap_or("")})),
         "agent.abort" => ("agent.abort", json!({"session_id": session_id})),
-        "session.create" => ("session.create", json!({"cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or(""), "model": payload.get("model")})),
-        "session.close" => ("session.close", json!({"session_id": session_id})),
+        "session.create" => {
+            let mut p = json!({"cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or(""), "model": payload.get("model")});
+            // 雇佣专家建会话（web 端雇佣 chip 与桌面共享 UI）
+            if let Some(v) = payload.get("expert_id") {
+                if v.is_string() { p["expert_id"] = v.clone(); }
+            }
+            ("session.create", p)
+        }
         "session.resolve_approval" => ("session.resolve_approval", json!({
             "approval_id": payload.get("approval_id").and_then(|v| v.as_str()).unwrap_or(""),
             "approved": payload.get("approved").and_then(|v| v.as_bool()).unwrap_or(false),
@@ -314,8 +320,9 @@ async fn execute_command(
             "cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or(""),
             "path": payload.get("path").and_then(|t| t.as_str()).unwrap_or(""),
         })),
-        // 会话级新命令（上下文用量/压缩/队列/导出/开关/工具/树/prompts/thinking/信任）：
-        // 与 host TS Method 同名，注入 session_id 后原样透传
+        // 会话级新命令（上下文用量/压缩/队列/导出/开关/工具/树/prompts/thinking/信任/
+        // 分叉/权限模式/思考级别/模型/文件变更审查）：与 host TS Method 同名，
+        // 注入 session_id 后原样透传
         passthrough @ ("agent.context_usage"
             | "agent.compact"
             | "agent.clear_queue"
@@ -330,10 +337,69 @@ async fn execute_command(
             | "config.prompts.list"
             | "config.reload_runtime"
             | "session.thinking_info"
-            | "session.trust") => {
+            | "session.trust"
+            | "session.fork"
+            | "session.set_permission_mode"
+            | "session.set_thinking_level"
+            | "session.set_model"
+            | "session.file_changes"
+            | "session.file_diff"
+            | "session.revert_files"
+            | "session.pending") => {
             let mut p = payload.clone();
             p["session_id"] = json!(session_id);
             (passthrough, p)
+        }
+        // 非会话级命令（配置中心/供应商/模型/技能/扩展/MCP/专家/用量/代理设置/列表查询）：
+        // 无 session_id，载荷原样透传。web 与桌面共享同一控制面 —— web 能发
+        // agent.prompt 即可在桌面执行代码，config 写不构成新增权限面
+        passthrough @ ("config.get"
+            | "config.settings.set"
+            | "config.providers.list"
+            | "config.providers.set_key"
+            | "config.providers.remove_key"
+            | "config.providers.custom.get"
+            | "config.providers.custom.set"
+            | "config.providers.custom.remove"
+            | "config.providers.fetch_models"
+            | "config.models.list"
+            | "config.models.set_default"
+            | "config.model_override.set"
+            | "config.extensions.list"
+            | "config.extensions.toggle"
+            | "config.extensions.read"
+            | "config.extensions.install"
+            | "config.skills.list"
+            | "config.skills.toggle"
+            | "config.skills.files"
+            | "config.skills.read"
+            | "config.skills.install"
+            | "config.mcp.get"
+            | "config.mcp.set"
+            | "config.agents.read"
+            | "config.agents.write"
+            | "stats.usage"
+            | "pidock.settings.get"
+            | "pidock.settings.set"
+            | "experts.list"
+            | "experts.get"
+            | "experts.save"
+            | "experts.delete"
+            | "experts.private_list"
+            | "experts.install_resource"
+            | "experts.remove_resource") => (passthrough, payload.clone()),
+        // 本地定时任务管理：调度器在桌面 Rust 侧，不经 host —— 直连 SchedulerManager
+        automation @ ("automation.list"
+            | "automation.save"
+            | "automation.delete"
+            | "automation.set_enabled"
+            | "automation.run_now"
+            | "automation.peek") => {
+            let sched = app.state::<crate::scheduler::SchedulerManager>();
+            let result =
+                crate::scheduler::dispatch_automation(app, &sched, automation, payload.clone())
+                    .await?;
+            return Ok(Some(result));
         }
         other => {
             return Err(format!("command type \"{other}\" not supported by this desktop"));

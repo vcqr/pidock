@@ -19,7 +19,15 @@ pub struct AppState {
     pub redis_client: redis::Client,
     pub sink: Arc<dyn EventSink>,
     pub s3: crate::s3::S3Client,
-    pub routes: Arc<tokio::sync::Mutex<HashMap<String, mpsc::UnboundedSender<serde_json::Value>>>>,
+    pub routes: Arc<tokio::sync::Mutex<HashMap<String, MachineRoute>>>,
+}
+
+/// one connected desktop machine: the command sender plus the owning user
+/// (stamped at register time from the desktop's own JWT), so web commands can
+/// be checked against machine ownership without a Mongo round-trip
+pub struct MachineRoute {
+    pub user_id: String,
+    pub tx: mpsc::UnboundedSender<serde_json::Value>,
 }
 
 impl AppState {

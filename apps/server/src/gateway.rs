@@ -89,11 +89,10 @@ async fn desktop_socket(state: AppState, user_id: String, socket: WebSocket) {
                 if let Err(e) = state.machine_online(&user_id, &mid, &frame).await {
                     tracing::error!("machine_online failed: {e}");
                 }
-                state
-                    .routes
-                    .lock()
-                    .await
-                    .insert(mid.clone(), out_tx.clone());
+                state.routes.lock().await.insert(
+                    mid.clone(),
+                    crate::state::MachineRoute { user_id: user_id.clone(), tx: out_tx.clone() },
+                );
                 let _ = out_tx.send(json!({"ctrl":"registered","machine_id": mid}));
                 machine_id = Some(mid);
             }
@@ -177,7 +176,9 @@ async fn web_socket(state: AppState, user_id: String, socket: WebSocket) {
     push.abort();
 }
 
-/// route a command from the web to a connected desktop machine
+/// route a command from the web to a connected desktop machine.
+/// The machine must belong to the requesting user: routes carry the owner
+/// stamped at register time, so cross-user command injection is refused here.
 pub async fn route_command(
     state: &AppState,
     user_id: &str,
@@ -185,7 +186,11 @@ pub async fn route_command(
     command: &Value,
 ) -> Result<String, String> {
     let routes = state.routes.lock().await;
-    let sender = routes.get(machine_id).ok_or("refused_offline")?;
+    let route = routes.get(machine_id).ok_or("refused_offline")?;
+    if route.user_id != user_id {
+        tracing::warn!(user = %user_id, machine = %machine_id, "command refused: not machine owner");
+        return Err("forbidden".to_string());
+    }
     let command_id = uuid::Uuid::now_v7().to_string();
     let frame = json!({
         "ctrl": "command",
@@ -193,7 +198,8 @@ pub async fn route_command(
         "user_id": user_id,
         "command": command,
     });
-    sender
+    route
+        .tx
         .send(frame)
         .map_err(|_| "refused_offline".to_string())?;
     Ok(command_id)
