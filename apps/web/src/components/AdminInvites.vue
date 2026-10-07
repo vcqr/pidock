@@ -45,7 +45,9 @@ async function create(): Promise<void> {
   try {
     const r = await props.client.request(`/admin/invites?token=${props.client.token}`, {
       method: "POST",
+      // server 惯例：POST 的 token 走 JSON body（InviteCreateBody 必填），query 里那份只是顺手
       body: JSON.stringify({
+        token: props.client.token,
         max_uses: Math.max(1, Math.floor(maxUses.value) || 1),
         expires_days: Math.max(0, Math.floor(expiresDays.value) || 0),
       }),
