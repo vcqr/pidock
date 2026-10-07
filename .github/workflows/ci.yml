@@ -31,10 +31,10 @@ jobs:
       - name: 全仓 typecheck
         run: pnpm -r typecheck
 
-      - name: 构建 ui / web
-        run: |
-          pnpm --filter @pidock/ui build
-          pnpm --filter @pidock/web build
+      # ⚠️ 别加 @pidock/ui 的 vite build——包无 index.html，该脚本预存就是坏的；
+      # ui 的真实门禁是 typecheck + 被 desktop/web 构建实际打包
+      - name: 构建 web
+        run: pnpm --filter @pidock/web build
 
   rust:
     name: Rust（fmt / clippy / test）

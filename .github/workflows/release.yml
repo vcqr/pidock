@@ -25,10 +25,11 @@ jobs:
             bun_target: bun-linux-x64
             bundles: "deb,appimage"
           # Linux ARM64（原生 ARM runner，仅公共仓库免费）
+          # ⚠️ 只出 deb：arm64 runner 上 linuxdeploy AppImage 起不来（FUSE 缺失），appimage 必挂
           - platform: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             bun_target: bun-linux-arm64
-            bundles: "deb,appimage"
+            bundles: "deb"
           # macOS Apple Silicon
           - platform: macos-15
             target: aarch64-apple-darwin
