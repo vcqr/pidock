@@ -1,13 +1,29 @@
 # PiDock
 
-Desktop cockpit & cloud mirror for the [pi coding agent](https://pi.dev).
+[PiDock](https://github.com/vcqr/pidock) 是 [pi coding agent](https://pi.dev) 的桌面驾驶舱与云端镜像。
 
-本地跑 pi agent 的桌面工具（对标 Codex 桌面版），所有会话状态实时同步到远程 server，
-通过 web 端以账号身份查看与完全控制（发 prompt / steer / abort / 工具审批）。
+本地运行 pi agent 的桌面工具（对标 Codex 桌面版），所有会话状态实时同步到远程 server，
+在 web 端以账号身份查看并完全控制（发 prompt / steer / abort / 工具审批）。
 
 **完整架构设计、决策理由与踩坑记录见 [docs/DESIGN.md](docs/DESIGN.md)。**
 
-## 架构（M1 已落地部分标 ✔）
+## 项目介绍
+
+### 核心能力
+
+- **桌面端**（Tauri 2 + Vue 3）：多会话管理与项目分组、流式输出、工具实时卡片、
+  edit/write 红绿 diff 视图、双主题、设置中心（Providers / 模型 / 扩展 / 技能 / MCP）、
+  专家智能体、系统托盘
+- **云同步**：桌面事件经 sync-agent 上报，Kafka 管道 → ingest → MongoDB 持久化，
+  Redis pub/sub → WebSocket 推送到 web 端，近流式体验
+- **Web 端**：登录后按账号查看全部节点与会话，可远程发消息、插话、中止、审批工具调用，
+  支持节点卡片墙、详情浮层、头部搜索过滤
+- **附件数据面**：大 payload（>256KB）自动附件化，sha256 内容寻址 + 预览，
+  全文经 SigV4 presign 直传对象存储（RustFS / S3）
+- **发布**：GitHub Actions 多平台矩阵，tag 触发 Windows / macOS / Linux（x64 + ARM64）
+  安装包构建，pi-host 以 sidecar 形式打包，安装后不依赖本机 Node/Bun
+
+### 架构
 
 ```
 Tauri 2 (Rust core + Vue UI)
@@ -18,115 +34,68 @@ Tauri 2 (Rust core + Vue UI)
                                           └─ Redis pub/sub ── web WS 推送
 ```
 
-## 目录
+事件模型分三通道：delta 级（`message_delta`，仅本地 UI）、快照级
+（`message_snapshot`，2s 节流推 web 不落库）、消息级（`message_complete` /
+`session_meta` 等，落库幂等键 `(session_id, seq, kind)`）。细节见 DESIGN.md。
+
+### 目录结构
 
 ```
 crates/pidock-protocol/  统一线路协议（Rust serde + ts-rs 导出 TS）
 packages/protocol/       协议 payload 权威 TS 定义（host 与 ui 共用）
 host/                    pi-host：stdio 守护进程，嵌入 pi SDK
-  src/pool.ts            多 session 池 + 事件映射 + 快照节流 + 回放
-  scripts/smoke.ts       M1 冒烟（spawn 子进程全链路 + 真模型调用）
-  scripts/extension-smoke.ts  jiti 扩展 × bun-compile 验证
 packages/ui/             桌面与 web 共用的 Vue 组件 + DataBus + store
-apps/desktop/            Tauri 2 桌面应用
-  src/bus.ts             DataBus 的 Tauri IPC 适配器
-  src-tauri/             Rust：host supervisor（spawn/stdio 桥/进程树清理）
-apps/web|server/         web 前端 / axum server（M4+）
-docker/                  kafka + mongo + redis + rustfs + server（M4+）
+apps/desktop/            Tauri 2 桌面应用（src-tauri 为 Rust supervisor）
+apps/web/                web 前端（Vue 3）
+apps/server/             axum server（Rust：WS 网关 / Kafka 管道 / REST / 静态托管）
+docker/                  kafka + mongo + redis + rustfs + server 编排
+docs/                    架构设计文档与代码审查报告
 ```
 
-## 事件模型
+## 运行与部署
 
-- **delta 级**（仅本地 UI）：`message_delta`（thinking/text token 流）
-- **快照**（仅推送不落库）：`message_snapshot`（2s 内联节流，web 近流式体验）
-- **消息级**（上云）：`message_complete` / `session_meta` / `compaction_summary`，
-  `persist: true`，`seq` = pi session JSONL 条目序号（幂等键 `(session_id, seq, kind)`）
-- **状态**（临时）：`agent_state_changed` / `tool_execution_*` / `queue_changed` /
-  `auto_retry` / `compaction_lifecycle`
+### 前置条件
 
-大 payload（>256KB）自动附件化：sha256 内容寻址 + 16KB 预览，全文走对象存储（RustFS/S3）。
+- Node.js ≥ 22 与 pnpm 10（`corepack` 可自动管理）
+- [Bun](https://bun.sh)（运行 pi-host 源码与编译单文件）
+- Rust stable（`rustup`，edition 2021）
+- Docker（Windows 建议 WSL 内的 docker）
+- 可用的 LLM API Key（pi provider，如 Anthropic / OpenAI，用于真实会话）
 
-## M6 状态（数据面与打磨）
-
-- [x] 附件数据面：host 截断时全文落盘（`~/.pi/agent/pidock/attachments/<sha256>`）→
-      sync-agent 检测附件引用 → server SigV4 presign → 桌面直传 RustFS →
-      web 凭 presigned GET 查看全文（ToolCard「查看全文」按钮，归属校验 403）
-- [x] compaction 重同步：pi 压缩会话后 JSONL 变短 → host 发 `session_resynced` →
-      server 清空该会话事件 → 重排水序回填；ingest 单 worker 保序
-- [x] e2e 扩到 20/20（新增：presign 内容寻址、presigned PUT 上传、下载往返、
-      越权 403、压缩重建）
-- [x] 修复：SigV4 密钥派生漏了 "AWS4" 前缀（签名全 403 的根因）
-- [x] server 可选托管 web 静态资源（`PIDOCK_WEB_DIR`），Docker 镜像内置
-- [ ] NSIS 安装包（pi-host sidecar 打包进安装器）
-
-## M3 状态（设置中心）
-
-- [x] host `config.*` 全套命令：settings 读写（白名单键）、providers 列表 +
-      API Key 存取（auth.json）、models 列表 + 默认模型、extensions/skills
-      发现与启停（pi 的 `-path` glob 排除机制，写入 settings.json）、mcp.json
-      读写（pi 的 MCP 由扩展提供，配置文件按扩展约定）
-- [x] 桌面 SettingsView（模型与密钥 / 扩展 / 技能 / MCP 四个 tab）
-- [x] config 冒烟 20/20 PASS（`scripts/config-smoke.ts`，隔离 agent 目录）
-- [x] 修复：Windows 下 npm 垫片命令解析（bun.cmd → cmd /C 包装）；应用退出
-      进程挂起（Exit 后强制 process.exit）
-
-## M1 验证状态（2026-09-29）
-
-- [x] smoke 12/12 PASS：spawn → session.create → 真模型流式 → 持久事件 → 回放 → close
-- [x] `bun build --compile` 单文件 `target/pidock-host.exe`（93MB）smoke PASS
-- [x] jiti TS 扩展在编译产物内加载执行 PASS（`scripts/extension-smoke.ts`）
-- [x] console.log 重定向 stderr（防扩展污染协议通道）
-
-## M2 状态（桌面最小闭环）
-
-- [x] packages/ui：DataBus 接口 + reactive store（delta/snapshot/complete 合并、
-      工具实时卡片、历史回放）+ 组件（SessionSidebar/ChatView/MessageItem/
-      ToolCard/Composer/StatePill）
-- [x] apps/desktop 前端：Tauri IPC DataBus 适配器 + App 布局，vue-tsc 通过，vite 构建通过
-- [x] apps/desktop/src-tauri：Supervisor（spawn pi-host、请求-响应 oneshot 桥、
-      `pidock:event` 事件桥、退出时 taskkill /T /F 进程树清理），cargo check/build 通过
-- [x] host 增强：message_complete 携带 turnId，前端流式→落库精确合并
-
-启动桌面应用（开发模式）：
+### 本地运行（开发模式）
 
 ```bash
-pnpm --filter @pidock/desktop tauri dev
-```
+# 1. 基础设施（容器 healthy 后即用）
+cd docker && docker compose up -d kafka mongo redis rustfs && cd ..
 
-环境变量（默认即可用）：`PIDOCK_HOST_CMD`（默认 bun）、`PIDOCK_HOST_ARGS`（默认
-src/main.ts）、`PIDOCK_HOST_DIR`（默认 <repo>/host）。生产模式用
-`bun build ./src/main.ts --compile --outfile target/pidock-host.exe` 打单文件后
-由 supervisor 以 sidecar 方式拉起（打包进安装包在 M6）。
+# 2. server（:8080；Windows cmd 示例，bash 用 export）
+set PIDOCK_MONGO_URI=mongodb://localhost:27017&& set PIDOCK_REDIS_URL=redis://localhost:6379&& set PIDOCK_KAFKA_BROKERS=localhost:9092&& cargo run -p pidock-server
 
-## UI 2.0
-
-- **双主题**：右上角 ☀/☾ 切换，全量 CSS 变量（`packages/ui/src/styles/tokens.css`），Naive UI 桥接
-- **消息渲染**：markdown-it + highlight.js（16 语言）+ DOMPurify；代码块带语言标签与复制按钮；
-  edit/write 工具渲染为红绿 diff 视图；消息一键复制；思考过程折叠
-- **WorkBuddy/ZCode 风格布局**：侧栏「新建会话」主按钮 + 会话按项目分组折叠 + 搜索 +
-  相对时间戳（刚刚/N分钟前/昨天）；无会话时**居中问候语 + 大输入卡片 + 快捷指令 chips**
-- Composer 卡片化：模型标签、圆形发送按钮、离线置灰
-
-## 本地开发启动（不依赖任何会话）
-
-```bash
-# 基础设施（WSL docker，容器 healthy 后即用）
-wsl -u root -e bash -lc "cd /mnt/d/project/rust-project/pi-desktop/docker && docker compose up -d kafka mongo redis rustfs"
-
-# server（Kafka 管道）
-set PIDOCK_MONGO_URI=mongodb://localhost:27017&& set PIDOCK_REDIS_URL=redis://localhost:6379&& set PIDOCK_KAFKA_BROKERS=localhost:9092&& set PIDOCK_PIPELINE=kafka&& cargo run -p pidock-server
-
-# web（:5174）
+# 3. web（:5174）
 pnpm --filter @pidock/web dev
 
-# 桌面（:dev 模式跑 bun 源码 host）
+# 4. 桌面应用（开发模式跑 bun 源码 host）
 pnpm --filter @pidock/desktop tauri dev
-
-# 端到端验收（server 需在跑）
-pnpm --filter @pidock/host e2e:server
 ```
 
-## 安装包（发布形态）
+桌面端环境变量（默认即可用）：`PIDOCK_HOST_CMD`（默认 bun）、
+`PIDOCK_HOST_ARGS`（默认 src/main.ts）、`PIDOCK_HOST_DIR`（默认 `<repo>/host`）。
+
+- web 端登录页填 server 地址（默认 `http://localhost:8080`）注册/登录
+- 桌面端 ☁ 面板配置 server 地址开启云同步
+
+### Docker 部署 server（生产形态）
+
+```bash
+# server 镜像内置 web 静态资源（PIDOCK_WEB_DIR），单容器同时提供 REST/WS 与 web
+pnpm --filter @pidock/web build          # 先构建 web（Dockerfile 会 COPY dist）
+cd docker && docker compose up -d --build server
+```
+
+可配置项（docker-compose 已给默认值）：`PIDOCK_JWT_SECRET`、
+`RUSTFS_ROOT_USER` / `RUSTFS_ROOT_PASSWORD`、`PIDOCK_PIPELINE`（kafka，可选 redis 降级）。
+
+### 打包桌面安装包
 
 ```bash
 pnpm bundle:app
@@ -134,18 +103,69 @@ pnpm bundle:app
 # 2. tauri build → NSIS 安装包输出 apps/desktop/src-tauri/target/release/bundle/nsis/
 ```
 
-安装后的桌面端：release 模式自动 spawn 同目录的 `pidock-host.exe`（sidecar），
-不再依赖本机 Node/Bun；云同步、附件、远程控制全部可用（server 地址在 ☁ 面板配置）。
+安装后的桌面端自动 spawn 同目录的 `pidock-host.exe`（sidecar），云同步、附件、
+远程控制全部可用。
 
-## 常用命令
+### 发布
+
+打 tag（`v*`）推送即触发 GitHub Actions Release 工作流，构建 6 平台矩阵
+（Windows x64/ARM64、macOS Intel/Apple Silicon、Linux x64/ARM64）并上传产物。
+
+## 开发
+
+### 常用命令
 
 ```bash
-pnpm install
-pnpm --filter @pidock/host typecheck        # host 类型检查
-pnpm --filter @pidock/host smoke            # M1 全链路冒烟（发起真实 LLM 调用）
-pnpm --filter @pidock/host smoke:extension  # jiti × bun-compile 验证
-pnpm --filter @pidock/host smoke:config     # M3 配置面冒烟（隔离 agent 目录）
-cargo test -p pidock-protocol               # 协议 crate 测试 + 导出 TS 绑定
-pnpm --filter @pidock/desktop typecheck     # 桌面前端类型检查（vue-tsc）
-pnpm --filter @pidock/desktop tauri dev     # 启动桌面应用
+pnpm install                               # 安装依赖
+pnpm build                                 # 全仓构建
+pnpm -r typecheck                          # 全仓类型检查
+
+pnpm --filter @pidock/host smoke           # host 全链路冒烟（发起真实 LLM 调用）
+pnpm --filter @pidock/host smoke:config    # 配置面冒烟（隔离 agent 目录）
+pnpm --filter @pidock/host smoke:extension # jiti 扩展 × bun-compile 验证
+pnpm --filter @pidock/host e2e:server      # 端到端验收（server 需在跑）
+
+cargo test -p pidock-protocol              # 协议 crate 测试 + 导出 TS 绑定
+cargo run -p pidock-server                 # 启动 server
+```
+
+### 协议同步
+
+线路协议权威定义在 `crates/pidock-protocol`（Rust），通过 ts-rs 在 `cargo test` 时
+导出 TS 绑定到 `packages/protocol`，host / ui / web / desktop 共用。改协议后跑
+`pnpm protocol:gen`（即 `cargo test -p pidock-protocol`）重新生成。
+
+### CI
+
+GitHub Actions 双工作流：
+
+- **CI**（push main / PR）：全仓 typecheck、ui/web 构建、cargo fmt --check、clippy、Rust 测试
+- **Release**（tag `v*`）：6 平台矩阵构建并上传安装包
+
+## 许可证
+
+本项目基于 [MIT License](LICENSE) 开源。
+
+```
+MIT License
+
+Copyright (c) 2026 vcqr
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
