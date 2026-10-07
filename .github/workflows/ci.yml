@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: TS / Vue（typecheck + 构建）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 全仓 typecheck
+        run: pnpm -r typecheck
+
+      - name: 构建 ui / web
+        run: |
+          pnpm --filter @pidock/ui build
+          pnpm --filter @pidock/web build
+
+  rust:
+    name: Rust（fmt / clippy / test）
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # pidock-desktop 依赖 tauri，clippy 编译需要 GTK/WebKit 系统头文件
+      - name: 安装 Tauri 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev build-essential pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      # TODO: 先清掉现存 lint（目前 14 条）后，去掉 continue-on-error 收紧为阻塞门禁
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        continue-on-error: true
+
+      - name: cargo test（protocol crate + ts-rs 绑定导出）
+        run: cargo test -p pidock-protocol
+
+      # 绑定重新生成后必须与已提交的 packages/protocol/src 一致
+      - name: 检查 TS 绑定是否有 drift
+        run: git diff --exit-code -- packages/protocol/src

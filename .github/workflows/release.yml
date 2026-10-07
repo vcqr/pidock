@@ -1,0 +1,134 @@
+name: Release
+
+# 打 tag（v*）触发发布；也可手动触发
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64 (glibc)
+          - platform: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            bun_target: bun-linux-x64
+            bundles: "deb,appimage"
+          # Linux ARM64（原生 ARM runner，仅公共仓库免费）
+          - platform: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bun_target: bun-linux-arm64
+            bundles: "deb,appimage"
+          # macOS Apple Silicon
+          - platform: macos-15
+            target: aarch64-apple-darwin
+            bun_target: bun-darwin-arm64
+            bundles: "app,dmg"
+          # macOS Intel
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
+            bun_target: bun-darwin-x64
+            bundles: "app,dmg"
+          # Windows x86_64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            bun_target: bun-windows-x64
+            bundles: "nsis"
+          # Windows ARM64（原生 ARM runner，仅公共仓库免费）
+          - platform: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            bun_target: bun-windows-arm64
+            bundles: "nsis"
+
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装系统依赖（仅 ubuntu）
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf file libxdo-dev libssl-dev xdg-utils
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # host sidecar 用 bun 编译成单文件可执行
+      - name: 安装 Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: 安装 Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust 缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      # 编译 host sidecar 到 tauri externalBin 约定路径（binaries/ 已被 gitignore，需先建目录）
+      - name: 编译 pidock-host sidecar（${{ matrix.target }}）
+        shell: bash
+        run: |
+          EXE=""
+          case "${{ matrix.target }}" in *windows*) EXE=".exe" ;; esac
+          mkdir -p apps/desktop/src-tauri/binaries
+          bun build host/src/main.ts --compile \
+            --target=${{ matrix.bun_target }} \
+            --outfile "apps/desktop/src-tauri/binaries/pidock-host-${{ matrix.target }}$EXE"
+          ls -la apps/desktop/src-tauri/binaries/
+
+      - name: 生成 release notes
+        id: release_notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          # 获取上一个 tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            # 首次发布：全部 commit
+            NOTES=$(git log --no-merges --pretty=format:"- %s" HEAD)
+          else
+            NOTES=$(git log --no-merges --pretty=format:"- %s" ${PREV_TAG}..HEAD)
+          fi
+          # 转义换行，写入 GITHUB_OUTPUT
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "body<<$EOF" >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "$EOF" >> "$GITHUB_OUTPUT"
+
+      # tauri.conf.json 里 bundle.targets 固定为 nsis，这里用 --bundles 按平台覆盖
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "${{ github.ref_name }}"
+          releaseBody: ${{ steps.release_notes.outputs.body || 'See assets to download and install.' }}
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }} --bundles ${{ matrix.bundles }}
