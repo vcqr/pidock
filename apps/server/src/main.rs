@@ -576,6 +576,27 @@ async fn main() {
         }
     });
 
+    // 定期清扫过期白名单（Mongo 为事实源后的数据卫生）：
+    // refresh_tokens 到期即删；access_tokens 留 30 天供列表展示「已过期」后再删
+    let state_for_sweep = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(6 * 3600));
+        loop {
+            interval.tick().await;
+            let now = chrono::Utc::now().to_rfc3339();
+            let cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+            let db = &state_for_sweep.mongo;
+            let _ = db
+                .collection::<BsonDoc>("refresh_tokens")
+                .delete_many(doc! { "expires_at": { "$lt": now, "$ne": "" } })
+                .await;
+            let _ = db
+                .collection::<BsonDoc>("access_tokens")
+                .delete_many(doc! { "expires_at": { "$lt": cutoff, "$ne": "" } })
+                .await;
+        }
+    });
+
     // web UI static hosting：PIDOCK_WEB_DIR / 配置文件 [web].dir 显式指定目录时走
     // ServeDir（本地改前端即生效）；否则用编译期嵌入的 apps/web/dist——debug 构建走
     // 磁盘、release 构建真嵌入，产物即单文件。API 路由优先，未命中路径交给兜底。

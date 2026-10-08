@@ -144,7 +144,7 @@ pub async fn register_allowed(state: &AppState, ip: &str) -> Result<(), axum::re
 }
 
 /// 注册失败审计（邀请码错误/邮箱冲突等）
-pub async fn register_failure(state: &AppState, ip: &str, reason: &str) {
+pub fn register_failure(ip: &str, reason: &str) {
     tracing::warn!(ip = %ip, reason, "register rejected (audit)");
 }
 

@@ -1,9 +1,9 @@
 //! Personal access tokens：给桌面端同步等场景的长期令牌。
 //!
-//! 格式 `pd_<jti>.<secret>`（不透明串）。校验路径独立于 JWT：
-//! verify_token 对 `pd_` 前缀走本模块——Redis `auth:pat:{jti}` 白名单决定
-//! 有效性（吊销即时生效，与 refresh token 同一信任模型），Mongo
-//! `access_tokens` 只存元数据（名称/哈希/创建时间）供列表展示。
+//! 格式 `pd_<jti>.<secret>`（不透明串）。事实源是 Mongo `access_tokens`
+//! （token_hash + expires_at），Redis `auth:pat:{jti}` 只作读缓存（存
+//! {user_id, hash}，TTL 为剩余寿命）——Redis 重启/丢数据不影响令牌有效性。
+//! 吊销 = 删 Mongo 文档 + 失效缓存，即时生效；每次使用实时校验账号状态。
 
 use axum::{
     extract::{Path, Query, State},
@@ -15,6 +15,7 @@ use axum::{
 use futures_util::TryStreamExt;
 use mongodb::bson::{doc, Document as BsonDoc};
 use rand::Rng;
+use redis::AsyncCommands;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -25,14 +26,19 @@ use crate::state::AppState;
 
 /// 令牌前缀：verify_token 据此分流到 PAT 校验路径
 pub const PAT_PREFIX: &str = "pd_";
-/// 令牌有效期（10 年）；Redis 白名单 TTL 与之对齐
-const PAT_TTL_DAYS: i64 = 365 * 10;
+/// 有效期选项（天）；0 = 不过期。管理端与前端共用这份白名单
+pub const EXPIRY_CHOICES: &[i64] = &[0, 3, 15, 30, 90, 180, 360];
+/// 「不过期」的实际 TTL：100 年，等同不过期且不占 Redis 永久键
+const NEVER_TTL_DAYS: i64 = 365 * 100;
 /// 每个用户最多持有的令牌数，防滥用
 const MAX_TOKENS_PER_USER: usize = 20;
 
-fn hex_char(rng: &mut impl Rng) -> char {
-    b"0123456789abcdef"[rng.gen_range(0..16)] as char
-}fn sha256_hex(input: &str) -> String {
+fn ttl_seconds(days: i64) -> u64 {
+    let d = if days == 0 { NEVER_TTL_DAYS } else { days };
+    (d * 24 * 3600) as u64
+}
+
+fn sha256_hex(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     format!("{:x}", hasher.finalize())
@@ -42,8 +48,38 @@ fn pat_key(jti: &str) -> String {
     format!("auth:pat:{jti}")
 }
 
-/// 生成新令牌：明文只在此处出现一次，库里只落 sha256
-pub async fn create(state: &AppState, user_id: &str, name: &str) -> Result<Value, String> {
+/// 回填读缓存：{user_id, hash}，TTL 为剩余寿命（不过期键取上限）
+async fn fill_cache(state: &AppState, jti: &str, user_id: &str, hash: &str, expires_at: &str) {
+    let ttl = if expires_at.is_empty() {
+        ttl_seconds(0)
+    } else {
+        chrono::DateTime::parse_from_rfc3339(expires_at)
+            .map(|t| (t.timestamp() - chrono::Utc::now().timestamp()).clamp(60, (NEVER_TTL_DAYS * 86400) as i64) as u64)
+            .unwrap_or_else(|_| ttl_seconds(0))
+    };
+    let payload = json!({ "u": user_id, "h": hash });
+    let mut conn = state.redis.clone();
+    let _: Result<(), _> = redis::cmd("SETEX")
+        .arg(pat_key(jti))
+        .arg(ttl)
+        .arg(payload.to_string())
+        .query_async(&mut conn)
+        .await;
+}
+
+/// 生成新令牌：明文只在此处出现一次，库里只落 sha256。
+/// days 取 EXPIRY_CHOICES 之一（0 = 不过期）
+pub async fn create(state: &AppState, user_id: &str, name: &str, days: i64) -> Result<Value, String> {
+    if !EXPIRY_CHOICES.contains(&days) {
+        return Err(format!(
+            "无效的有效期，可选：{}",
+            EXPIRY_CHOICES
+                .iter()
+                .map(|d| if *d == 0 { "不过期".to_string() } else { format!("{d}天") })
+                .collect::<Vec<_>>()
+                .join(" / ")
+        ));
+    }
     let name = name.trim();
     if name.is_empty() {
         return Err("请给令牌起个名字（如「办公室台式机」）".into());
@@ -65,32 +101,37 @@ pub async fn create(state: &AppState, user_id: &str, name: &str) -> Result<Value
     let secret_bytes: [u8; 24] = rand::random();
     let secret: String = secret_bytes.iter().map(|b| format!("{b:02x}")).collect();
     let token = format!("{PAT_PREFIX}{jti}.{secret}");
+    let hash = sha256_hex(&token);
     let created_at = chrono::Utc::now().to_rfc3339();
+    // 展示用到期时间（0 = 永不）；实际强制过期靠 Redis TTL
+    let expires_at = if days > 0 {
+        (chrono::Utc::now() + chrono::Duration::days(days)).to_rfc3339()
+    } else {
+        String::new()
+    };
     tokens
         .insert_one(doc! {
             "_id": &jti,
             "user_id": user_id,
             "name": name,
-            "token_hash": sha256_hex(&token),
+            "token_hash": &hash,
+            "days": days,
+            "expires_at": &expires_at,
             "created_at": &created_at,
         })
         .await
         .map_err(|e| e.to_string())?;
-    let ttl = (PAT_TTL_DAYS * 24 * 3600) as u64;
-    let mut conn = state.redis.clone();
-    redis::cmd("SETEX")
-        .arg(pat_key(&jti))
-        .arg(ttl)
-        .arg(user_id)
-        .query_async::<()>(&mut conn)
-        .await
-        .map_err(|e| format!("令牌写入失败: {e}"))?;
-    tracing::info!(user = %user_id, "access token created");
-    Ok(json!({"id": jti, "token": token, "name": name, "created_at": created_at}))
+    // 预热读缓存（失败无碍：校验时会回源 Mongo）
+    fill_cache(state, &jti, user_id, &hash, &expires_at).await;
+    tracing::info!(user = %user_id, days, "access token created");
+    Ok(json!({
+        "id": jti, "token": token, "name": name,
+        "days": days, "expires_at": expires_at, "created_at": created_at,
+    }))
 }
 
-/// PAT 校验（verify_token 的 `pd_` 分支）：Redis 白名单即真理，
-/// 返回等价 access Claims，后续鉴权逻辑与普通登录完全一致
+/// PAT 校验（verify_token 的 `pd_` 分支）：缓存命中验哈希，未命中回源
+/// Mongo（token_hash + expires_at 为事实源）并回填；返回等价 access Claims
 pub async fn verify(state: &AppState, token: &str) -> Result<Claims, String> {
     let rest = token
         .strip_prefix(PAT_PREFIX)
@@ -104,13 +145,53 @@ pub async fn verify(state: &AppState, token: &str) -> Result<Claims, String> {
     if secret.is_empty() {
         return Err("访问令牌格式不正确".into());
     }
+    let hash = sha256_hex(token);
+    let key = pat_key(jti);
     let mut conn = state.redis.clone();
-    let user_id: Option<String> = redis::cmd("GET")
-        .arg(pat_key(jti))
-        .query_async(&mut conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    let user_id = user_id.ok_or("访问令牌已撤销或不存在")?;
+
+    // 1) 缓存命中：值存 {u, h}；哈希不匹配视为脏数据回源
+    let cached: Option<String> = conn.get(&key).await.unwrap_or(None);
+    let mut user_id: Option<String> = None;
+    if let Some(raw) = cached {
+        if let Ok(v) = serde_json::from_str::<Value>(&raw) {
+            if v.get("h").and_then(|x| x.as_str()) == Some(hash.as_str()) {
+                user_id = v.get("u").and_then(|x| x.as_str()).map(str::to_string);
+            }
+        }
+    }
+    // 2) 回源 Mongo：token_hash 与 expires_at 为事实源
+    let user_id = match user_id {
+        Some(u) => u,
+        None => {
+            let d = state
+                .mongo
+                .collection::<BsonDoc>("access_tokens")
+                .find_one(doc! { "_id": jti })
+                .await
+                .map_err(|e| e.to_string())?;
+            let Some(d) = d else {
+                return Err("访问令牌已撤销或已过期".into());
+            };
+            if d.get_str("token_hash").unwrap_or_default() != hash {
+                return Err("访问令牌已撤销或已过期".into());
+            }
+            let expires_at = d.get_str("expires_at").unwrap_or_default();
+            let expired = !expires_at.is_empty()
+                && chrono::DateTime::parse_from_rfc3339(expires_at)
+                    .map(|t| t < chrono::Utc::now())
+                    .unwrap_or(false);
+            if expired {
+                let _: Result<(), _> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
+                return Err("访问令牌已撤销或已过期".into());
+            }
+            let u = d.get_str("user_id").unwrap_or_default().to_string();
+            if u.is_empty() {
+                return Err("访问令牌已撤销或已过期".into());
+            }
+            fill_cache(state, jti, &u, &hash, expires_at).await;
+            u
+        }
+    };
     // PAT 长期有效，不能只靠 access 15min 自然过期兜底：每次使用实时校验账号状态
     if !crate::auth::user_active(state, &user_id).await {
         return Err("账号已被禁用".into());
@@ -119,7 +200,7 @@ pub async fn verify(state: &AppState, token: &str) -> Result<Claims, String> {
         sub: user_id,
         kind: "access".into(),
         jti: jti.to_string(),
-        exp: (chrono::Utc::now() + chrono::Duration::days(PAT_TTL_DAYS)).timestamp(),
+        exp: (chrono::Utc::now() + chrono::Duration::days(NEVER_TTL_DAYS)).timestamp(),
         pat: true,
     })
 }
@@ -153,6 +234,9 @@ struct TokenCreateBody {
     token: String,
     #[serde(default)]
     name: String,
+    /// 有效期天数（EXPIRY_CHOICES 之一，0 = 不过期）
+    #[serde(default)]
+    days: i64,
 }
 
 async fn tokens_list(
@@ -180,6 +264,8 @@ async fn tokens_list(
         out.push(json!({
             "id": d.get_str("_id").unwrap_or_default(),
             "name": d.get_str("name").unwrap_or_default(),
+            "days": d.get_i64("days").unwrap_or(0),
+            "expires_at": d.get_str("expires_at").unwrap_or_default(),
             "created_at": d.get_str("created_at").unwrap_or_default(),
         }));
     }
@@ -194,7 +280,7 @@ async fn tokens_create(
         .await
         .map_err(|e| api_err(StatusCode::UNAUTHORIZED, e))?
         .sub;
-    create(&state, &user_id, &body.name)
+    create(&state, &user_id, &body.name, body.days)
         .await
         .map(Json)
         .map_err(|e| api_err(StatusCode::BAD_REQUEST, e))
@@ -225,6 +311,10 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hex_char(rng: &mut impl Rng) -> char {
+        b"0123456789abcdef"[rng.gen_range(0..16)] as char
+    }
 
     #[test]
     fn token_shape() {

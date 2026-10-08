@@ -18,6 +18,7 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use mongodb::bson::{doc, Document as BsonDoc};
 use rand::distributions::Alphanumeric;
 use rand::Rng;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -87,15 +88,7 @@ pub async fn verify_token(
         return Err(format!("expected {} token", expected_kind));
     }
     if expected_kind == "refresh" {
-        let mut conn = state.redis.clone();
-        let known: Option<String> = redis::cmd("GET")
-            .arg(format!("auth:refresh:{}", data.claims.jti))
-            .query_async(&mut conn)
-            .await
-            .map_err(|e| e.to_string())?;
-        if known.is_none() {
-            return Err("refresh token revoked or expired".into());
-        }
+        ensure_refresh_alive(state, &data.claims.jti, data.claims.exp).await?;
     }
     Ok(data.claims)
 }
@@ -154,14 +147,14 @@ async fn register(
     }
     let code = norm_code(&body.invite_code);
     if code.is_empty() {
-        crate::guard::register_failure(&state, &ip, "missing invite").await;
+        crate::guard::register_failure(&ip, "missing invite");
         return Err(api_err(StatusCode::FORBIDDEN, "注册需要邀请码"));
     }
     // 全局注册开关：关闭后仅 bootstrap 引导码（救急通道）与管理员后台建号可用
     let is_bootstrap =
         !state.cfg.bootstrap_invite.is_empty() && code == norm_code(&state.cfg.bootstrap_invite);
     if !crate::admin::load_policy(&state).await.allow_register && !is_bootstrap {
-        crate::guard::register_failure(&state, &ip, "registration closed").await;
+        crate::guard::register_failure(&ip, "registration closed");
         return Err(api_err(StatusCode::FORBIDDEN, "管理员已关闭注册，请联系管理员开通账号"));
     }
     let users = state.mongo.collection::<BsonDoc>("users");
@@ -181,7 +174,7 @@ async fn register(
         claim_invite(&state, &code, &user_id)
             .await
             .map_err(|e| {
-                crate::guard::register_failure(&state, &ip, &format!("invite: {e}"));
+                crate::guard::register_failure(&ip, &format!("invite: {e}"));
                 api_err(StatusCode::FORBIDDEN, e)
             })?;
     }
@@ -205,7 +198,7 @@ async fn register(
                     doc! { "$inc": { "used_count": -1 }, "$pull": { "used_by": &user_id } },
                 )
                 .await;
-            crate::guard::register_failure(&state, &ip, "duplicate email").await;
+            crate::guard::register_failure(&ip, "duplicate email");
             return Err(api_err(StatusCode::CONFLICT, "该邮箱已注册"));
         }
         return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
@@ -452,11 +445,15 @@ async fn refresh(
     if user.get_bool("disabled").unwrap_or(false) {
         return Err(api_err(StatusCode::FORBIDDEN, "账号已被禁用"));
     }
-    // rotate: revoke old refresh, issue new pair
+    // rotate: revoke old refresh（Mongo 为准 + 缓存失效），签发新对
     let mut conn = state.redis.clone();
-    let _: Result<(), _> = redis::cmd("DEL")
-        .arg(format!("auth:refresh:{}", claims.jti))
-        .query_async(&mut conn)
+    let _: Result<(), _> = conn
+        .del(format!("auth:refresh:{}", claims.jti))
+        .await;
+    let _ = state
+        .mongo
+        .collection::<BsonDoc>("refresh_tokens")
+        .delete_one(doc! { "_id": &claims.jti })
         .await;
     issue_pair(&state, &claims.sub)
         .await
@@ -467,16 +464,66 @@ async fn refresh(
 pub(crate) async fn issue_pair(state: &AppState, user_id: &str) -> Result<Value, String> {
     let (access, _, _) = make_token(state, user_id, "access")?;
     let (refresh, refresh_jti, refresh_exp) = make_token(state, user_id, "refresh")?;
-    let ttl = (refresh_exp - Utc::now().timestamp()).max(0) as u64;
-    let mut conn = state.redis.clone();
-    redis::cmd("SETEX")
-        .arg(format!("auth:refresh:{refresh_jti}"))
-        .arg(ttl)
-        .arg(user_id)
-        .query_async::<()>(&mut conn)
+    // refresh 白名单以 Mongo 为准（Redis 重启不丢会话），Redis 只作读缓存
+    let expires_at = (Utc::now() + Duration::days(REFRESH_TTL_DAYS)).to_rfc3339();
+    state
+        .mongo
+        .collection::<BsonDoc>("refresh_tokens")
+        .insert_one(doc! {
+            "_id": &refresh_jti,
+            "user_id": user_id,
+            "expires_at": &expires_at,
+            "created_at": Utc::now().to_rfc3339(),
+        })
         .await
         .map_err(|e| e.to_string())?;
+    let ttl = (refresh_exp - Utc::now().timestamp()).max(0) as u64;
+    let mut conn = state.redis.clone();
+    // 缓存写失败不影响发牌（Mongo 已是事实源）
+    let _: Result<(), _> = redis::cmd("SETEX")
+        .arg(format!("auth:refresh:{refresh_jti}"))
+        .arg(ttl)
+        .arg(1u8)
+        .query_async::<()>(&mut conn)
+        .await;
     Ok(serde_json::json!({"access_token": access, "refresh_token": refresh, "user_id": user_id}))
+}
+
+/// refresh 白名单校验：缓存命中即过，未命中回源 Mongo（在册且未过期）并回填。
+/// Redis 数据丢失只是缓存失效，不影响会话有效性
+async fn ensure_refresh_alive(state: &AppState, jti: &str, exp: i64) -> Result<(), String> {
+    let key = format!("auth:refresh:{jti}");
+    let mut conn = state.redis.clone();
+    let cached: Option<String> = conn.get(&key).await.unwrap_or(None);
+    if cached.is_some() {
+        return Ok(());
+    }
+    let tokens = state.mongo.collection::<BsonDoc>("refresh_tokens");
+    let doc = tokens
+        .find_one(doc! { "_id": jti })
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(d) = doc else {
+        return Err("refresh token revoked or expired".into());
+    };
+    let expires_at = d.get_str("expires_at").unwrap_or_default();
+    let expired = !expires_at.is_empty()
+        && chrono::DateTime::parse_from_rfc3339(expires_at)
+            .map(|t| t < Utc::now())
+            .unwrap_or(false);
+    if expired {
+        let _ = tokens.delete_one(doc! { "_id": jti }).await;
+        return Err("refresh token revoked or expired".into());
+    }
+    // 回填缓存：TTL 取 JWT 剩余寿命（不短于 1 分钟）。缓存写失败不影响请求
+    let ttl = (exp - Utc::now().timestamp()).clamp(60, REFRESH_TTL_DAYS * 86400) as u64;
+    let _: Result<(), _> = redis::cmd("SETEX")
+        .arg(&key)
+        .arg(ttl)
+        .arg(1u8)
+        .query_async::<()>(&mut conn)
+        .await;
+    Ok(())
 }
 
 /// random device label for audits
