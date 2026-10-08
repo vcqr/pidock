@@ -6,8 +6,8 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, post},
     Json, Router,
@@ -100,7 +100,7 @@ pub async fn verify_token(
     Ok(data.claims)
 }
 
-fn hash_password(password: &str) -> Result<String, String> {
+pub(crate) fn hash_password(password: &str) -> Result<String, String> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
@@ -139,8 +139,13 @@ pub struct RefreshBody {
 
 async fn register(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<RegisterBody>,
 ) -> Result<Json<Value>, Response> {
+    let ip = crate::guard::client_ip(&state.cfg, &headers, peer);
+    // 同 IP 注册尝试限流（成功失败都计入）
+    crate::guard::register_allowed(&state, &ip).await?;
     if !body.email.contains('@') {
         return Err(api_err(StatusCode::BAD_REQUEST, "邮箱格式不正确"));
     }
@@ -149,7 +154,15 @@ async fn register(
     }
     let code = norm_code(&body.invite_code);
     if code.is_empty() {
+        crate::guard::register_failure(&state, &ip, "missing invite").await;
         return Err(api_err(StatusCode::FORBIDDEN, "注册需要邀请码"));
+    }
+    // 全局注册开关：关闭后仅 bootstrap 引导码（救急通道）与管理员后台建号可用
+    let is_bootstrap =
+        !state.cfg.bootstrap_invite.is_empty() && code == norm_code(&state.cfg.bootstrap_invite);
+    if !crate::admin::load_policy(&state).await.allow_register && !is_bootstrap {
+        crate::guard::register_failure(&state, &ip, "registration closed").await;
+        return Err(api_err(StatusCode::FORBIDDEN, "管理员已关闭注册，请联系管理员开通账号"));
     }
     let users = state.mongo.collection::<BsonDoc>("users");
     let user_id = Uuid::now_v7().to_string();
@@ -167,7 +180,10 @@ async fn register(
     } else {
         claim_invite(&state, &code, &user_id)
             .await
-            .map_err(|e| api_err(StatusCode::FORBIDDEN, e))?;
+            .map_err(|e| {
+                crate::guard::register_failure(&state, &ip, &format!("invite: {e}"));
+                api_err(StatusCode::FORBIDDEN, e)
+            })?;
     }
     let hash =
         hash_password(&body.password).map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -189,6 +205,7 @@ async fn register(
                     doc! { "$inc": { "used_count": -1 }, "$pull": { "used_by": &user_id } },
                 )
                 .await;
+            crate::guard::register_failure(&state, &ip, "duplicate email").await;
             return Err(api_err(StatusCode::CONFLICT, "该邮箱已注册"));
         }
         return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
@@ -199,15 +216,23 @@ async fn register(
 
 async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Result<Json<Value>, Response> {
-    let users = state.mongo.collection::<BsonDoc>("users");
+    let ip = crate::guard::client_ip(&state.cfg, &headers, peer);
     let email_lc = body.email.trim().to_lowercase();
+    // 防爆破：同账号失败 5 次 / 同 IP 失败 20 次，锁 15 分钟
+    crate::guard::login_allowed(&state, &email_lc, &ip).await?;
+    let users = state.mongo.collection::<BsonDoc>("users");
     let user = users
         .find_one(doc! {"email": &email_lc})
         .await
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "邮箱或密码错误"))?;
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let Some(user) = user else {
+        crate::guard::login_failure(&state, &email_lc, &ip).await;
+        return Err(api_err(StatusCode::UNAUTHORIZED, "邮箱或密码错误"));
+    };
     if user.get_bool("disabled").unwrap_or(false) {
         return Err(api_err(StatusCode::FORBIDDEN, "账号已被禁用"));
     }
@@ -222,8 +247,10 @@ async fn login(
         return Err(api_err(StatusCode::UNAUTHORIZED, hint));
     }
     if !verify_password(&body.password, hash) {
+        crate::guard::login_failure(&state, &email_lc, &ip).await;
         return Err(api_err(StatusCode::UNAUTHORIZED, "邮箱或密码错误"));
     }
+    crate::guard::login_clear(&state, &email_lc, &ip).await;
     let user_id = user.get_str("_id").unwrap_or_default().to_string();
     let role = user.get_str("role").unwrap_or("user").to_string();
     finish_login(&state, &user_id, &role, None).await
@@ -238,21 +265,28 @@ pub struct LoginLdapBody {
 /// LDAP 独立登录：与标准登录彻底分开，报错语义各自纯粹
 async fn login_ldap(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<LoginLdapBody>,
 ) -> Result<Json<Value>, Response> {
+    let ip = crate::guard::client_ip(&state.cfg, &headers, peer);
+    let username = body.username.trim().to_string();
+    crate::guard::login_allowed(&state, &username, &ip).await?;
     let cfg = crate::admin::load_ldap_cfg(&state).await;
     if !cfg.enabled {
         return Err(api_err(StatusCode::NOT_FOUND, "LDAP 登录未启用"));
     }
-    match crate::ldap::authenticate(&cfg, body.username.trim(), &body.password).await {
+    match crate::ldap::authenticate(&cfg, &username, &body.password).await {
         Ok(lu) => {
             let (user_id, role) =
                 external_upsert(&state, "ldap", &lu.email, &lu.name, None, cfg.allow_register)
                     .await
                     .map_err(|e| api_err(StatusCode::FORBIDDEN, e))?;
+            crate::guard::login_clear(&state, &username, &ip).await;
             finish_login(&state, &user_id, &role, Some(&lu.email)).await
         }
         Err(crate::ldap::LdapAuthError::Credentials) => {
+            crate::guard::login_failure(&state, &username, &ip).await;
             Err(api_err(StatusCode::UNAUTHORIZED, "LDAP 用户名或密码错误"))
         }
         Err(crate::ldap::LdapAuthError::Unavailable(e)) => {

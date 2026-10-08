@@ -192,8 +192,10 @@ async fn redis_getdel(state: &AppState, key: &str) -> Result<Option<String>, Str
 async fn methods(State(state): State<AppState>) -> Json<Value> {
     let ldap = crate::admin::load_ldap_cfg(&state).await;
     let oidc = crate::admin::load_oidc_cfg(&state).await;
+    let policy = crate::admin::load_policy(&state).await;
     Json(json!({
         "password": true,
+        "register": { "allowed": policy.allow_register },
         "ldap": { "enabled": ldap.enabled },
         "oidc": { "enabled": oidc.enabled, "label": oidc.effective_label() },
     }))

@@ -22,6 +22,8 @@ pub struct Config {
     /// 首个管理员的引导邀请码：用它注册即成为 admin；一旦存在任何管理员即失效
     pub bootstrap_invite: String,
     pub web_dir: String,
+    /// 反代后部署置 true：限流取 X-Forwarded-For 的客户端 IP；默认取直连对端
+    pub trust_proxy: bool,
     pub rustfs: RustfsCfg,
 }
 
@@ -59,6 +61,8 @@ struct ServerSection {
     jwt_secret: String,
     #[serde(default)]
     bootstrap_invite: String,
+    #[serde(default)]
+    trust_proxy: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -137,6 +141,10 @@ impl Config {
                 "dev-secret-change-me",
             ),
             bootstrap_invite: pick("PIDOCK_BOOTSTRAP_INVITE", &file.server.bootstrap_invite, ""),
+            trust_proxy: {
+                let v = pick("PIDOCK_TRUST_PROXY", &file.server.trust_proxy, "false");
+                v.eq_ignore_ascii_case("true") || v == "1"
+            },
             web_dir: pick("PIDOCK_WEB_DIR", &file.web.dir, ""),
             rustfs: RustfsCfg {
                 endpoint: pick(

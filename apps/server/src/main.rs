@@ -4,6 +4,7 @@ mod admin;
 mod auth;
 mod config;
 mod gateway;
+mod guard;
 mod ingest;
 mod ldap;
 mod pat;
@@ -618,7 +619,13 @@ async fn main() {
     let bind = state.cfg.bind.clone();
     let listener = tokio::net::TcpListener::bind(&bind).await.expect("bind");
     tracing::info!("pidock-server listening on {bind}");
-    axum::serve(listener, app).await.expect("serve");
+    // ConnectInfo：限流需要直连对端 IP（guard.rs）
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .expect("serve");
 }
 
 #[cfg(test)]

@@ -14,13 +14,35 @@ use mongodb::{
     bson::{doc, Document as BsonDoc},
     options::UpdateOptions,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::auth::{api_err, verify_admin};
+use crate::auth::{api_err, hash_password, verify_admin};
 use crate::ldap::LdapCfg;
 use crate::sso::OidcCfg;
 use crate::state::AppState;
+
+fn default_true() -> bool {
+    true
+}
+
+/// 注册策略（auth_config 集合 _id="policy"）：关闭后 /auth/register 拒绝，
+/// 账号改由管理员在后台创建；bootstrap 引导码不受影响（救急通道）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegPolicy {
+    #[serde(default = "default_true")]
+    pub allow_register: bool,
+}
+
+impl Default for RegPolicy {
+    fn default() -> Self {
+        Self { allow_register: true }
+    }
+}
+
+pub async fn load_policy(state: &AppState) -> RegPolicy {
+    load_cfg::<RegPolicy>(state, "policy").await
+}
 
 #[derive(Deserialize)]
 struct AdminTokenQuery {
@@ -126,6 +148,91 @@ struct UserPatchBody {
     /// "admin" | "user"
     role: Option<String>,
     disabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct UserCreateBody {
+    token: String,
+    email: String,
+    /// 8~128 位，由管理员交付给用户
+    password: String,
+    /// 缺省 "user"
+    #[serde(default)]
+    role: String,
+}
+
+/// 管理员后台建号：绕过邀请码（注册关闭时的账户开通通道）
+async fn users_create(
+    State(state): State<AppState>,
+    Json(body): Json<UserCreateBody>,
+) -> Result<Json<Value>, Response> {
+    let admin_id = verify_admin(&state, &body.token)
+        .await
+        .map_err(|(s, e)| api_err(s, e))?;
+    let email = body.email.trim().to_lowercase();
+    if !email.contains('@') {
+        return Err(api_err(StatusCode::BAD_REQUEST, "邮箱格式不正确"));
+    }
+    let pwd_len = body.password.chars().count();
+    if !(8..=128).contains(&pwd_len) {
+        return Err(api_err(StatusCode::BAD_REQUEST, "密码长度需在 8~128 位之间"));
+    }
+    let role = if body.role.is_empty() { "user" } else { body.role.as_str() };
+    if role != "user" && role != "admin" {
+        return Err(api_err(StatusCode::BAD_REQUEST, "role 只能是 admin 或 user"));
+    }
+    let hash = hash_password(&body.password)
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let user_id = uuid::Uuid::now_v7().to_string();
+    let user: mongodb::bson::Document = mongodb::bson::doc! {
+        "_id": &user_id,
+        "email": &email,
+        "password_hash": &hash,
+        "role": role,
+        "auth_source": "local",
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    };
+    let users = state.mongo.collection::<BsonDoc>("users");
+    if let Err(e) = users.insert_one(user).await {
+        if e.to_string().contains("duplicate") {
+            return Err(api_err(StatusCode::CONFLICT, "该邮箱已注册"));
+        }
+        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+    }
+    tracing::info!(email = %email, role, admin = %admin_id, "user created by admin");
+    Ok(Json(json!({ "user_id": user_id, "email": email, "role": role })))
+}
+
+// ---------------------------------------------------- 注册策略
+
+#[derive(Deserialize)]
+struct PolicyPutBody {
+    token: String,
+    #[serde(flatten)]
+    cfg: RegPolicy,
+}
+
+async fn policy_get(
+    State(state): State<AppState>,
+    Query(q): Query<AdminTokenQuery>,
+) -> Result<Json<Value>, Response> {
+    verify_admin(&state, &q.token)
+        .await
+        .map_err(|(s, e)| api_err(s, e))?;
+    let policy = load_policy(&state).await;
+    Ok(Json(json!({ "config": policy })))
+}
+
+async fn policy_put(
+    State(state): State<AppState>,
+    Json(body): Json<PolicyPutBody>,
+) -> Result<Json<Value>, Response> {
+    verify_admin(&state, &body.token)
+        .await
+        .map_err(|(s, e)| api_err(s, e))?;
+    save_cfg(&state, "policy", &body.cfg).await?;
+    tracing::info!("register policy updated (allow_register={})", body.cfg.allow_register);
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn users_patch(
@@ -317,11 +424,15 @@ async fn ldap_test(
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/admin/users", get(users_list))
+        .route(
+            "/admin/users",
+            post(users_create).get(users_list),
+        )
         .route(
             "/admin/users/{id}",
             patch(users_patch).delete(users_delete),
         )
+        .route("/admin/auth/policy", get(policy_get).put(policy_put))
         .route("/admin/auth/ldap", get(ldap_cfg_get).put(ldap_cfg_put))
         .route("/admin/auth/oidc", get(oidc_cfg_get).put(oidc_cfg_put))
         .route("/admin/auth/ldap/test", post(ldap_test))
