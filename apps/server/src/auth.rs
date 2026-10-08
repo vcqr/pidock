@@ -27,7 +27,7 @@ use crate::state::AppState;
 const ACCESS_TTL_MIN: i64 = 15;
 const REFRESH_TTL_DAYS: i64 = 30;
 
-fn api_err(status: StatusCode, msg: impl Into<String>) -> Response {
+pub(crate) fn api_err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({"error": msg.into()}))).into_response()
 }
 
@@ -37,6 +37,9 @@ pub struct Claims {
     pub kind: String, // "access" | "refresh"
     pub jti: String,
     pub exp: i64,
+    /// 个人访问令牌（pd_ 前缀）等价出的 access claim，非 JWT 签发
+    #[serde(default)]
+    pub pat: bool,
 }
 
 pub fn make_token(
@@ -57,6 +60,7 @@ pub fn make_token(
             kind: kind.into(),
             jti: jti.clone(),
             exp,
+            pat: false,
         },
         &EncodingKey::from_secret(state.cfg.jwt_secret.as_bytes()),
     )
@@ -69,6 +73,10 @@ pub async fn verify_token(
     token: &str,
     expected_kind: &str,
 ) -> Result<Claims, String> {
+    // 个人访问令牌走独立校验（Redis 白名单），不经 JWT 解码
+    if expected_kind == "access" && token.starts_with(crate::pat::PAT_PREFIX) {
+        return crate::pat::verify(state, token).await;
+    }
     let data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(state.cfg.jwt_secret.as_bytes()),
@@ -194,23 +202,202 @@ async fn login(
     Json(body): Json<LoginBody>,
 ) -> Result<Json<Value>, Response> {
     let users = state.mongo.collection::<BsonDoc>("users");
+    let email_lc = body.email.trim().to_lowercase();
     let user = users
-        .find_one(doc! {"email": body.email.to_lowercase()})
+        .find_one(doc! {"email": &email_lc})
         .await
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "邮箱或密码错误"))?;
-    let hash = user
-        .get_str("password_hash")
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "corrupt user"))?;
+    if user.get_bool("disabled").unwrap_or(false) {
+        return Err(api_err(StatusCode::FORBIDDEN, "账号已被禁用"));
+    }
+    let hash = user.get_str("password_hash").ok().unwrap_or_default();
+    if hash.is_empty() {
+        // 无本地密码的账号（LDAP/SSO 建）指路对应的登录方式
+        let hint = match user.get_str("auth_source").unwrap_or("local") {
+            "ldap" => "该账号为 LDAP 账号，请使用 LDAP 登录",
+            "oidc" => "该账号为 SSO 账号，请使用 SSO 登录",
+            _ => "该账号未设置本地密码",
+        };
+        return Err(api_err(StatusCode::UNAUTHORIZED, hint));
+    }
     if !verify_password(&body.password, hash) {
         return Err(api_err(StatusCode::UNAUTHORIZED, "邮箱或密码错误"));
     }
     let user_id = user.get_str("_id").unwrap_or_default().to_string();
-    let mut payload = issue_pair(&state, &user_id)
+    let role = user.get_str("role").unwrap_or("user").to_string();
+    finish_login(&state, &user_id, &role, None).await
+}
+
+#[derive(Deserialize)]
+pub struct LoginLdapBody {
+    pub username: String,
+    pub password: String,
+}
+
+/// LDAP 独立登录：与标准登录彻底分开，报错语义各自纯粹
+async fn login_ldap(
+    State(state): State<AppState>,
+    Json(body): Json<LoginLdapBody>,
+) -> Result<Json<Value>, Response> {
+    let cfg = crate::admin::load_ldap_cfg(&state).await;
+    if !cfg.enabled {
+        return Err(api_err(StatusCode::NOT_FOUND, "LDAP 登录未启用"));
+    }
+    match crate::ldap::authenticate(&cfg, body.username.trim(), &body.password).await {
+        Ok(lu) => {
+            let (user_id, role) =
+                external_upsert(&state, "ldap", &lu.email, &lu.name, None, cfg.allow_register)
+                    .await
+                    .map_err(|e| api_err(StatusCode::FORBIDDEN, e))?;
+            finish_login(&state, &user_id, &role, Some(&lu.email)).await
+        }
+        Err(crate::ldap::LdapAuthError::Credentials) => {
+            Err(api_err(StatusCode::UNAUTHORIZED, "LDAP 用户名或密码错误"))
+        }
+        Err(crate::ldap::LdapAuthError::Unavailable(e)) => {
+            tracing::warn!("ldap login unavailable: {e}");
+            Err(api_err(StatusCode::BAD_GATEWAY, "LDAP 服务暂时不可用"))
+        }
+    }
+}
+
+/// 登录成功统一出口：发 token 对 + 记录 last_login_at + 附角色（可选附邮箱）
+async fn finish_login(
+    state: &AppState,
+    user_id: &str,
+    role: &str,
+    email: Option<&str>,
+) -> Result<Json<Value>, Response> {
+    let mut payload = issue_pair(state, user_id)
         .await
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    payload["role"] = serde_json::json!(user.get_str("role").unwrap_or("user"));
+    payload["role"] = serde_json::json!(role);
+    if let Some(e) = email {
+        payload["email"] = serde_json::json!(e);
+    }
+    let _ = state
+        .mongo
+        .collection::<BsonDoc>("users")
+        .update_one(
+            doc! { "_id": user_id },
+            doc! { "$set": { "last_login_at": Utc::now().to_rfc3339() } },
+        )
+        .await;
     Ok(Json(payload))
+}
+
+/// 外部认证（LDAP/OIDC）账号落地：oidc_sub 精确匹配 → email 匹配（命中即绑定
+/// 外部身份，自托管场景 IdP 由管理员掌控）→ 未命中且 allow_register 时 JIT 建号。
+/// 返回 (user_id, role)。
+pub async fn external_upsert(
+    state: &AppState,
+    source: &str,
+    email: &str,
+    name: &str,
+    oidc_sub: Option<&str>,
+    allow_register: bool,
+) -> Result<(String, String), String> {
+    let email = email.trim().to_lowercase();
+    if !email.contains('@') {
+        return Err("外部账号缺少有效邮箱".into());
+    }
+    let users = state.mongo.collection::<BsonDoc>("users");
+
+    // OIDC：sub 唯一标识优先，防 IdP 侧改邮箱导致串号
+    if let Some(sub) = oidc_sub {
+        if let Some(u) = users
+            .find_one(doc! { "oidc_sub": sub })
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            return touch_external(state, u, name).await;
+        }
+    }
+    if let Some(u) = users
+        .find_one(doc! { "email": &email })
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        if let Some(sub) = oidc_sub {
+            let _ = users
+                .update_one(
+                    doc! { "_id": u.get_str("_id").unwrap_or_default() },
+                    doc! { "$set": { "oidc_sub": sub } },
+                )
+                .await;
+        }
+        return touch_external(state, u, name).await;
+    }
+    if !allow_register {
+        return Err("该账号尚未注册，且管理员未开启自动注册".into());
+    }
+    let user_id = Uuid::now_v7().to_string();
+    let mut d = doc! {
+        "_id": &user_id,
+        "email": &email,
+        "role": "user",
+        "auth_source": source,
+        "created_at": Utc::now().to_rfc3339(),
+        "last_login_at": Utc::now().to_rfc3339(),
+    };
+    if !name.is_empty() {
+        d.insert("display_name", name);
+    }
+    if let Some(sub) = oidc_sub {
+        d.insert("oidc_sub", sub);
+    }
+    match users.insert_one(d).await {
+        Ok(_) => {}
+        Err(e) if e.to_string().contains("duplicate") => {
+            // 并发首登竞态：按 email 重查归并
+            let u = users
+                .find_one(doc! { "email": &email })
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "账号创建冲突，请重试".to_string())?;
+            return touch_external(state, u, name).await;
+        }
+        Err(e) => return Err(e.to_string()),
+    }
+    tracing::info!(email = %email, source, "external user auto-registered");
+    Ok((user_id, "user".into()))
+}
+
+/// 命中已有账号的收尾：禁用即拒；补姓名与 last_login_at
+async fn touch_external(
+    state: &AppState,
+    u: BsonDoc,
+    name: &str,
+) -> Result<(String, String), String> {
+    if u.get_bool("disabled").unwrap_or(false) {
+        return Err("账号已被禁用".into());
+    }
+    let user_id = u.get_str("_id").unwrap_or_default().to_string();
+    let role = u.get_str("role").unwrap_or("user").to_string();
+    let mut set = doc! { "last_login_at": Utc::now().to_rfc3339() };
+    if !name.is_empty() && u.get_str("display_name").unwrap_or_default().is_empty() {
+        set.insert("display_name", name);
+    }
+    let _ = state
+        .mongo
+        .collection::<BsonDoc>("users")
+        .update_one(doc! { "_id": &user_id }, doc! { "$set": set })
+        .await;
+    Ok((user_id, role))
+}
+
+/// WS 网关建连前的状态检查：用户存在且未禁用（查不到/查询失败一律拒绝）
+pub async fn user_active(state: &AppState, user_id: &str) -> bool {
+    let found = state
+        .mongo
+        .collection::<BsonDoc>("users")
+        .find_one(doc! { "_id": user_id })
+        .await;
+    match found {
+        Ok(Some(u)) => !u.get_bool("disabled").unwrap_or(false),
+        _ => false,
+    }
 }
 
 async fn refresh(
@@ -220,6 +407,17 @@ async fn refresh(
     let claims = verify_token(&state, &body.refresh_token, "refresh")
         .await
         .map_err(|e| api_err(StatusCode::UNAUTHORIZED, e))?;
+    // 禁用/删除的用户即使 refresh token 还在 Redis 白名单里也拒绝续期
+    let user = state
+        .mongo
+        .collection::<BsonDoc>("users")
+        .find_one(doc! { "_id": &claims.sub })
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "user not found"))?;
+    if user.get_bool("disabled").unwrap_or(false) {
+        return Err(api_err(StatusCode::FORBIDDEN, "账号已被禁用"));
+    }
     // rotate: revoke old refresh, issue new pair
     let mut conn = state.redis.clone();
     let _: Result<(), _> = redis::cmd("DEL")
@@ -232,7 +430,7 @@ async fn refresh(
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
-async fn issue_pair(state: &AppState, user_id: &str) -> Result<Value, String> {
+pub(crate) async fn issue_pair(state: &AppState, user_id: &str) -> Result<Value, String> {
     let (access, _, _) = make_token(state, user_id, "access")?;
     let (refresh, refresh_jti, refresh_exp) = make_token(state, user_id, "refresh")?;
     let ttl = (refresh_exp - Utc::now().timestamp()).max(0) as u64;
@@ -318,6 +516,9 @@ pub async fn verify_admin(state: &AppState, token: &str) -> Result<String, (Stat
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, "user not found".into()))?;
+    if user.get_bool("disabled").unwrap_or(false) {
+        return Err((StatusCode::FORBIDDEN, "账号已被禁用".into()));
+    }
     if user.get_str("role").unwrap_or("user") != "admin" {
         return Err((StatusCode::FORBIDDEN, "需要管理员权限".into()));
     }
@@ -328,6 +529,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
+        .route("/auth/login/ldap", post(login_ldap))
         .route("/auth/refresh", post(refresh))
 }
 

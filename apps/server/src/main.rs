@@ -1,11 +1,15 @@
 //! PiDock server entry: HTTP API + desktop/web WebSockets + ingest consumer.
 
+mod admin;
 mod auth;
 mod config;
 mod gateway;
 mod ingest;
+mod ldap;
+mod pat;
 mod pipeline;
 mod s3;
+mod sso;
 mod state;
 
 use axum::{
@@ -515,6 +519,19 @@ async fn main() {
         if let Err(e) = users.create_index(idx).await {
             tracing::warn!("users.email 唯一索引创建失败（可能已有重复邮箱）: {e}");
         }
+        // OIDC 账号绑定：oidc_sub 唯一稀疏索引（缺字段的本地账号不受影响）
+        let idx_sub = mongodb::IndexModel::builder()
+            .keys(doc! { "oidc_sub": 1 })
+            .options(
+                mongodb::options::IndexOptions::builder()
+                    .unique(true)
+                    .sparse(true)
+                    .build(),
+            )
+            .build();
+        if let Err(e) = users.create_index(idx_sub).await {
+            tracing::warn!("users.oidc_sub 唯一索引创建失败: {e}");
+        }
         let total = users.count_documents(doc! {}).await.unwrap_or(0);
         let admins = users
             .count_documents(doc! { "role": "admin" })
@@ -583,6 +600,9 @@ async fn main() {
         .route("/ws/web", get(gateway::ws_web))
         .merge(auth::router())
         .merge(auth::admin_router())
+        .merge(admin::router())
+        .merge(sso::router())
+        .merge(pat::router())
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
     let app = if web_dir.is_empty() {

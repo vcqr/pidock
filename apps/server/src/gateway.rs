@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-use crate::auth::verify_token;
+use crate::auth::{user_active, verify_token};
 use crate::state::AppState;
 
 fn query_token(params: &HashMap<String, String>) -> Result<String, String> {
@@ -27,6 +27,20 @@ fn query_token(params: &HashMap<String, String>) -> Result<String, String> {
         .get("token")
         .cloned()
         .ok_or_else(|| "missing token".to_string())
+}
+
+/// token 有效之外还要账号在册且未禁用（禁用立即断掉新连接）
+async fn gate(state: &AppState, token: &str) -> Result<String, (axum::http::StatusCode, String)> {
+    let claims = verify_token(state, token, "access")
+        .await
+        .map_err(|e| (axum::http::StatusCode::UNAUTHORIZED, e))?;
+    if !user_active(state, &claims.sub).await {
+        return Err((
+            axum::http::StatusCode::FORBIDDEN,
+            "账号已被禁用".to_string(),
+        ));
+    }
+    Ok(claims.sub)
 }
 
 // ---------------------------------------------------------------- desktop ---
@@ -40,12 +54,12 @@ pub async fn ws_desktop(
         Ok(t) => t,
         Err(e) => return IntoResponse::into_response((axum::http::StatusCode::UNAUTHORIZED, e)),
     };
-    let claims = match verify_token(&state, &token, "access").await {
-        Ok(c) => c,
-        Err(e) => return IntoResponse::into_response((axum::http::StatusCode::UNAUTHORIZED, e)),
+    let user_id = match gate(&state, &token).await {
+        Ok(u) => u,
+        Err((s, e)) => return IntoResponse::into_response((s, e)),
     };
     upgrade
-        .on_upgrade(move |socket| desktop_socket(state, claims.sub, socket))
+        .on_upgrade(move |socket| desktop_socket(state, user_id, socket))
         .into_response()
 }
 
@@ -141,12 +155,12 @@ pub async fn ws_web(
         Ok(t) => t,
         Err(e) => return IntoResponse::into_response((axum::http::StatusCode::UNAUTHORIZED, e)),
     };
-    let claims = match verify_token(&state, &token, "access").await {
-        Ok(c) => c,
-        Err(e) => return IntoResponse::into_response((axum::http::StatusCode::UNAUTHORIZED, e)),
+    let user_id = match gate(&state, &token).await {
+        Ok(u) => u,
+        Err((s, e)) => return IntoResponse::into_response((s, e)),
     };
     upgrade
-        .on_upgrade(move |socket| web_socket(state, claims.sub, socket))
+        .on_upgrade(move |socket| web_socket(state, user_id, socket))
         .into_response()
 }
 
