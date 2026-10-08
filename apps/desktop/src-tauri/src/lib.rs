@@ -28,8 +28,15 @@ $owner.TopMost = $true; \
 $d = New-Object System.Windows.Forms.FolderBrowserDialog; \
 $d.Description = '选择项目文件夹'; \
 if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }";
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-STA", "-Command", SCRIPT])
+        let mut command = std::process::Command::new("powershell");
+        command.args(["-NoProfile", "-STA", "-Command", SCRIPT]);
+        // CREATE_NO_WINDOW：GUI 进程 spawn powershell 不弹终端
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        let output = command
             .output()
             .map_err(|e| format!("failed to launch folder picker: {e}"))?;
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -58,8 +65,15 @@ async fn pick_file(kind: Option<String>) -> Result<Option<String>, String> {
             "Add-Type -AssemblyName System.Windows.Forms; $owner = New-Object System.Windows.Forms.Form; $owner.TopMost = $true; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = '{}'; $d.Title = '{}'; if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $d.FileName }}",
             filter, title
         );
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-STA", "-Command", &script])
+        let mut command = std::process::Command::new("powershell");
+        command.args(["-NoProfile", "-STA", "-Command", &script]);
+        // CREATE_NO_WINDOW：GUI 进程 spawn powershell 不弹终端
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        let output = command
             .output()
             .map_err(|e| format!("failed to launch file picker: {e}"))?;
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();

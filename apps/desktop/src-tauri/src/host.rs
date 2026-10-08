@@ -93,6 +93,10 @@ impl Supervisor {
         let (program, cmd_prefix) = resolve_command(&host_cmd);
         let mut command = Command::new(&program);
         command.args(&cmd_prefix).args(&host_args);
+        // 主程序是 GUI 子系统（无控制台），spawn 控制台子进程会被 Windows
+        // 分配新终端窗口；CREATE_NO_WINDOW 使其无窗运行（管道 IO 不受影响）
+        #[cfg(target_os = "windows")]
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         // release sidecar mode has no host dir; empty cwd must not be passed
         if !host_dir.is_empty() {
             command.current_dir(&host_dir);
