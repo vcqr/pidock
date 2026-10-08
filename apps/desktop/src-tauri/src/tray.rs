@@ -6,36 +6,15 @@
 //! - 等待/自动化结束在窗口隐藏或失焦时发系统通知（title 从 session_meta 缓存）。
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use pidock_protocol::{ephemeral, event, Envelope};
-use serde::{Deserialize, Serialize};
+use pidock_core::config::DesktopConfig;
+use pidock_core::CoreCtx;
+use pidock_protocol::{ephemeral, event};
 use tauri::menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{image::Image, AppHandle, Manager, Wry};
 use tokio::sync::broadcast;
-
-/// 桌面端本地偏好（%APPDATA%/app.pidock.desktop/desktop.json），与 host 的 settings.json 无关
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct DesktopConfig {
-    /// 关窗行为："hide" = 隐藏到托盘（默认），"exit" = 直接退出
-    pub close_action: String,
-    /// 系统通知总开关（窗口隐藏/失焦时才发）
-    pub notifications: bool,
-    /// 开机自动启动（Run 项，带 --tray 参数静默启动到托盘）
-    pub autostart: bool,
-}
-
-impl Default for DesktopConfig {
-    fn default() -> Self {
-        DesktopConfig {
-            close_action: "hide".into(),
-            notifications: true,
-            autostart: false,
-        }
-    }
-}
 
 pub struct TrayState {
     config: Mutex<DesktopConfig>,
@@ -303,8 +282,11 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
 /// 自动化任务结束 → 系统通知。独立于前端，窗口隐藏时 webview 定时器
 /// 被节流也不影响关键提醒。
 pub fn spawn_watcher(app: &AppHandle) {
-    // broadcast::Sender::subscribe 不会失败（容量固定），直接拿接收端
-    let mut rx = app.state::<broadcast::Sender<Envelope>>().subscribe();
+    // core 事件广播的第三路订阅：等待确认/提问 → 角标 + 系统通知
+    let mut rx = {
+        let ctx = app.state::<Arc<CoreCtx>>();
+        ctx.events.subscribe()
+    };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
@@ -376,7 +358,10 @@ pub fn spawn_watcher(app: &AppHandle) {
                     .get("job_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let name = crate::scheduler::SchedulerManager::job_name_of(&app, job_id).await;
+                let name = {
+                    let ctx = app.state::<Arc<CoreCtx>>();
+                    ctx.scheduler.job_name_of(job_id).await
+                };
                 let name = name.as_deref().unwrap_or("定时任务");
                 if status == "ok" {
                     maybe_notify(&app, "自动化任务完成", &format!("「{name}」运行成功"));

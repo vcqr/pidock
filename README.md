@@ -14,6 +14,8 @@
 - **桌面端**（Tauri 2 + Vue 3）：多会话管理与项目分组、流式输出、工具实时卡片、
   edit/write 红绿 diff 视图、双主题、设置中心（Providers / 模型 / 扩展 / 技能 / MCP）、
   专家智能体、系统托盘
+- **Web 运行方式（无头服务）**：同一套桌面 UI 与核心跑成 `pidock-webhost` 服务，
+  浏览器直接访问，可打包成 Docker 镜像部署在服务器/NAS 上
 - **云同步**：桌面事件经 sync-agent 上报，Kafka 管道 → ingest → MongoDB 持久化，
   Redis pub/sub → WebSocket 推送到 web 端，近流式体验
 - **Web 端**：登录后按账号查看全部节点与会话，可远程发消息、插话、中止、审批工具调用，
@@ -34,6 +36,14 @@ Tauri 2 (Rust core + Vue UI)
                                           └─ Redis pub/sub ── web WS 推送
 ```
 
+核心运行时抽在 `crates/pidock-core`（supervisor / 定时任务调度器 / 云同步 agent），
+与 UI 壳解耦，两个壳共用：
+
+- **Tauri 桌面壳**：webview 窗口 + 托盘 + 原生对话框；
+- **`apps/webhost` 无头壳**：axum 托管同一套桌面前端（编译期嵌入），`/ws` 把
+  `ipc(cmd, args)` 请求桥接到 `CoreCtx::handle`、事件广播实时推给浏览器——
+  与 Tauri `invoke`/`pidock:event` 同语义，因此浏览器里就是完整的桌面 UI。
+
 事件模型分三通道：delta 级（`message_delta`，仅本地 UI）、快照级
 （`message_snapshot`，2s 节流推 web 不落库）、消息级（`message_complete` /
 `session_meta` 等，落库幂等键 `(session_id, seq, kind)`）。细节见 DESIGN.md。
@@ -42,13 +52,15 @@ Tauri 2 (Rust core + Vue UI)
 
 ```
 crates/pidock-protocol/  统一线路协议（Rust serde + ts-rs 导出 TS）
+crates/pidock-core/      运行时核心：supervisor / 调度器 / 云同步（与 UI 壳解耦）
 packages/protocol/       协议 payload 权威 TS 定义（host 与 ui 共用）
 host/                    pi-host：stdio 守护进程，嵌入 pi SDK
 packages/ui/             桌面与 web 共用的 Vue 组件 + DataBus + store
-apps/desktop/            Tauri 2 桌面应用（src-tauri 为 Rust supervisor）
+apps/desktop/            Tauri 2 桌面应用（src-tauri 为 Rust 壳）
+apps/webhost/            无头 Web 壳：axum 静态托管桌面 UI + WS IPC 桥（Docker 友好）
 apps/web/                web 前端（Vue 3）
 apps/server/             axum server（Rust：WS 网关 / Kafka 管道 / REST / 静态托管）
-docker/                  kafka + mongo + redis + rustfs + server 编排
+docker/                  kafka + mongo + redis + rustfs + server + webhost 编排
 docs/                    架构设计文档与代码审查报告
 ```
 
@@ -93,6 +105,32 @@ cd docker && docker compose up -d --build server
 
 不打 Docker 的话，GitHub Release 页有 `pidock-server-x86_64-linux.tar.gz`
 （web 已嵌入，解压即用，附带 `pidock.example.toml` 配置示例）。
+
+### Web 运行方式（无头服务 / Docker）
+
+不需要桌面窗口时（服务器、NAS、Docker），桌面核心可以跑成 `pidock-webhost`
+服务：浏览器打开即完整的桌面 UI（多会话、流式输出、定时任务、专家、设置中心），
+pi-host 就在该机器上运行。
+
+```bash
+# 本地跑（debug 构建直接读 apps/desktop/dist，改前端即生效）
+pnpm --filter @pidock/desktop build
+cargo run -p pidock-webhost      # http://localhost:8091
+
+# Docker（镜像内构建前端并嵌入，含 pi-host sidecar，单容器即用）
+cd docker && docker compose --profile webhost up -d --build webhost
+```
+
+- 会话与配置持久化在 `webhost_data` 卷（`/data`：`.pi` agent 目录 + `.pidock-web` 配置），
+  重建容器不丢数据
+- 定时任务 cron 按 `TZ` 本地时区触发（compose 默认 Asia/Shanghai）
+- 公网/不可信网络务必设 `PIDOCK_WEB_TOKEN`：`/ws` 需要匹配令牌，
+  浏览器首次连接会弹窗询问，输入一次即记住（localStorage）
+- pi-host 拉起方式与桌面端一致：release 镜像内默认拉起同目录 sidecar
+  `pidock-host`，源码调试可用 `PIDOCK_HOST_CMD` / `PIDOCK_HOST_DIR` / `PIDOCK_HOST_ARGS`
+- 形态差异：原生目录/文件选择器、托盘、系统通知在 Web 形态不可用（相关操作自动降级）
+- 云同步可用性不变：webhost 同样能在设置中心配置 server 地址与访问令牌，把本地
+  会话镜像到云端，由 web 控制台远程查看与控制
 
 ### server 配置
 

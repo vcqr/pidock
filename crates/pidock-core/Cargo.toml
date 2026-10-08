@@ -1,0 +1,20 @@
+[package]
+name = "pidock-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PiDock runtime core: pi-host supervisor, scheduler, sync agent (UI-shell agnostic)"
+
+[dependencies]
+pidock-protocol = { path = "../pidock-protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio-cron-scheduler = "0.15"
+croner = "3"

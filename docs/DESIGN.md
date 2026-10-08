@@ -17,9 +17,10 @@
 ```
 ┌─ 桌面 (Windows, Tauri 2) ────────────────────────────────┐
 │  Vue UI（packages/ui，与 web 共用）+ 设置中心 + ☁ 同步面板 │
-│  Rust Core                                                │
+│  pidock-core（crates/，与 UI 壳解耦）                      │
 │   ├─ host-supervisor：spawn pi-host（dev=bun / prod=sidecar）│
 │   ├─ sync-agent：WSS 上行事件 / 下行命令 / 附件直传         │
+│   ├─ scheduler：定时任务（本地时区 cron）                   │
 │   └─ pidock-protocol（serde + ts-rs 导出 TS 绑定）          │
 └────┬──────────────────────┬───────────────────────────────┘
      │ stdio JSONL 统一协议   │ HTTPS：presign 上传 RustFS
@@ -42,6 +43,25 @@
 │           /attachment_meta                                 │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### 2.1 双壳：Tauri 桌面壳与 webhost 无头壳
+
+核心运行时（supervisor / 调度器 / 云同步）不依赖 Tauri，事件统一走 tokio
+broadcast（`CoreCtx.events`），命令统一走 `CoreCtx::handle(cmd, args)`——
+两个壳都是薄转换层：
+
+- **Tauri 壳**（`apps/desktop/src-tauri`）：管理 webview 窗口/托盘/原生对话框；
+  事件泵把广播转发到 webview（`pidock:event`），命令包装为 `#[tauri::command]`。
+- **webhost 壳**（`apps/webhost`）：axum 静态托管同一套桌面前端（release 编译期
+  嵌入 dist），`/ws` 把浏览器 `ipc(cmd,args)` 帧桥到 `CoreCtx::handle`、把事件
+  广播推给每个客户端——与 `invoke`/`pidock:event` 同语义，前端 `ipc.ts` 按
+  `__TAURI_INTERNALS__` 有无自动选传输。适合 Docker/NAS 部署：`docker compose
+  --profile webhost up -d --build webhost`。
+
+选型理由：复用整套桌面 UI 与核心（web 控制台那条链路面向「远程查看云端镜像」，
+依赖 Kafka/Mongo/Redis；webhost 面向「这台机器的 agent 直接开 Web」，零外部
+依赖），增量成本只有一个 axum 壳 + 前端 WS 传输层。鉴权用可选共享令牌
+（`PIDOCK_WEB_TOKEN`，WS 握手后以 4401 关闭区分「令牌错」与「不可达」）。
 
 ## 3. 关键决策与理由
 

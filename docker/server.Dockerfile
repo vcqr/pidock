@@ -17,7 +17,9 @@ COPY packages ./packages
 COPY apps/web ./apps/web
 RUN pnpm --filter @pidock/web build
 
-FROM rust:1.96-slim AS build
+# bookworm 变体：与运行时 debian:bookworm-slim 的 glibc 匹配（裸 -slim 已是
+# trixie 基底，编出的二进制在 bookworm 上报 GLIBC_2.39 not found）
+FROM rust:1.96-bookworm-slim AS build
 RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null; \
     apt-get update \
  && apt-get install -y --no-install-recommends build-essential cmake pkg-config libssl-dev zlib1g-dev \
@@ -34,7 +36,8 @@ COPY apps/desktop/src-tauri ./apps/desktop/src-tauri
 COPY --from=web /src/apps/web/dist ./apps/web/dist
 RUN cargo build --release -p pidock-server
 
-FROM debian:bookworm-slim
+# trixie：与构建阶段 rust:1.96-slim（trixie 基底）的 glibc 对齐
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=build /build/target/release/pidock-server /usr/local/bin/pidock-server
 EXPOSE 8080

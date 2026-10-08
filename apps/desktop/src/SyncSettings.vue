@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { ipc } from "./ipc";
 
 /**
  * 设置中心「云同步」页（由 App.vue 经 #sync 插槽注入 SettingsView）。
@@ -19,7 +19,7 @@ let timer: ReturnType<typeof setInterval> | undefined;
 
 async function refresh(): Promise<void> {
   try {
-    status.value = await invoke("sync_status");
+    status.value = await ipc("sync_status");
     if (status.value.server_url) serverUrl.value = status.value.server_url;
     if (status.value.email) email.value = status.value.email;
   } catch {
@@ -44,7 +44,7 @@ async function save(): Promise<void> {
   notice.value = null;
   busy.value = true;
   try {
-    await invoke("sync_configure", {
+    await ipc("sync_configure", {
       body: {
         server_url: serverUrl.value,
         email: email.value,
@@ -66,7 +66,7 @@ async function save(): Promise<void> {
 async function disable(): Promise<void> {
   busy.value = true;
   try {
-    await invoke("sync_disable");
+    await ipc("sync_disable");
     flash("同步已关闭");
     await refresh();
   } catch (err) {

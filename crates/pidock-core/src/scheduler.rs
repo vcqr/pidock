@@ -7,25 +7,25 @@
 //! channel (agent idle = success, error envelope = failure) with a hard
 //! timeout guard; sessions surface in the sidebar like any other session.
 //!
-//! Storage: %APPDATA%/pidock/jobs.json (atomic tmp+rename).
-//! Wire: the webview routes `automation.*` DataBus methods to the
-//! `automation_request` command; run lifecycle is pushed as `pidock:event`
+//! Storage: `%APPDATA%/pidock/jobs.json`（桌面）或数据目录（webhost），原子写。
+//! Wire: the UI routes `automation.*` DataBus methods to
+//! [`SchedulerManager::dispatch_automation`]; run lifecycle is pushed as
 //! envelopes with kinds `automation.run_started` / `automation.run_finished`
 //! (persist=false, so the cloud sync whitelist ignores them).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::{Duration, Local, Utc};
 use croner::parser::{CronParser, Seconds};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, Mutex};
 use tokio_cron_scheduler::{Job, JobScheduler};
 use uuid::Uuid;
 
-use crate::host::Supervisor;
+use crate::supervisor::Supervisor;
 use pidock_protocol::{ephemeral, Envelope};
 
 /// 单次运行的最长时长：超时未收到会话空闲/错误事件则记为失败
@@ -178,13 +178,6 @@ fn auto_envelope(session_id: &str, kind: &str, payload: Value) -> Envelope {
     }
 }
 
-fn push_event(app: &AppHandle, env: Envelope) {
-    let _ = app.emit("pidock:event", &env);
-    if let Some(tx) = app.try_state::<broadcast::Sender<Envelope>>() {
-        let _ = tx.send(env);
-    }
-}
-
 #[derive(Clone)]
 struct WatchEntry {
     job_id: String,
@@ -193,6 +186,8 @@ struct WatchEntry {
 
 pub struct SchedulerManager {
     path: PathBuf,
+    supervisor: Arc<Supervisor>,
+    events: broadcast::Sender<Envelope>,
     jobs: Mutex<Vec<ScheduledJob>>,
     sched: Mutex<Option<JobScheduler>>,
     /// 任务 id -> 调度器内部 uuid（用于 remove）
@@ -204,13 +199,19 @@ pub struct SchedulerManager {
 }
 
 impl SchedulerManager {
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(
+        path: PathBuf,
+        supervisor: Arc<Supervisor>,
+        events: broadcast::Sender<Envelope>,
+    ) -> Self {
         let jobs = std::fs::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Vec<ScheduledJob>>(&bytes).ok())
             .unwrap_or_default();
         Self {
             path,
+            supervisor,
+            events,
             jobs: Mutex::new(jobs),
             sched: Mutex::new(None),
             sched_ids: Mutex::new(HashMap::new()),
@@ -241,8 +242,8 @@ impl SchedulerManager {
         self.jobs.lock().await.iter().find(|j| j.id == id).cloned()
     }
 
-    /// 启动调度器并注册现有任务（幂等；setup 与首个 automation 请求都会触发）。
-    pub async fn ensure_started(&self, app: &AppHandle) -> Result<(), String> {
+    /// 启动调度器并注册现有任务（幂等；壳层启动与首个 automation 请求都会触发）。
+    pub async fn ensure_started(self: &Arc<Self>) -> Result<(), String> {
         let mut guard = self.sched.lock().await;
         if guard.is_some() {
             return Ok(());
@@ -252,7 +253,7 @@ impl SchedulerManager {
             .map_err(|e| format!("调度器初始化失败: {e}"))?;
         let jobs = self.jobs.lock().await.clone();
         for job in jobs.iter().filter(|j| j.enabled) {
-            if let Err(e) = self.register(&sched, app, job).await {
+            if let Err(e) = self.register(&sched, job).await {
                 eprintln!("[scheduler] 注册任务「{}」失败: {e}", job.name);
             }
         }
@@ -266,20 +267,18 @@ impl SchedulerManager {
 
     /// 把一个任务注册进调度器（本地时区语义）。
     async fn register(
-        &self,
+        self: &Arc<Self>,
         sched: &JobScheduler,
-        app: &AppHandle,
         job: &ScheduledJob,
     ) -> Result<(), String> {
         parse_cron(&job.cron)?;
-        let app2 = app.clone();
+        let mgr = self.clone();
         let job_id = job.id.clone();
         let locked = Job::new_async_tz(job.cron.as_str(), Local, move |_uuid, _sched| {
-            let app = app2.clone();
+            let mgr = mgr.clone();
             let job_id = job_id.clone();
             Box::pin(async move {
-                let mgr = app.state::<SchedulerManager>();
-                if let Err(e) = mgr.on_fire(&app, &job_id).await {
+                if let Err(e) = mgr.on_fire(&job_id).await {
                     eprintln!("[scheduler] 触发任务 {job_id} 失败: {e}");
                 }
             })
@@ -304,17 +303,17 @@ impl SchedulerManager {
         }
     }
 
-    async fn register_current(&self, app: &AppHandle, job: &ScheduledJob) -> Result<(), String> {
+    async fn register_current(self: &Arc<Self>, job: &ScheduledJob) -> Result<(), String> {
         let guard = self.sched.lock().await;
         let Some(sched) = guard.as_ref() else {
             // 调度器尚未启动：ensure_started 会按 jobs 现状注册
             return Ok(());
         };
-        self.register(sched, app, job).await
+        self.register(sched, job).await
     }
 
     /// cron 到点回调：时效判定 -> 防重入 -> 异步执行
-    async fn on_fire(&self, app: &AppHandle, job_id: &str) -> Result<(), String> {
+    async fn on_fire(self: &Arc<Self>, job_id: &str) -> Result<(), String> {
         let Some(job) = self.get_job(job_id).await else {
             return Ok(());
         };
@@ -339,22 +338,22 @@ impl SchedulerManager {
                 rec.finished_at = Some(now);
                 rec.error = Some("上一次运行尚未结束，本次跳过".into());
                 drop(flight);
-                self.push_record(app, &job.id, rec).await;
+                self.push_record(&job.id, rec).await;
                 return Ok(());
             }
             let rec = new_record("cron");
             flight.insert(job.id.clone(), rec.run_id.clone());
             rec
         };
-        let app2 = app.clone();
-        tauri::async_runtime::spawn(async move {
-            execute_run(&app2, job, run).await;
+        let mgr = self.clone();
+        tokio::spawn(async move {
+            execute_run(mgr, job, run).await;
         });
         Ok(())
     }
 
     /// 把一条运行记录写进任务（修剪条数、更新 last_run、保存、推事件）。
-    async fn push_record(&self, app: &AppHandle, job_id: &str, rec: RunRecord) {
+    async fn push_record(&self, job_id: &str, rec: RunRecord) {
         let payload = {
             let mut jobs = self.jobs.lock().await;
             let Some(job) = jobs.iter_mut().find(|j| j.id == job_id) else {
@@ -380,14 +379,15 @@ impl SchedulerManager {
         } else {
             "automation.run_finished"
         };
-        push_event(
-            app,
-            auto_envelope(rec.session_id.as_deref().unwrap_or(""), kind, payload),
-        );
+        let _ = self.events.send(auto_envelope(
+            rec.session_id.as_deref().unwrap_or(""),
+            kind,
+            payload,
+        ));
     }
 
     /// 登记完成追踪 + 超时兜底
-    async fn watch_run(&self, app: &AppHandle, session_id: &str, job_id: String, run_id: String) {
+    async fn watch_run(self: &Arc<Self>, session_id: &str, job_id: String, run_id: String) {
         self.watching.lock().await.insert(
             session_id.to_string(),
             WatchEntry {
@@ -395,18 +395,16 @@ impl SchedulerManager {
                 run_id: run_id.clone(),
             },
         );
-        let app2 = app.clone();
+        let mgr = self.clone();
         let sid = session_id.to_string();
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(RUN_TIMEOUT_SECS)).await;
-            let mgr = app2.state::<SchedulerManager>();
             let still = {
                 let w = mgr.watching.lock().await;
                 w.get(&sid).map_or(false, |e| e.run_id == run_id)
             };
             if still {
                 mgr.finalize(
-                    &app2,
                     &job_id,
                     &run_id,
                     Some(&sid),
@@ -421,7 +419,6 @@ impl SchedulerManager {
     /// 终结一次运行：更新记录、保存、推事件、清理追踪
     async fn finalize(
         &self,
-        app: &AppHandle,
         job_id: &str,
         run_id: &str,
         session_id: Option<&str>,
@@ -471,28 +468,25 @@ impl SchedulerManager {
             }
             payload
         };
-        push_event(
-            app,
-            auto_envelope(session_id.unwrap_or(""), "automation.run_finished", payload),
-        );
+        let _ = self.events.send(auto_envelope(
+            session_id.unwrap_or(""),
+            "automation.run_finished",
+            payload,
+        ));
     }
 
     /// 托盘通知用：按任务 id 取名字
-    pub async fn job_name_of(app: &AppHandle, job_id: &str) -> Option<String> {
-        let mgr = app.state::<SchedulerManager>();
-        // 先落局部变量再返回：尾表达式的 MutexGuard 临时值会活到 mgr 之后触发 E0597
-        let name = mgr
-            .jobs
+    pub async fn job_name_of(&self, job_id: &str) -> Option<String> {
+        self.jobs
             .lock()
             .await
             .iter()
             .find(|j| j.id == job_id)
-            .map(|j| j.name.clone());
-        name
+            .map(|j| j.name.clone())
     }
 
     /// 订阅 host 事件广播：agent 空闲 = 成功，error = 失败
-    async fn handle_event(&self, app: &AppHandle, env: Envelope) {
+    async fn handle_event(&self, env: Envelope) {
         if env.session_id.is_empty() {
             return;
         }
@@ -519,7 +513,6 @@ impl SchedulerManager {
                 None
             };
             self.finalize(
-                app,
                 &entry.job_id,
                 &entry.run_id,
                 Some(&env.session_id),
@@ -530,19 +523,15 @@ impl SchedulerManager {
         }
     }
 
-    /// 事件循环：常驻订阅广播通道（lib.rs setup 里 spawn）
-    pub fn spawn_event_watcher(app: AppHandle) {
-        tauri::async_runtime::spawn(async move {
-            let tx = match app.try_state::<broadcast::Sender<Envelope>>() {
-                Some(s) => s.inner().clone(),
-                None => return,
-            };
-            let mut rx = tx.subscribe();
+    /// 事件循环：常驻订阅广播通道（壳层启动时经 [`CoreCtx::start`] 拉起）
+    pub fn spawn_event_watcher(self: &Arc<Self>) {
+        let mgr = self.clone();
+        let mut rx = self.events.subscribe();
+        tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(env) => {
-                        let mgr = app.state::<SchedulerManager>();
-                        mgr.handle_event(&app, env).await;
+                        mgr.handle_event(env).await;
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -573,7 +562,7 @@ impl SchedulerManager {
         Ok(json!({ "jobs": out, "server_now": now_ms() }))
     }
 
-    async fn save_job(&self, app: &AppHandle, params: &Value) -> Result<Value, String> {
+    async fn save_job(self: &Arc<Self>, params: &Value) -> Result<Value, String> {
         let mut job: ScheduledJob =
             serde_json::from_value(params.clone()).map_err(|e| format!("参数无效: {e}"))?;
         job.name = job.name.trim().to_string();
@@ -618,12 +607,12 @@ impl SchedulerManager {
         }
         self.unregister_job(&job.id).await;
         if job.enabled {
-            self.register_current(app, &job).await?;
+            self.register_current(&job).await?;
         }
         Ok(serde_json::to_value(&job).map_err(|e| e.to_string())?)
     }
 
-    async fn delete_job(&self, _app: &AppHandle, params: &Value) -> Result<Value, String> {
+    async fn delete_job(&self, params: &Value) -> Result<Value, String> {
         let id = params.get("id").and_then(|v| v.as_str()).ok_or("缺少 id")?;
         {
             let mut jobs = self.jobs.lock().await;
@@ -638,7 +627,7 @@ impl SchedulerManager {
         Ok(json!({ "ok": true }))
     }
 
-    async fn set_enabled(&self, app: &AppHandle, params: &Value) -> Result<Value, String> {
+    async fn set_enabled(self: &Arc<Self>, params: &Value) -> Result<Value, String> {
         let id = params.get("id").and_then(|v| v.as_str()).ok_or("缺少 id")?;
         let enabled = params
             .get("enabled")
@@ -656,14 +645,14 @@ impl SchedulerManager {
             job
         };
         if enabled {
-            self.register_current(app, &job).await?;
+            self.register_current(&job).await?;
         } else {
             self.unregister_job(id).await;
         }
         Ok(json!({ "ok": true, "job": serde_json::to_value(&job).unwrap_or(Value::Null) }))
     }
 
-    async fn run_now(&self, app: &AppHandle, params: &Value) -> Result<Value, String> {
+    async fn run_now(self: &Arc<Self>, params: &Value) -> Result<Value, String> {
         let id = params.get("id").and_then(|v| v.as_str()).ok_or("缺少 id")?;
         let job = self.get_job(id).await.ok_or("任务不存在")?;
         let run = {
@@ -675,9 +664,9 @@ impl SchedulerManager {
             flight.insert(job.id.clone(), rec.run_id.clone());
             rec
         };
-        let app2 = app.clone();
-        tauri::async_runtime::spawn(async move {
-            execute_run(&app2, job, run).await;
+        let mgr = self.clone();
+        tokio::spawn(async move {
+            execute_run(mgr, job, run).await;
         });
         Ok(json!({ "ok": true }))
     }
@@ -700,13 +689,11 @@ impl SchedulerManager {
 
 /// 真正执行一次：建会话 -> 权限 -> 命名 -> 发提示词，然后挂上完成追踪。
 /// 任何一步失败都把运行记录终结为 failed。
-async fn execute_run(app: &AppHandle, job: ScheduledJob, mut run: RunRecord) {
-    let mgr = app.state::<SchedulerManager>();
-    let supervisor = app.state::<Supervisor>();
+async fn execute_run(mgr: Arc<SchedulerManager>, job: ScheduledJob, mut run: RunRecord) {
     let exec = async {
-        let created = supervisor
+        let created = mgr
+            .supervisor
             .request(
-                app.clone(),
                 "session.create".into(),
                 json!({
                     "cwd": job.workspace.clone().unwrap_or_default(),
@@ -723,18 +710,16 @@ async fn execute_run(app: &AppHandle, job: ScheduledJob, mut run: RunRecord) {
         run.session_id = Some(sid.clone());
         // 新会话默认计划模式；无人值守只有放宽到对应模式才能用修改类工具
         if job.permission_mode != "plan" {
-            supervisor
+            mgr.supervisor
                 .request(
-                    app.clone(),
                     "session.set_permission_mode".into(),
                     json!({ "session_id": sid, "mode": job.permission_mode }),
                 )
                 .await?;
         }
         // 命名便于在侧栏识别定时任务的会话
-        supervisor
+        mgr.supervisor
             .request(
-                app.clone(),
                 "session.rename".into(),
                 json!({ "session_id": sid, "name": format!("⏰ {}", job.name) }),
             )
@@ -747,21 +732,20 @@ async fn execute_run(app: &AppHandle, job: ScheduledJob, mut run: RunRecord) {
                 }
             }
         }
-        supervisor
-            .request(app.clone(), "agent.prompt".into(), prompt_params)
+        mgr.supervisor
+            .request("agent.prompt".into(), prompt_params)
             .await?;
         Ok(sid)
     }
     .await;
     match exec {
         Ok(sid) => {
-            mgr.push_record(app, &job.id, run.clone()).await;
-            mgr.watch_run(app, &sid, job.id.clone(), run.run_id.clone())
+            mgr.push_record(&job.id, run.clone()).await;
+            mgr.watch_run(&sid, job.id.clone(), run.run_id.clone())
                 .await;
         }
         Err(e) => {
             mgr.push_record(
-                app,
                 &job.id,
                 RunRecord {
                     status: "failed".into(),
@@ -775,39 +759,38 @@ async fn execute_run(app: &AppHandle, job: ScheduledJob, mut run: RunRecord) {
     }
 }
 
-/// automation.* 分发主体：Tauri 命令（本地 UI）与 sync.rs 云中继（web 远程管理）共用
+/// automation.* 分发主体：壳层命令（本地 UI）与 sync.rs 云中继（web 远程管理）共用
 pub async fn dispatch_automation(
-    app: &AppHandle,
-    state: &SchedulerManager,
+    self_mgr: &Arc<SchedulerManager>,
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
-    state.ensure_started(app).await?;
+    self_mgr.ensure_started().await?;
     match method {
-        "automation.list" => state.list().await,
-        "automation.save" => state.save_job(app, &params).await,
-        "automation.delete" => state.delete_job(app, &params).await,
-        "automation.set_enabled" => state.set_enabled(app, &params).await,
-        "automation.run_now" => state.run_now(app, &params).await,
-        "automation.peek" => state.peek(&params).await,
+        "automation.list" => self_mgr.list().await,
+        "automation.save" => self_mgr.save_job(&params).await,
+        "automation.delete" => self_mgr.delete_job(&params).await,
+        "automation.set_enabled" => self_mgr.set_enabled(&params).await,
+        "automation.run_now" => self_mgr.run_now(&params).await,
+        "automation.peek" => self_mgr.peek(&params).await,
         other => Err(format!("unknown automation method \"{other}\"")),
     }
-}
-
-#[tauri::command]
-pub async fn automation_request(
-    app: AppHandle,
-    state: tauri::State<'_, SchedulerManager>,
-    method: String,
-    params: Value,
-) -> Result<Value, String> {
-    dispatch_automation(&app, &state, &method, params).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    fn test_manager() -> Arc<SchedulerManager> {
+        let (tx, _rx) = broadcast::channel(16);
+        let sup = Arc::new(Supervisor::new(tx.clone()));
+        Arc::new(SchedulerManager::new(
+            std::env::temp_dir().join("pidock-test-jobs.json"),
+            sup,
+            tx,
+        ))
+    }
 
     #[test]
     fn cron_parse_valid_and_invalid() {
@@ -932,5 +915,18 @@ mod tests {
         assert_eq!(back[0].name, job.name);
         assert_eq!(back[0].permission_mode, "full");
         assert_eq!(back[0].ends_at, job.ends_at);
+    }
+
+    #[tokio::test]
+    async fn peek_dispatch_works_without_scheduler_start() {
+        let mgr = test_manager();
+        let out = dispatch_automation(
+            &mgr,
+            "automation.peek",
+            json!({"cron": "0 */5 * * * *", "count": 2}),
+        )
+        .await
+        .expect("peek 应成功");
+        assert_eq!(out["times"].as_array().unwrap().len(), 2);
     }
 }

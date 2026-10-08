@@ -1,5 +1,6 @@
-//! pi-host supervisor: spawn the host daemon, bridge stdio JSONL to the
-//! frontend (requests via `host_request` command, events via `pidock:event`).
+//! pi-host supervisor：拉起 host 守护进程，stdio JSONL 桥接到壳层
+//! （请求经 [`Supervisor::request`] 转发，事件广播到 [`Supervisor::events`]，
+//! 由壳层分发给 webview / 浏览器 WS 客户端 / sync-agent）。
 
 use std::{
     collections::HashMap,
@@ -10,11 +11,10 @@ use std::{
 
 use pidock_protocol::{CoreFrame, HostFrame, Request};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, Command},
-    sync::oneshot,
+    sync::{broadcast, oneshot},
 };
 use uuid::Uuid;
 
@@ -27,32 +27,44 @@ struct Running {
     pending: PendingMap,
 }
 
-#[derive(Default)]
 pub struct Supervisor {
+    /// host 事件广播：sync-agent、调度器 watcher、壳层事件泵都订阅这里
+    pub events: broadcast::Sender<pidock_protocol::Envelope>,
     inner: Mutex<Option<Arc<Running>>>,
 }
 
 impl Supervisor {
-    fn spawn(&self, app: AppHandle) -> Result<(), String> {
+    pub fn new(events: broadcast::Sender<pidock_protocol::Envelope>) -> Self {
+        Self {
+            events,
+            inner: Mutex::new(None),
+        }
+    }
+
+    fn spawn(&self) -> Result<(), String> {
         let mut guard = self.inner.lock().map_err(|e| e.to_string())?;
         if let Some(running) = guard.as_ref() {
-            if running
+            // try_wait 会回收僵尸进程：已退出则清掉旧条目，走下面的重新拉起
+            let alive = running
                 .child
                 .lock()
                 .map_err(|e| e.to_string())?
-                .id()
-                .is_some()
-            {
+                .try_wait()
+                .map(|status| status.is_none())
+                .unwrap_or(true);
+            if alive {
                 return Ok(()); // already running
             }
+            eprintln!("[supervisor] pi-host exited, respawning on next request");
+            *guard = None;
         }
 
-        // release builds spawn the bundled pi-host sidecar that sits next to
-        // the main executable; dev builds run `bun src/main.ts` from the repo
+        // 壳层 release 构建拉起与主程序同目录的 pi-host sidecar；
+        // debug 构建直接跑仓库里的 `bun src/main.ts`
         let (default_dir, default_cmd, default_args) = if cfg!(debug_assertions) {
             (
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../../host")
+                    .join("../../host")
                     .to_string_lossy()
                     .into_owned(),
                 "bun".to_string(),
@@ -63,7 +75,8 @@ impl Supervisor {
                 .ok()
                 .and_then(|p| p.parent().map(|p| p.to_path_buf()))
                 .unwrap_or_default();
-            // tauri externalBin 落盘名：unix 是 "pidock-host"，Windows 才带 .exe
+            // 桌面包 tauri externalBin 落盘名与 webhost 镜像内的 sidecar 名一致：
+            // unix 是 "pidock-host"，Windows 才带 .exe
             let sidecar = if cfg!(windows) {
                 "pidock-host.exe"
             } else {
@@ -97,7 +110,7 @@ impl Supervisor {
         // 分配新终端窗口；CREATE_NO_WINDOW 使其无窗运行（管道 IO 不受影响）
         #[cfg(target_os = "windows")]
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        // release sidecar mode has no host dir; empty cwd must not be passed
+                                             // release sidecar mode has no host dir; empty cwd must not be passed
         if !host_dir.is_empty() {
             command.current_dir(&host_dir);
         }
@@ -140,12 +153,8 @@ impl Supervisor {
         });
 
         // stdout -> frame dispatch: responses resolve pending requests,
-        // envelopes are emitted to the webview as `pidock:event` and fanned
-        // out to the sync-agent via the managed broadcast channel
-        let event_tx = app
-            .state::<tokio::sync::broadcast::Sender<pidock_protocol::Envelope>>()
-            .inner()
-            .clone();
+        // envelopes broadcast to shell event pumps and the sync-agent
+        let events = self.events.clone();
         let pending_for_reader = pending.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -179,8 +188,7 @@ impl Supervisor {
                                 }
                             }
                             Ok(HostFrame::Event(envelope)) => {
-                                let _ = app.emit("pidock:event", &envelope);
-                                let _ = event_tx.send(envelope);
+                                let _ = events.send(envelope);
                             }
                             Err(e) => {
                                 eprintln!("[pi-host] unparseable frame: {e}: {trimmed:.200}");
@@ -210,13 +218,8 @@ impl Supervisor {
         Ok(())
     }
 
-    pub async fn request(
-        &self,
-        app: AppHandle,
-        method: String,
-        params: Value,
-    ) -> Result<Value, String> {
-        if let Err(e) = self.spawn(app) {
+    pub async fn request(&self, method: String, params: Value) -> Result<Value, String> {
+        if let Err(e) = self.spawn() {
             return Err(e);
         }
         let running = {
@@ -240,10 +243,13 @@ impl Supervisor {
             let Some(stdin) = slot.as_mut() else {
                 return Err("pi-host is shutting down".into());
             };
-            stdin
-                .write_all(line.as_bytes())
-                .await
-                .map_err(|e| format!("write to host failed: {e}"))?;
+            if let Err(e) = stdin.write_all(line.as_bytes()).await {
+                // host 已死（管道破裂）：清掉条目，下一次请求自动重新拉起
+                if let Ok(mut guard) = self.inner.lock() {
+                    guard.take();
+                }
+                return Err(format!("write to host failed: {e}"));
+            }
             stdin.flush().await.map_err(|e| e.to_string())?;
         }
 
@@ -311,16 +317,6 @@ impl Supervisor {
             let _ = c.start_kill();
         }
     }
-}
-
-#[tauri::command]
-pub async fn host_request(
-    app: AppHandle,
-    state: tauri::State<'_, Supervisor>,
-    method: String,
-    params: Value,
-) -> Result<Value, String> {
-    state.request(app, method, params).await
 }
 
 /// Resolve `cmd` against PATH the way a shell would (PATHEXT included).
@@ -434,6 +430,7 @@ fn load_proxy_conf() -> Option<ProxyConf> {
 }
 
 /// 解析 `reg query` 的值行（`    Name    REG_SZ    value`），取最后一列
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn parse_reg_value(output: &str, name: &str) -> Option<String> {
     output.lines().find_map(|line| {
         let mut parts = line.split_whitespace();
@@ -448,6 +445,7 @@ fn parse_reg_value(output: &str, name: &str) -> Option<String> {
 }
 
 /// 解析 WinINET ProxyServer：`host:port` 或 `http=…;https=…;ftp=…`（优先 https）
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn parse_proxy_server(raw: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() {

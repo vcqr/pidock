@@ -3644,7 +3644,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pidock-desktop"
+name = "pidock-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -3654,16 +3654,27 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-cron-scheduler",
+ "tokio-tungstenite 0.24.0",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "pidock-desktop"
+version = "0.1.0"
+dependencies = [
+ "pidock-core",
+ "pidock-protocol",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
  "tauri-plugin-notification",
  "tauri-plugin-single-instance",
  "tokio",
- "tokio-cron-scheduler",
- "tokio-tungstenite 0.24.0",
- "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -3709,6 +3720,22 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "pidock-webhost"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "mime_guess",
+ "pidock-core",
+ "pidock-protocol",
+ "rust-embed",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

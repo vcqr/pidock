@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, provide, ref, watch } from "vue";
 import { darkTheme, NConfigProvider, NSplit } from "naive-ui";
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AutomationView,
@@ -22,7 +21,8 @@ import {
   toggleTheme,
   type AgentStore,
 } from "@pidock/ui";
-import { createTauriBus } from "./bus";
+import { createBus } from "./bus";
+import { ipc } from "./ipc";
 import SyncSettings from "./SyncSettings.vue";
 import DesktopSettings from "./DesktopSettings.vue";
 
@@ -46,7 +46,7 @@ const newTaskExpert = ref<{ id: string; name: string } | null>(null);
 const newTaskCwd = ref<{ cwd: string; seq: number } | null>(null);
 /** 项目文件浏览面板（侧栏项目右键「查看项目文件」）；seq 自增支持同项目重复触发刷新 */
 const browseCwd = ref<{ cwd: string; seq: number } | null>(null);
-const bus = createTauriBus();
+const bus = createBus();
 
 function startNewTask(cwd?: string, expert?: { id: string; name: string } | null): void {
   newTaskMode.value = true;
@@ -122,10 +122,11 @@ function resetLayout(): void {
 
 provide(ATTACHMENT_LOADER, (id: string) => bus.loadAttachment(id));
 
-// 系统原生目录选择器（输入卡片项目菜单的「打开文件夹」）
+// 系统原生目录选择器（输入卡片项目菜单的「打开文件夹」）；
+// webhost 模式下服务端明确报错，这里照旧吞掉返回 null（视为取消）
 provide(FOLDER_PICKER, async () => {
   try {
-    return await invoke<string | null>("pick_folder");
+    return await ipc<string | null>("pick_folder");
   } catch {
     return null;
   }
@@ -134,7 +135,7 @@ provide(FOLDER_PICKER, async () => {
 // 系统原生文件选择器（本地导入）：kind 决定过滤器（缺省技能/插件包，"image" = 头像图片）
 provide(FILE_PICKER, async (kind?: "install" | "image") => {
   try {
-    return await invoke<string | null>("pick_file", { kind: kind ?? null });
+    return await ipc<string | null>("pick_file", { kind: kind ?? null });
   } catch {
     return null;
   }
@@ -143,9 +144,9 @@ provide(FILE_PICKER, async (kind?: "install" | "image") => {
 // 在系统文件管理器中打开目录（会话右键菜单）
 provide(REVEAL_PATH, async (path: string) => {
   try {
-    await invoke("reveal_path", { path });
+    await ipc("reveal_path", { path });
   } catch {
-    // 打开失败时静默（如路径已不存在）
+    // 打开失败时静默（如路径已不存在 / webhost 模式不支持）
   }
 });
 
@@ -277,7 +278,7 @@ onMounted(async () => {
       <main class="main">
         <header class="titlebar" data-tauri-drag-region>
           <StatePill :state="store.agentState" />
-          <span class="transport">本地 pi-host</span>
+          <span class="transport">{{ bus.transport }}</span>
           <span v-if="store.lastError" class="err" :title="store.lastError">{{ store.lastError }}</span>
           <span class="flex-sp"></span>
           <button
@@ -287,17 +288,20 @@ onMounted(async () => {
           >
             <Icon :name="themeMode === 'dark' ? 'sun-line' : 'moon-line'" :size="15" />
           </button>
-          <span class="win-sep"></span>
-          <button class="tbtn" title="最小化" @click="minimize">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14" /></svg>
-          </button>
-          <button class="tbtn" :title="isMax ? '还原' : '最大化'" @click="toggleMaximize">
-            <svg v-if="isMax" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 9h10v10H9z" /><path d="M5 15V5h10" /></svg>
-            <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 6h12v12H6z" /></svg>
-          </button>
-          <button class="tbtn close" title="关闭" @click="closeWindow">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
-          </button>
+          <!-- 窗口控制按钮只在 Tauri 壳里渲染；浏览器里不显示 -->
+          <template v-if="appWin">
+            <span class="win-sep"></span>
+            <button class="tbtn" title="最小化" @click="minimize">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14" /></svg>
+            </button>
+            <button class="tbtn" :title="isMax ? '还原' : '最大化'" @click="toggleMaximize">
+              <svg v-if="isMax" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M9 9h10v10H9z" /><path d="M5 15V5h10" /></svg>
+              <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 6h12v12H6z" /></svg>
+            </button>
+            <button class="tbtn close" title="关闭" @click="closeWindow">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            </button>
+          </template>
         </header>
         <!-- 自动化/专家页与聊天共用主区：侧栏保留；ChatView 用 v-show 保活，切回来不丢草稿 -->
         <ChatView

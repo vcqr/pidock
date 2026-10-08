@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { NSwitch } from "naive-ui";
-import { invoke } from "@tauri-apps/api/core";
+import { ipc } from "./ipc";
 
 /**
  * 设置中心「桌面」页（由 App.vue 经 #pane-desktop 插槽注入 SettingsView）。
- * 对应 Rust 侧 desktop_config_get/set（%APPDATA%/app.pidock.desktop/desktop.json），
- * 与 host 的 settings.json 互不相干。
+ * 对应 Rust 侧 desktop_config_get/set（桌面壳存 app_config_dir，
+ * webhost 存数据目录），与 host 的 settings.json 互不相干。
  */
 const closeHide = ref(true);
 const notifications = ref(true);
@@ -24,7 +24,7 @@ function flash(msg: string, kind: "ok" | "err" = "ok"): void {
 
 onMounted(async () => {
   try {
-    const cfg = await invoke<{ close_action: string; notifications: boolean; autostart: boolean }>(
+    const cfg = await ipc<{ close_action: string; notifications: boolean; autostart: boolean }>(
       "desktop_config_get",
     );
     closeHide.value = cfg.close_action === "hide";
@@ -37,7 +37,7 @@ onMounted(async () => {
 
 async function save(): Promise<void> {
   try {
-    await invoke("desktop_config_set", {
+    await ipc("desktop_config_set", {
       config: {
         close_action: closeHide.value ? "hide" : "exit",
         notifications: notifications.value,

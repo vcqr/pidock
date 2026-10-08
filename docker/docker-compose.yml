@@ -3,6 +3,7 @@ name: pidock
 # PiDock server stack — runs in WSL/docker.
 #   docker compose up -d kafka mongo redis rustfs   # infrastructure only
 #   docker compose up -d --build server             # + PiDock server
+#   docker compose --profile webhost up -d --build webhost   # 无头 Web 接入（独立，不依赖上面任何服务）
 # Pipeline: PIPELINE=kafka (default) or redis (Redis Streams drop-in).
 
 services:
@@ -110,7 +111,28 @@ services:
       - PIDOCK_RUSTFS_ACCESS_KEY=${RUSTFS_ROOT_USER:-pidock}
       - PIDOCK_RUSTFS_SECRET_KEY=${RUSTFS_ROOT_PASSWORD:-pidock-secret}
 
+  # 无头 Web 接入：桌面核心跑成服务，浏览器打开 :8091 即桌面 UI。
+  # 独立于 server 栈（profile 隔离）。会话/配置持久化在 webhost_data 卷。
+  # 公网/不可信网络务必设置 PIDOCK_WEB_TOKEN（浏览器首次连接会弹窗询问）。
+  webhost:
+    build:
+      context: ..
+      dockerfile: docker/webhost.Dockerfile
+    container_name: pidock-webhost
+    profiles: ["webhost"]
+    ports:
+      - "8091:8091"
+    volumes:
+      # /data 是 HOME：pi agent 会话（/data/.pi）与 webhost 配置（/data/.pidock-web）都在这里
+      - webhost_data:/data
+    environment:
+      - PIDOCK_WEB_BIND=0.0.0.0:8091
+      - PIDOCK_WEB_TOKEN=${PIDOCK_WEB_TOKEN:-}
+      # 定时任务 cron 按 TZ 本地时区触发
+      - TZ=${TZ:-Asia/Shanghai}
+
 volumes:
   kafka_data:
   mongo_data:
   rustfs_data:
+  webhost_data:

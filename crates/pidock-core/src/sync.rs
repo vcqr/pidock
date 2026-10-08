@@ -15,12 +15,12 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
-use crate::host::Supervisor;
+use crate::scheduler::SchedulerManager;
+use crate::supervisor::Supervisor;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct SyncConfig {
@@ -68,7 +68,7 @@ impl SyncManager {
         }
     }
 
-    fn save(&self, cfg: &SyncConfig) {
+    pub fn save(&self, cfg: &SyncConfig) {
         if let Some(parent) = self.cfg_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -86,6 +86,85 @@ impl SyncManager {
         st.error = patch.error;
         st.enabled = patch.enabled;
     }
+
+    /// 配置并开启同步（设置中心「云同步」页 / webhost 同名命令的共用实现）
+    pub async fn configure(self: &Arc<Self>, body: SyncConfigureBody) -> Result<Value, String> {
+        let server_url = body.server_url.trim_end_matches('/').to_string();
+        let mut cfg = self.cfg.lock().await.clone();
+        cfg.server_url = server_url.clone();
+        cfg.email = body.email.clone();
+        cfg.enabled = true;
+
+        let token = body.token.trim().to_string();
+        if !token.is_empty() {
+            if !token.starts_with("pd_") {
+                return Err("访问令牌应以 pd_ 开头，请在 Web 端「访问令牌」页重新复制".into());
+            }
+            // 先对 /me 验一次再落盘，坏令牌当场报错；顺带把 email 修正为令牌属主
+            let me = http_json("GET", &format!("{server_url}/me?token={token}"), &json!({}))
+                .await
+                .map_err(|e| format!("访问令牌验证失败：{e}"))?;
+            if let Some(owner) = me.get("email").and_then(|v| v.as_str()) {
+                cfg.email = owner.to_string();
+            }
+            cfg.pat = token;
+            cfg.refresh_token.clear();
+        } else if !body.password.is_empty() {
+            let data = http_json(
+                "POST",
+                &format!("{server_url}/auth/login"),
+                &json!({"email": body.email, "password": body.password}),
+            )
+            .await?;
+            cfg.refresh_token = data
+                .get("refresh_token")
+                .and_then(|v| v.as_str())
+                .ok_or("login response missing refresh_token")?
+                .to_string();
+            cfg.pat.clear();
+        }
+        if cfg.refresh_token.is_empty() && cfg.pat.is_empty() {
+            return Err("没有可用的登录凭据，请输入密码或访问令牌".into());
+        }
+
+        self.save(&cfg);
+        *self.cfg.lock().await = cfg;
+        let _ = self.control.send(SyncControl::Restart).await;
+        Ok(json!({"ok": true}))
+    }
+
+    pub async fn disable(&self) -> Result<Value, String> {
+        let mut cfg = self.cfg.lock().await.clone();
+        cfg.enabled = false;
+        self.save(&cfg);
+        *self.cfg.lock().await = cfg;
+        let _ = self.control.send(SyncControl::Stop).await;
+        Ok(json!({"ok": true}))
+    }
+
+    pub async fn status(&self) -> Result<Value, String> {
+        let cfg = self.cfg.lock().await.clone();
+        let st = self.status.lock().await.clone();
+        Ok(json!({
+            "enabled": st.enabled,
+            "connected": st.connected,
+            "machine_id": st.machine_id,
+            "email": cfg.email,
+            "server_url": cfg.server_url,
+            "error": st.error,
+        }))
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SyncConfigureBody {
+    pub server_url: String,
+    pub email: String,
+    #[serde(default)]
+    pub password: String,
+    /// 访问令牌（Web 端「访问令牌」页生成）；填了就优先于密码登录
+    #[serde(default)]
+    pub token: String,
 }
 
 async fn http_json(method: &str, url: &str, body: &Value) -> Result<Value, String> {
@@ -196,7 +275,7 @@ fn collect_attachments(value: &Value, out: &mut Vec<(String, i64)>) {
 }
 
 async fn upload_attachments(
-    app: &AppHandle,
+    supervisor: &Supervisor,
     access: &str,
     server_url: &str,
     envelope: &Value,
@@ -207,19 +286,13 @@ async fn upload_attachments(
     if refs.is_empty() {
         return;
     }
-    let agent_dir = {
-        let supervisor = app.state::<Supervisor>();
-        match supervisor
-            .request(app.clone(), "config.get".into(), json!({}))
-            .await
-        {
-            Ok(v) => v
-                .get("agent_dir")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            Err(_) => return,
-        }
+    let agent_dir = match supervisor.request("config.get".into(), json!({})).await {
+        Ok(v) => v
+            .get("agent_dir")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        Err(_) => return,
     };
     let client = reqwest::Client::new();
     for (sha, size) in refs {
@@ -296,12 +369,12 @@ fn command_result_envelope(
 
 /// translate a server command into a host request
 async fn execute_command(
-    app: &AppHandle,
+    supervisor: &Supervisor,
+    scheduler: &Arc<SchedulerManager>,
     session_id: &str,
     cmd_type: &str,
     payload: &Value,
 ) -> Result<Option<Value>, String> {
-    let supervisor = app.state::<Supervisor>();
     let (method, params) = match cmd_type {
         // 图片/文档附件原样透传（web 端共享同一 UI，发送载荷含 images/attachments）
         "agent.prompt" => {
@@ -448,16 +521,15 @@ async fn execute_command(
         | "experts.private_list"
         | "experts.install_resource"
         | "experts.remove_resource") => (passthrough, payload.clone()),
-        // 本地定时任务管理：调度器在桌面 Rust 侧，不经 host —— 直连 SchedulerManager
+        // 本地定时任务管理：调度器在核心 Rust 侧，不经 host —— 直连 SchedulerManager
         automation @ ("automation.list"
         | "automation.save"
         | "automation.delete"
         | "automation.set_enabled"
         | "automation.run_now"
         | "automation.peek") => {
-            let sched = app.state::<crate::scheduler::SchedulerManager>();
             let result =
-                crate::scheduler::dispatch_automation(app, &sched, automation, payload.clone())
+                crate::scheduler::dispatch_automation(scheduler, automation, payload.clone())
                     .await?;
             return Ok(Some(result));
         }
@@ -468,26 +540,29 @@ async fn execute_command(
         }
     };
     supervisor
-        .request(app.clone(), method.to_string(), params)
+        .request(method.to_string(), params)
         .await
         .map(Some)
 }
 
 /// run the sync loop until disabled or control message
 async fn sync_loop(
-    app: AppHandle,
+    supervisor: Arc<Supervisor>,
+    scheduler: Arc<SchedulerManager>,
+    sync: Arc<SyncManager>,
     mut event_rx: broadcast::Receiver<pidock_protocol::Envelope>,
     mut control_rx: mpsc::Receiver<SyncControl>,
 ) {
-    let supervisor = app.state::<Supervisor>();
-    let sync = app.state::<SyncManager>();
     let mut backoff_secs = 1u64;
     let mut uploaded: HashSet<String> = HashSet::new();
 
     'outer: loop {
         let (mut cfg, enabled) = {
             let c = sync.cfg.lock().await;
-            (c.clone(), c.enabled && (!c.refresh_token.is_empty() || !c.pat.is_empty()))
+            (
+                c.clone(),
+                c.enabled && (!c.refresh_token.is_empty() || !c.pat.is_empty()),
+            )
         };
         if !enabled {
             sync.set_status(SyncStatus {
@@ -555,13 +630,12 @@ async fn sync_loop(
             Err(e) => {
                 // PAT 模式下 401/403 基本等于令牌被吊销，给出可行动的提示
                 let msg = format!("connect: {e}");
-                let user_msg = if !cfg.pat.is_empty()
-                    && (msg.contains("401") || msg.contains("403"))
-                {
-                    "访问令牌已失效，请在 Web 端「访问令牌」页重新生成".to_string()
-                } else {
-                    msg
-                };
+                let user_msg =
+                    if !cfg.pat.is_empty() && (msg.contains("401") || msg.contains("403")) {
+                        "访问令牌已失效，请在 Web 端「访问令牌」页重新生成".to_string()
+                    } else {
+                        msg
+                    };
                 sync.set_status(SyncStatus {
                     enabled: true,
                     connected: false,
@@ -609,10 +683,7 @@ async fn sync_loop(
 
         // 4) backfill open sessions (server dedupes via (session_id, seq) upsert)
         {
-            if let Ok(list) = supervisor
-                .request(app.clone(), "session.list".into(), json!({}))
-                .await
-            {
+            if let Ok(list) = supervisor.request("session.list".into(), json!({})).await {
                 if let Some(sessions) = list.get("sessions").and_then(|v| v.as_array()) {
                     for s in sessions {
                         // backfill ALL known sessions so the web list is complete,
@@ -643,11 +714,7 @@ async fn sync_loop(
                             let _ = ws_sink.send(WsMessage::Text(meta.to_string().into())).await;
                         }
                         if let Ok(replay) = supervisor
-                            .request(
-                                app.clone(),
-                                "session.events".into(),
-                                json!({"session_id": sid}),
-                            )
+                            .request("session.events".into(), json!({"session_id": sid}))
                             .await
                         {
                             if let Some(events) = replay.get("events").and_then(|v| v.as_array()) {
@@ -662,7 +729,7 @@ async fn sync_loop(
                                         "payload": ev.get("payload").cloned().unwrap_or(json!({})),
                                     });
                                     upload_attachments(
-                                        &app,
+                                        &supervisor,
                                         &access,
                                         &cfg.server_url,
                                         &env,
@@ -696,7 +763,7 @@ async fn sync_loop(
                             let persist = envelope.persist;
                             if persist || cloud_worthy(&envelope.kind) {
                                 let serialized = serde_json::to_value(&envelope).unwrap_or(json!({}));
-                                upload_attachments(&app, &access, &cfg.server_url, &serialized, &mut uploaded).await;
+                                upload_attachments(&supervisor, &access, &cfg.server_url, &serialized, &mut uploaded).await;
                                 if ws_sink.send(WsMessage::Text(serialized.to_string().into())).await.is_err() {
                                     closed = true;
                                 }
@@ -717,8 +784,7 @@ async fn sync_loop(
                                     let command = frame.get("command").cloned().unwrap_or(json!({}));
                                     let session_id = command.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                     let cmd_type = command.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                    let result = execute_command(&app, &session_id, &cmd_type, command.get("payload").unwrap_or(&json!({}))).await;
-                                    let reply = command_result_envelope(&session_id, &command_id, &result);
+                                    let result = execute_command(&supervisor, &scheduler, &session_id, &cmd_type, command.get("payload").unwrap_or(&json!({}))).await;                                    let reply = command_result_envelope(&session_id, &command_id, &result);
                                     let _ = ws_sink.send(WsMessage::Text(reply.to_string().into())).await;
                                 } else if frame.get("ctrl").and_then(|v| v.as_str()) == Some("registered") {
                                     if let Some(mid) = frame.get("machine_id").and_then(|v| v.as_str()) {
@@ -786,104 +852,13 @@ fn local_ip() -> String {
         .unwrap_or_else(|_| "127.0.0.1".into())
 }
 
-// ------------------------------------------------------------- tauri API ---
-
-#[derive(Deserialize)]
-pub struct SyncConfigureBody {
-    pub server_url: String,
-    pub email: String,
-    #[serde(default)]
-    pub password: String,
-    /// 访问令牌（Web 端「访问令牌」页生成）；填了就优先于密码登录
-    #[serde(default)]
-    pub token: String,
-}
-
-#[tauri::command]
-pub async fn sync_configure(
-    _app: AppHandle,
-    state: tauri::State<'_, SyncManager>,
-    body: SyncConfigureBody,
-) -> Result<Value, String> {
-    let server_url = body.server_url.trim_end_matches('/').to_string();
-    let mut cfg = state.cfg.lock().await.clone();
-    cfg.server_url = server_url.clone();
-    cfg.email = body.email.clone();
-    cfg.enabled = true;
-
-    let token = body.token.trim().to_string();
-    if !token.is_empty() {
-        if !token.starts_with("pd_") {
-            return Err("访问令牌应以 pd_ 开头，请在 Web 端「访问令牌」页重新复制".into());
-        }
-        // 先对 /me 验一次再落盘，坏令牌当场报错；顺带把 email 修正为令牌属主
-        let me = http_json(
-            "GET",
-            &format!("{server_url}/me?token={token}"),
-            &json!({}),
-        )
-        .await
-        .map_err(|e| format!("访问令牌验证失败：{e}"))?;
-        if let Some(owner) = me.get("email").and_then(|v| v.as_str()) {
-            cfg.email = owner.to_string();
-        }
-        cfg.pat = token;
-        cfg.refresh_token.clear();
-    } else if !body.password.is_empty() {
-        let data = http_json(
-            "POST",
-            &format!("{server_url}/auth/login"),
-            &json!({"email": body.email, "password": body.password}),
-        )
-        .await?;
-        cfg.refresh_token = data
-            .get("refresh_token")
-            .and_then(|v| v.as_str())
-            .ok_or("login response missing refresh_token")?
-            .to_string();
-        cfg.pat.clear();
-    }
-    if cfg.refresh_token.is_empty() && cfg.pat.is_empty() {
-        return Err("没有可用的登录凭据，请输入密码或访问令牌".into());
-    }
-
-    state.save(&cfg);
-    *state.cfg.lock().await = cfg;
-    let _ = state.control.send(SyncControl::Restart).await;
-    Ok(json!({"ok": true}))
-}
-
-#[tauri::command]
-pub async fn sync_disable(state: tauri::State<'_, SyncManager>) -> Result<Value, String> {
-    let mut cfg = state.cfg.lock().await.clone();
-    cfg.enabled = false;
-    state.save(&cfg);
-    *state.cfg.lock().await = cfg;
-    let _ = state.control.send(SyncControl::Stop).await;
-    Ok(json!({"ok": true}))
-}
-
-#[tauri::command]
-pub async fn sync_status(state: tauri::State<'_, SyncManager>) -> Result<Value, String> {
-    let cfg = state.cfg.lock().await.clone();
-    let st = state.status.lock().await.clone();
-    Ok(json!({
-        "enabled": st.enabled,
-        "connected": st.connected,
-        "machine_id": st.machine_id,
-        "email": cfg.email,
-        "server_url": cfg.server_url,
-        "error": st.error,
-    }))
-}
-
-/// spawn the sync loop once at app startup; the loop lives for the whole app
-pub fn spawn(
-    app: AppHandle,
+/// spawn the sync loop; lives until the process exits (called by CoreCtx::start)
+pub async fn run_sync_loop(
+    supervisor: Arc<Supervisor>,
+    scheduler: Arc<SchedulerManager>,
+    sync: Arc<SyncManager>,
     event_rx: broadcast::Receiver<pidock_protocol::Envelope>,
     control_rx: mpsc::Receiver<SyncControl>,
 ) {
-    tauri::async_runtime::spawn(async move {
-        sync_loop(app, event_rx, control_rx).await;
-    });
+    sync_loop(supervisor, scheduler, sync, event_rx, control_rx).await;
 }
