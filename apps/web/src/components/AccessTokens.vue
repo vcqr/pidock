@@ -6,19 +6,33 @@ import { ApiError, type ApiClient } from "../auth.js";
 interface PatInfo {
   id: string;
   name: string;
+  days: number;
+  expires_at: string;
   created_at: string;
 }
 
 const props = defineProps<{ client: ApiClient }>();
+
+/** 有效期选项（与 server EXPIRY_CHOICES 对齐；0 = 不过期） */
+const EXPIRY_OPTIONS = [
+  { days: 0, label: "不过期" },
+  { days: 3, label: "3 天" },
+  { days: 15, label: "15 天" },
+  { days: 30, label: "30 天" },
+  { days: 90, label: "90 天" },
+  { days: 180, label: "180 天" },
+  { days: 360, label: "360 天" },
+];
 
 const tokens = ref<PatInfo[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const busyId = ref("");
 const newName = ref("");
+const newDays = ref(0);
 const creating = ref(false);
 /** 新令牌明文只显示一次 */
-const freshToken = ref<{ token: string; name: string } | null>(null);
+const freshToken = ref<{ token: string; name: string; expires: string } | null>(null);
 const copied = ref(false);
 let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -44,9 +58,13 @@ async function create(): Promise<void> {
   try {
     const r = await props.client.request(`/me/tokens?token=${props.client.token}`, {
       method: "POST",
-      body: JSON.stringify({ token: props.client.token, name: newName.value }),
+      body: JSON.stringify({ token: props.client.token, name: newName.value, days: newDays.value }),
     });
-    freshToken.value = { token: r.token, name: r.name };
+    freshToken.value = {
+      token: r.token,
+      name: r.name,
+      expires: r.expires_at ? `有效期至 ${fmtDate(r.expires_at)}` : "有效期：不过期",
+    };
     newName.value = "";
     await load();
   } catch (err) {
@@ -54,6 +72,10 @@ async function create(): Promise<void> {
   } finally {
     creating.value = false;
   }
+}
+
+function expired(t: PatInfo): boolean {
+  return !!t.expires_at && new Date(t.expires_at).getTime() < Date.now();
 }
 
 async function revoke(t: PatInfo): Promise<void> {
@@ -124,6 +146,9 @@ function fmtDate(s: string): string {
           spellcheck="false"
           @keydown.enter="create"
         />
+        <select v-model.number="newDays" class="expiry">
+          <option v-for="o in EXPIRY_OPTIONS" :key="o.days" :value="o.days">{{ o.label }}</option>
+        </select>
         <button class="primary" :disabled="creating || !newName.trim()" @click="create">
           {{ creating ? "创建中…" : "创建令牌" }}
         </button>
@@ -134,7 +159,7 @@ function fmtDate(s: string): string {
       <!-- 新令牌明文（仅一次） -->
       <div v-if="freshToken" class="pat-fresh">
         <div class="fresh-tip">
-          请立即复制「{{ freshToken.name }}」的令牌，关闭后将无法再次查看：
+          请立即复制「{{ freshToken.name }}」的令牌，关闭后将无法再次查看（{{ freshToken.expires }}）：
         </div>
         <div class="fresh-row">
           <code class="mono">{{ freshToken.token }}</code>
@@ -150,7 +175,8 @@ function fmtDate(s: string): string {
         </div>
         <div v-for="t in tokens" v-else :key="t.id" class="pat-row">
           <span class="tname">{{ t.name }}</span>
-          <span class="tdate">{{ fmtDate(t.created_at) }} 创建</span>
+          <span v-if="expired(t)" class="chip dead">已过期</span>
+          <span class="tdate">到期：{{ t.expires_at ? fmtDate(t.expires_at) : "不过期" }}</span>
           <button class="revoke" :disabled="busyId === t.id" @click="revoke(t)">撤销</button>
         </div>
       </div>
@@ -189,14 +215,18 @@ function fmtDate(s: string): string {
   display: flex;
   gap: 10px;
 }
-.pat-create input {
-  flex: 1;
+.pat-create input,
+.pat-create .expiry {
   background: var(--pd-bg-panel);
   border: 1px solid var(--pd-border);
   border-radius: 8px;
   color: var(--pd-text);
   padding: 7px 10px;
   font-size: calc(12.5px * var(--pd-font-scale));
+}
+.pat-create input {
+  flex: 1;
+  min-width: 0;
 }
 .pat-error {
   color: var(--pd-red-text, #e5484d);
@@ -264,6 +294,17 @@ function fmtDate(s: string): string {
   flex: none;
   color: var(--pd-text-4);
   font-size: calc(11px * var(--pd-font-scale));
+}
+.chip {
+  flex: none;
+  font-size: calc(10.5px * var(--pd-font-scale));
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--pd-border);
+}
+.chip.dead {
+  color: var(--pd-red-text, #e5484d);
+  border-color: var(--pd-red-text, #e5484d);
 }
 .revoke {
   flex: none;
