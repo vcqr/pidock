@@ -189,7 +189,8 @@ if (appWin) {
 
 onMounted(async () => {
   window.addEventListener("keydown", onGlobalKey);
-  // 会话打开（新建/点选）后退出新建任务模式
+  // 新建会话（首条消息创建）后退出新建任务模式；侧栏点选在 @select 里直接退出
+  // ——重选同一会话时 activeId 不变，watch 不会触发
   watch(
     () => store.value?.activeId,
     (v) => {
@@ -260,7 +261,7 @@ onMounted(async () => {
         :show-experts="true"
         :active-tool="showAutomation ? 'automation' : showExperts ? 'experts' : undefined"
         :width="sidebarWidth ?? undefined"
-        @select="(id) => { showAutomation = false; showExperts = false; store?.openSession(id); }"
+        @select="(id) => { showAutomation = false; showExperts = false; newTaskMode = false; store?.openSession(id); }"
         @new-task="() => { showAutomation = false; showExperts = false; startNewTask(); }"
         @open-project="(cwd) => { showAutomation = false; showExperts = false; startNewTask(cwd); }"
         @browse-project="(cwd) => { showAutomation = false; showExperts = false; browseCwd = { cwd, seq: (browseCwd?.seq ?? 0) + 1 }; }"
