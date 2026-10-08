@@ -835,9 +835,15 @@ async fn sync_loop(
 }
 
 fn hostname() -> String {
-    std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "unknown".into())
+    // 环境变量只有交互式 shell 才有（macOS GUI 进程拿不到 HOSTNAME），
+    // 主路径走 gethostname 系统调用；去掉可能的 FQDN 尾点
+    hostname::get()
+        .ok()
+        .map(|h| h.to_string_lossy().trim_end_matches('.').to_string())
+        .filter(|h| !h.is_empty())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .unwrap_or_else(|| "unknown".into())
 }
 
 /// 探测本机局域网 IP：对公共地址做 UDP connect（不发包），取默认路由出口网卡的源地址；
@@ -861,4 +867,19 @@ pub async fn run_sync_loop(
     control_rx: mpsc::Receiver<SyncControl>,
 ) {
     sync_loop(supervisor, scheduler, sync, event_rx, control_rx).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// gethostname 系统调用在任何正常主机/容器里都拿得到名字；
+    /// 老实现只查环境变量，macOS GUI 进程下恒为 "unknown"（回归护栏）
+    #[test]
+    fn hostname_resolves_without_env() {
+        let h = hostname();
+        assert!(!h.is_empty(), "hostname 不应为空");
+        assert_ne!(h, "unknown", "应通过 gethostname 取到真实主机名");
+        assert!(!h.contains(' '), "主机名不应含空格: {h}");
+    }
 }

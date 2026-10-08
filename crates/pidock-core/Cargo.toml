@@ -18,3 +18,5 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio-cron-scheduler = "0.15"
 croner = "3"
+# GUI 进程（尤其 macOS）环境里没有 HOSTNAME/COMPUTERNAME，取主机名要走系统调用
+hostname = "0.4"
