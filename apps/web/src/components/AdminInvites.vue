@@ -13,7 +13,6 @@ interface Invite {
 }
 
 const props = defineProps<{ client: ApiClient }>();
-const emit = defineEmits<{ close: [] }>();
 
 const invites = ref<Invite[]>([]);
 const loading = ref(true);
@@ -117,14 +116,11 @@ async function copy(code: string): Promise<void> {
 </script>
 
 <template>
-  <div class="inv-overlay" @click.self="emit('close')">
-    <div class="inv-panel">
-      <div class="inv-head">
-        <b>邀请码管理</b>
+  <div class="inv-pane">
+    <div class="pane-head">
+      <div class="pane-title">
         <span class="sub">注册需凭邀请码；生成后立即复制</span>
-        <button class="ghost" @click="emit('close')">✕</button>
       </div>
-
       <div class="inv-create">
         <label>可用次数<input v-model.number="maxUses" type="number" min="1" max="1000" /></label>
         <label>有效天数<input v-model.number="expiresDays" type="number" min="0" max="3650" placeholder="0=永久" /></label>
@@ -132,78 +128,63 @@ async function copy(code: string): Promise<void> {
           {{ creating ? "生成中…" : "生成邀请码" }}
         </button>
       </div>
+    </div>
 
-      <div v-if="error" class="inv-error">{{ error }}</div>
+    <div v-if="error" class="inv-error">{{ error }}</div>
 
-      <div class="inv-list">
-        <div v-if="loading" class="inv-empty">加载中…</div>
-        <div v-else-if="!invites.length" class="inv-empty">还没有邀请码，生成一个吧。</div>
-        <div v-for="i in invites" v-else :key="i.code" class="inv-row">
-          <button class="code mono" :title="copiedCode === i.code ? '已复制' : '点击复制'" @click="copy(i.code)">
-            {{ copiedCode === i.code ? "已复制 ✓" : i.code }}
-          </button>
-          <span class="usage">{{ i.used_count }}/{{ i.max_uses }}</span>
-          <span class="expire">{{ fmtDate(i.expires_at) }}</span>
-          <span class="chip" :class="status(i).cls">{{ status(i).label }}</span>
-          <button
-            v-if="!i.revoked"
-            class="revoke"
-            :disabled="status(i).label !== '有效'"
-            title="作废该邀请码"
-            @click="revoke(i.code)"
-          >
-            撤销
-          </button>
-        </div>
+    <div class="inv-list">
+      <div v-if="loading" class="inv-empty">加载中…</div>
+      <div v-else-if="!invites.length" class="inv-empty">还没有邀请码，生成一个吧。</div>
+      <div v-for="i in invites" v-else :key="i.code" class="inv-row">
+        <button class="code mono" :title="copiedCode === i.code ? '已复制' : '点击复制'" @click="copy(i.code)">
+          {{ copiedCode === i.code ? "已复制 ✓" : i.code }}
+        </button>
+        <span class="usage">{{ i.used_count }}/{{ i.max_uses }}</span>
+        <span class="expire">{{ fmtDate(i.expires_at) }}</span>
+        <span class="chip" :class="status(i).cls">{{ status(i).label }}</span>
+        <button
+          v-if="!i.revoked"
+          class="revoke"
+          :disabled="status(i).label !== '有效'"
+          title="作废该邀请码"
+          @click="revoke(i.code)"
+        >
+          撤销
+        </button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.inv-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  background: rgba(0, 0, 0, 0.45);
-  display: grid;
-  place-items: center;
-}
-.inv-panel {
-  width: min(560px, calc(100vw - 40px));
-  max-height: 80vh;
+.inv-pane {
   display: flex;
   flex-direction: column;
-  background: var(--pd-bg-panel);
-  border: 1px solid var(--pd-border);
-  border-radius: 12px;
-  box-shadow: var(--pd-shadow, 0 12px 40px rgba(0, 0, 0, 0.35));
-  padding: 16px 18px;
+  height: 100%;
+  min-height: 0;
 }
-.inv-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
+.pane-head {
   padding-bottom: 12px;
   border-bottom: 1px solid var(--pd-border);
 }
-.inv-head b {
-  color: var(--pd-text);
-  font-size: calc(14px * var(--pd-font-scale));
+.pane-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
-.inv-head .sub {
+.pane-title b {
+  color: var(--pd-text);
+  font-size: calc(15px * var(--pd-font-scale));
+}
+.pane-title .sub {
   color: var(--pd-text-4);
   font-size: calc(11px * var(--pd-font-scale));
-  flex: 1;
-}
-.inv-head .ghost {
-  align-self: center;
 }
 .inv-create {
   display: flex;
   align-items: flex-end;
   gap: 10px;
-  padding: 12px 0;
+  padding-top: 12px;
 }
 .inv-create label {
   display: flex;
@@ -227,13 +208,16 @@ async function copy(code: string): Promise<void> {
 .inv-error {
   color: var(--pd-red-text, #e5484d);
   font-size: calc(12px * var(--pd-font-scale));
-  padding-bottom: 8px;
+  padding: 8px 0;
 }
 .inv-list {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding-top: 10px;
 }
 .inv-empty {
   color: var(--pd-text-4);

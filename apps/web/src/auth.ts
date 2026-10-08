@@ -38,6 +38,45 @@ export function clearAuth(): void {
   localStorage.removeItem(KEY);
 }
 
+/** /auth/methods 响应：登录页据此渲染可用登录方式（拉取失败按仅密码处理） */
+export interface AuthMethods {
+  password: boolean;
+  ldap: { enabled: boolean };
+  oidc: { enabled: boolean; label?: string };
+}
+
+export async function fetchAuthMethods(serverUrl: string): Promise<AuthMethods | null> {
+  try {
+    const res = await fetch(`${serverUrl.replace(/\/+$/, "")}/auth/methods`);
+    if (!res.ok) return null;
+    return (await res.json()) as AuthMethods;
+  } catch {
+    return null;
+  }
+}
+
+/** SSO 回调后用一次性 code 换正式 token 对；email 由服务端从 IdP 同步 */
+export async function exchangeSsoCode(serverUrl: string, code: string): Promise<AuthState> {
+  const res = await fetch(`${serverUrl.replace(/\/+$/, "")}/auth/sso/exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data?.error ?? `SSO 登录失败 (${res.status})`);
+  }
+  const data = await res.json();
+  return {
+    server_url: serverUrl,
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    user_id: data.user_id,
+    email: data.email ?? "",
+    role: data.role,
+  };
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -59,6 +98,10 @@ export class AuthClient {
 
   get userId(): string {
     return this.state.user_id;
+  }
+
+  get email(): string {
+    return this.state.email;
   }
 
   get role(): string {
@@ -130,14 +173,33 @@ export class AuthClient {
   }
 
   async login(serverUrl: string, email: string, password: string): Promise<AuthState> {
-    const res = await fetch(`${serverUrl}/auth/login`, {
+    const res = await fetch(`${serverUrl.replace(/\/+$/, "")}/auth/login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
+    return this.adoptLogin(serverUrl, email, res, "登录失败");
+  }
+
+  /** LDAP 登录：独立端点，用户名走 LDAP 目录（uid/mail 由服务端 user_filter 决定） */
+  async loginLdap(serverUrl: string, username: string, password: string): Promise<AuthState> {
+    const res = await fetch(`${serverUrl.replace(/\/+$/, "")}/auth/login/ldap`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    return this.adoptLogin(serverUrl, username, res, "LDAP 登录失败");
+  }
+
+  private async adoptLogin(
+    serverUrl: string,
+    account: string,
+    res: Response,
+    fallbackMsg: string,
+  ): Promise<AuthState> {
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new ApiError(res.status, data?.error ?? `登录失败 (${res.status})`);
+      throw new ApiError(res.status, data?.error ?? `${fallbackMsg} (${res.status})`);
     }
     const data = await res.json();
     const state: AuthState = {
@@ -145,7 +207,7 @@ export class AuthClient {
       access_token: data.access_token,
       refresh_token: data.refresh_token,
       user_id: data.user_id,
-      email,
+      email: data.email ?? account,
       role: data.role,
     };
     this.state = state;

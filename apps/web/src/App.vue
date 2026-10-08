@@ -17,9 +17,20 @@ import {
   toggleTheme,
   type AgentStore,
 } from "@pidock/ui";
-import { ApiError, AuthClient, loadAuth, clearAuth } from "./auth.js";
+import {
+  ApiError,
+  AuthClient,
+  clearAuth,
+  exchangeSsoCode,
+  fetchAuthMethods,
+  loadAuth,
+  type AuthMethods,
+} from "./auth.js";
 import { createWebBus, type WebBus } from "./bus.js";
+import AdminAuthCfg from "./components/AdminAuthCfg.vue";
 import AdminInvites from "./components/AdminInvites.vue";
+import AdminUsers from "./components/AdminUsers.vue";
+import AccessTokens from "./components/AccessTokens.vue";
 import MachineCard from "./components/MachineCard.vue";
 import MachinePopover from "./components/MachinePopover.vue";
 import { osMeta, type MachineUi } from "./machine.js";
@@ -33,15 +44,37 @@ const store = ref<AgentStore | null>(null);
 const bootError = ref<string | null>(null);
 
 // login form
-const serverUrl = ref("http://localhost:8080");
+// server 地址：生产环境 = 页面来源（web 由 server 托管），不暴露给用户；
+// dev 前端跑在 5174，默认指本机 8080；特殊部署可用 ?server= 覆盖。
+const serverUrl =
+  new URLSearchParams(window.location.search).get("server") ??
+  (import.meta.env.DEV ? "http://localhost:8080" : window.location.origin);
 const email = ref("");
 const password = ref("");
 const inviteCode = ref("");
 const loginBusy = ref(false);
 const loginError = ref<string | null>(null);
 const registerMode = ref(false);
-/** 邀请码管理面板（仅管理员可见入口） */
-const showInvites = ref(false);
+/** 登录方式分段：标准（本地账号）/ LDAP（启用后显示） */
+const loginMode = ref<"standard" | "ldap">("standard");
+
+function switchLoginMode(mode: "standard" | "ldap"): void {
+  loginMode.value = mode;
+  if (mode === "ldap") registerMode.value = false;
+}
+/** 服务端可用的登录方式（/auth/methods；拉取失败 = 仅密码登录） */
+const authMethods = ref<AuthMethods | null>(null);
+/** 拉取登录方式（登录页据此渲染 SSO 按钮等）；失败静默 = 仅密码登录 */
+async function refreshMethods(): Promise<void> {
+  authMethods.value = await fetchAuthMethods(serverUrl);
+}
+
+/** 跳转 IdP 发起 SSO 登录；记住 server 地址供回调后交换 token */
+function ssoLogin(): void {
+  const base = serverUrl.replace(/\/+$/, "");
+  sessionStorage.setItem("pidock.sso.server", base);
+  window.location.href = `${base}/auth/sso/oidc/login`;
+}
 
 /** 首页节点搜索过滤（主机名/系统/版本/ID），Ctrl+K 聚焦 */
 const nodeFilter = ref("");
@@ -70,8 +103,15 @@ const activeMachine = computed(() => machines.value.find((m) => m.machine_id ===
 const activeOsMeta = computed(() => osMeta(activeMachine.value?.os));
 /** 每台机器的会话数（首页卡片与机器详情浮层用），null=尚未取到 */
 const sessionCounts = ref<Record<string, number | null>>({});
-/** home=机器卡片墙；ws=会话工作区（登录后先见 home） */
-const view = ref<"home" | "ws">("home");
+/** home=机器卡片墙；ws=会话工作区（登录后先见 home）；admin/tokens=共享左栏的内容区切换 */
+const view = ref<"home" | "ws" | "admin" | "tokens">("home");
+/** 管理面板内部的标签页（离开再回来保持选中） */
+const adminPane = ref<"invites" | "users" | "auth">("invites");
+/** 左栏管理组菜单：定位到对应面板 */
+function goAdmin(pane: "invites" | "users" | "auth"): void {
+  adminPane.value = pane;
+  view.value = "admin";
+}
 const showMachineInfo = ref(false);
 
 async function refreshMachines(): Promise<void> {
@@ -200,10 +240,15 @@ async function doLogin(): Promise<void> {
   loginError.value = null;
   try {
     const client = new AuthClient(null as never, () => logout());
-    if (registerMode.value) {
-      await client.register(serverUrl.value.trim(), email.value.trim(), password.value, inviteCode.value);
+    if (loginMode.value === "ldap") {
+      const state = await client.loginLdap(serverUrl, email.value.trim(), password.value);
+      boot(state, client);
+      return;
     }
-    const state = await client.login(serverUrl.value.trim(), email.value.trim(), password.value);
+    if (registerMode.value) {
+      await client.register(serverUrl, email.value.trim(), password.value, inviteCode.value);
+    }
+    const state = await client.login(serverUrl, email.value.trim(), password.value);
     boot(state, client);
   } catch (err) {
     loginError.value = String(err instanceof ApiError ? err.message : err);
@@ -221,7 +266,6 @@ function logout(): void {
   activeMachineId.value = null;
   sessionCounts.value = {};
   showMachineInfo.value = false;
-  showInvites.value = false;
   view.value = "home";
 }
 
@@ -283,6 +327,35 @@ function boot(state: any, client: AuthClient): void {
 
 onMounted(() => {
   window.addEventListener("keydown", onGlobalKey);
+
+  // SSO 回调：?sso_code= 一次性换取 token 对；?sso_error= 展示失败原因
+  const params = new URLSearchParams(window.location.search);
+  const ssoCode = params.get("sso_code");
+  const ssoError = params.get("sso_error");
+  if (ssoCode || ssoError) {
+    history.replaceState({}, "", window.location.pathname);
+    const ssoServer =
+      sessionStorage.getItem("pidock.sso.server") ?? window.location.origin;
+    sessionStorage.removeItem("pidock.sso.server");
+    if (ssoError) {
+      loginError.value = ssoError;
+    } else {
+      loginBusy.value = true;
+      exchangeSsoCode(ssoServer, ssoCode!)
+        .then((state) => {
+          const client = new AuthClient(state, () => logout());
+          boot(state, client);
+        })
+        .catch((err) => {
+          loginError.value = String(err instanceof ApiError ? err.message : err);
+        })
+        .finally(() => {
+          loginBusy.value = false;
+        });
+    }
+  }
+
+  void refreshMethods();
   const saved = loadAuth();
   if (saved) {
     const client = new AuthClient(saved, () => logout());
@@ -300,87 +373,192 @@ const sessionsEmpty = computed(() => {
 
 <template>
   <n-config-provider :theme="naiveTheme">
-  <!-- login -->
-  <div v-if="!auth" class="login-screen">
-    <form class="login-card" @submit.prevent="doLogin">
-      <div class="brand"><span class="logo">π</span> PiDock Web</div>
-      <label>Server<input v-model="serverUrl" /></label>
-      <label>邮箱<input v-model="email" type="email" autocomplete="username" /></label>
-      <label>密码<input v-model="password" type="password" autocomplete="current-password" /></label>
-      <label v-if="registerMode"
-        >邀请码<input
-          v-model="inviteCode"
-          placeholder="向管理员索取"
-          autocomplete="off"
-          spellcheck="false"
-      /></label>
-      <button
-        class="primary"
-        :disabled="loginBusy || !email || !password || (registerMode && !inviteCode.trim())"
-      >
-        {{ loginBusy ? "提交中…" : registerMode ? "注册并登录" : "登录" }}
-      </button>
-      <button class="ghost" type="button" @click="registerMode = !registerMode">
-        {{ registerMode ? "已有账号？去登录" : "没有账号？注册一个" }}
-      </button>
-      <div v-if="loginError" class="login-error">{{ loginError }}</div>
-    </form>
+  <!-- login：左品牌区 + 右表单 -->
+  <div v-if="!auth" class="auth-screen">
+    <div class="auth-hero">
+      <div class="hero-brand">
+        <span class="hero-logo">π</span>
+        <b>PiDock</b>
+      </div>
+      <p class="hero-tag">远程掌控你的 AI Agent 节点</p>
+      <ul class="hero-feats">
+        <li><Icon name="computer-line" :size="15" />多节点在线状态，Ctrl+K 随手搜</li>
+        <li><Icon name="chat-1-line" :size="15" />会话实时同步，浏览器里远程对话</li>
+        <li><Icon name="key-2-line" :size="15" />访问令牌接入桌面端，免密不过期</li>
+      </ul>
+    </div>
+    <div class="auth-side">
+      <form class="auth-card" @submit.prevent="doLogin">
+        <h2 class="auth-title">{{ registerMode ? "创建账号" : "欢迎回来" }}</h2>
+        <p class="auth-sub">{{ registerMode ? "凭邀请码注册新账号" : "登录你的 PiDock 账号" }}</p>
+        <div v-if="authMethods?.ldap?.enabled" class="auth-tabs">
+          <button
+            type="button"
+            class="auth-tab"
+            :class="{ on: loginMode === 'standard' }"
+            @click="switchLoginMode('standard')"
+          >
+            标准登录
+          </button>
+          <button
+            type="button"
+            class="auth-tab"
+            :class="{ on: loginMode === 'ldap' }"
+            @click="switchLoginMode('ldap')"
+          >
+            LDAP 登录
+          </button>
+        </div>
+        <label>{{ loginMode === "ldap" ? "用户名" : "邮箱" }}<input
+            v-model="email"
+            :type="loginMode === 'ldap' ? 'text' : 'email'"
+            :placeholder="loginMode === 'ldap' ? 'LDAP 目录中的用户名' : 'you@example.com'"
+            autocomplete="username"
+        /></label>
+        <label>密码<input v-model="password" type="password" autocomplete="current-password" /></label>
+        <label v-if="registerMode"
+          >邀请码<input
+            v-model="inviteCode"
+            placeholder="向管理员索取"
+            autocomplete="off"
+            spellcheck="false"
+        /></label>
+        <button
+          class="auth-primary"
+          :disabled="loginBusy || !email || !password || (registerMode && !inviteCode.trim())"
+        >
+          {{ loginBusy ? "提交中…" : loginMode === "ldap" ? "LDAP 登录" : registerMode ? "注册并登录" : "登录" }}
+        </button>
+        <template v-if="authMethods?.oidc?.enabled">
+          <div class="auth-divider"><span>或</span></div>
+          <button class="auth-sso" type="button" @click="ssoLogin">
+            使用 {{ authMethods.oidc.label || "SSO" }} 登录
+          </button>
+        </template>
+        <button v-if="loginMode === 'standard'" class="auth-switch" type="button" @click="registerMode = !registerMode">
+          {{ registerMode ? "已有账号？去登录" : "没有账号？注册一个" }}
+        </button>
+        <div v-if="loginError" class="auth-error">{{ loginError }}</div>
+      </form>
+    </div>
   </div>
 
-  <!-- home：机器卡片墙 -->
-  <div v-else-if="store && view === 'home'" class="home">
-    <header class="home-head">
-      <div class="home-brand">
+  <!-- 控制台：左栏常驻，右侧内容按 view 切换（节点 / 管理面板 / 访问令牌） -->
+  <div v-else-if="store && view !== 'ws'" class="home">
+    <aside class="home-side">
+      <div class="side-brand">
         <span class="logo">π</span>
-        <b>节点</b>
-        <span class="home-sub">选择一台 Agent 开始工作</span>
+        <b>PiDock</b>
       </div>
-      <div class="home-search">
-        <Icon name="search-line" :size="14" />
-        <input
-          ref="searchInput"
-          v-model="nodeFilter"
-          placeholder="搜索节点…（Ctrl+K）"
-          spellcheck="false"
-        />
-        <button v-if="nodeFilter" class="clear" title="清空" @click="nodeFilter = ''">✕</button>
-      </div>
-      <div class="home-actions">
+      <nav class="side-nav">
+        <button class="side-item" :class="{ on: view === 'home' }" title="节点列表" @click="view = 'home'">
+          <Icon name="computer-line" :size="15" />
+          <span>节点</span>
+        </button>
         <button
-          v-if="auth?.role === 'admin'"
-          class="ghost"
-          title="邀请码管理"
-          @click="showInvites = true"
+          class="side-item"
+          :class="{ on: view === 'tokens' }"
+          title="访问令牌"
+          @click="view = 'tokens'"
         >
-          <Icon name="key-2-line" :size="15" />
+          <Icon name="shield-flash-line" :size="15" />
+          <span>访问令牌</span>
         </button>
-        <button class="ghost" :title="themeMode === 'dark' ? '切换亮色' : '切换暗色'" @click="toggleTheme()">
+        <!-- 管理组：仅管理员可见 -->
+        <template v-if="auth?.role === 'admin'">
+          <div class="side-group">管理</div>
+          <button
+            class="side-item"
+            :class="{ on: view === 'admin' && adminPane === 'invites' }"
+            title="邀请码"
+            @click="goAdmin('invites')"
+          >
+            <Icon name="key-2-line" :size="15" />
+            <span>邀请码</span>
+          </button>
+          <button
+            class="side-item"
+            :class="{ on: view === 'admin' && adminPane === 'users' }"
+            title="用户管理"
+            @click="goAdmin('users')"
+          >
+            <Icon name="user-star-line" :size="15" />
+            <span>用户管理</span>
+          </button>
+          <button
+            class="side-item"
+            :class="{ on: view === 'admin' && adminPane === 'auth' }"
+            title="登录方式"
+            @click="goAdmin('auth')"
+          >
+            <Icon name="shield-check-line" :size="15" />
+            <span>登录方式</span>
+          </button>
+        </template>
+      </nav>
+      <div class="side-foot">
+        <button
+          class="side-item"
+          :title="themeMode === 'dark' ? '切换亮色' : '切换暗色'"
+          @click="toggleTheme()"
+        >
           <Icon :name="themeMode === 'dark' ? 'sun-line' : 'moon-line'" :size="15" />
+          <span>{{ themeMode === "dark" ? "亮色模式" : "暗色模式" }}</span>
         </button>
-        <button class="ghost" @click="logout">退出</button>
+        <button class="side-item" title="退出登录" @click="logout">
+          <Icon name="arrow-right-line" :size="15" />
+          <span>退出登录</span>
+        </button>
+        <div class="side-user" :title="auth?.email">{{ auth?.email }}</div>
       </div>
-    </header>
-    <div class="home-body">
-      <div v-if="machines.length && filteredMachines.length" class="mgrid">
-        <MachineCard
-          v-for="m in filteredMachines"
-          :key="m.machine_id"
-          :machine="m"
-          :session-count="sessionCounts[m.machine_id] ?? null"
-          @enter="enterMachine(m.machine_id)"
-          @delete="deleteMachine(m)"
-        />
+    </aside>
+    <main class="home-main">
+      <!-- 节点卡片墙 -->
+      <template v-if="view === 'home'">
+        <header class="home-head">
+          <b>节点</b>
+          <span class="home-sub">选择一台 Agent 开始工作</span>
+          <div class="home-search">
+            <Icon name="search-line" :size="14" />
+            <input
+              ref="searchInput"
+              v-model="nodeFilter"
+              placeholder="搜索节点…（Ctrl+K）"
+              spellcheck="false"
+            />
+            <button v-if="nodeFilter" class="clear" title="清空" @click="nodeFilter = ''">✕</button>
+          </div>
+        </header>
+        <div class="home-body">
+          <div v-if="machines.length && filteredMachines.length" class="mgrid">
+            <MachineCard
+              v-for="m in filteredMachines"
+              :key="m.machine_id"
+              :machine="m"
+              :session-count="sessionCounts[m.machine_id] ?? null"
+              @enter="enterMachine(m.machine_id)"
+              @delete="deleteMachine(m)"
+            />
+          </div>
+          <div v-else-if="machines.length" class="home-empty">
+            <p><b>没有匹配「{{ nodeFilter.trim() }}」的节点</b></p>
+            <p>换个关键词试试，或清空搜索条件。</p>
+          </div>
+          <div v-else class="home-empty">
+            <svg class="he-icon" viewBox="0 0 24 24" fill="currentColor"><path :d="osMeta().path" /></svg>
+            <p><b>还没有节点上线</b></p>
+            <p>启动桌面端并在「☁ 云同步」里登录同一账号，<br />节点会自动注册到这里。</p>
+          </div>
+        </div>
+      </template>
+      <!-- 管理面板：左栏管理组菜单对应的内容 -->
+      <div v-else-if="view === 'admin'" class="pane-frame">
+        <AdminInvites v-if="adminPane === 'invites'" :client="auth" />
+        <AdminUsers v-else-if="adminPane === 'users'" :client="auth" />
+        <AdminAuthCfg v-else :client="auth" />
       </div>
-      <div v-else-if="machines.length" class="home-empty">
-        <p><b>没有匹配「{{ nodeFilter.trim() }}」的节点</b></p>
-        <p>换个关键词试试，或清空搜索条件。</p>
-      </div>
-      <div v-else class="home-empty">
-        <svg class="he-icon" viewBox="0 0 24 24" fill="currentColor"><path :d="osMeta().path" /></svg>
-        <p><b>还没有节点上线</b></p>
-        <p>启动桌面端并在「☁ 云同步」里登录同一账号，<br />节点会自动注册到这里。</p>
-      </div>
-    </div>
+      <AccessTokens v-else-if="view === 'tokens'" :client="auth" />
+    </main>
   </div>
 
   <!-- workspace -->
@@ -478,8 +656,7 @@ const sessionsEmpty = computed(() => {
       />
     </main>
   </div>
-  <div v-else class="login-screen">加载中…</div>
-  <AdminInvites v-if="showInvites && auth" :client="auth" @close="showInvites = false" />
+  <div v-else class="boot-screen">加载中…</div>
   </n-config-provider>
 </template>
 
