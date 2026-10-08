@@ -555,6 +555,9 @@ async fn sync_loop(
 ) {
     let mut backoff_secs = 1u64;
     let mut uploaded: HashSet<String> = HashSet::new();
+    // 附件去重缓存按账号区分：检测到换号（服务器/邮箱/令牌变化）即作废，
+    // 否则旧账号传过的附件会被跳过，新账号云端缺文件
+    let mut uploaded_for = String::new();
 
     'outer: loop {
         let (mut cfg, enabled) = {
@@ -564,6 +567,11 @@ async fn sync_loop(
                 c.enabled && (!c.refresh_token.is_empty() || !c.pat.is_empty()),
             )
         };
+        let cred_id = format!("{}|{}|{}", cfg.server_url, cfg.email, cfg.pat);
+        if cred_id != uploaded_for {
+            uploaded.clear();
+            uploaded_for = cred_id;
+        }
         if !enabled {
             sync.set_status(SyncStatus {
                 enabled: false,
@@ -580,10 +588,17 @@ async fn sync_loop(
         }
 
         // 1) access token — persist the rotated refresh token immediately,
-        // otherwise the next reconnect fails with "revoked or expired"
+        // otherwise the next reconnect fails with "revoked or expired".
+        // 换号竞态防护：刷新期间 configure 可能刚写入新账号凭据，此时旧账号
+        // 轮换出的 refresh_token 绝不能落盘覆盖新凭据——只在存储里的
+        // refresh_token 仍是本次刷新所用的那条时才写回，否则按新配置重来
+        let old_refresh = cfg.refresh_token.clone();
         let (access, new_refresh) = match refresh_access(&cfg).await {
             Ok(pair) => pair,
             Err(e) => {
+                if sync.cfg.lock().await.refresh_token.clone() != old_refresh {
+                    continue 'outer;
+                }
                 let user_msg =
                     if e.contains("revoked") || e.contains("expired") || e.contains("Unauthorized")
                     {
@@ -612,6 +627,9 @@ async fn sync_loop(
         };
         {
             let mut c = sync.cfg.lock().await;
+            if c.refresh_token != old_refresh {
+                continue 'outer;
+            }
             c.refresh_token = new_refresh;
             sync.save(&c);
             cfg = c.clone();

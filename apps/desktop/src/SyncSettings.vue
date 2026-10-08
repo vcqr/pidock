@@ -16,12 +16,18 @@ const noticeKind = ref<"ok" | "err">("ok");
 const busy = ref(false);
 
 let timer: ReturnType<typeof setInterval> | undefined;
+let formLoaded = false;
 
 async function refresh(): Promise<void> {
   try {
     status.value = await ipc("sync_status");
-    if (status.value.server_url) serverUrl.value = status.value.server_url;
-    if (status.value.email) email.value = status.value.email;
+    // 表单只在首次载入时回填；5s 轮询只刷状态卡，
+    // 否则正在输入的新邮箱/服务器地址会被已保存的旧账户覆盖回去
+    if (!formLoaded) {
+      if (status.value.server_url) serverUrl.value = status.value.server_url;
+      if (status.value.email) email.value = status.value.email;
+      formLoaded = true;
+    }
   } catch {
     status.value = null;
   }
@@ -37,7 +43,8 @@ onUnmounted(() => {
 function flash(msg: string, kind: "ok" | "err" = "ok"): void {
   notice.value = msg;
   noticeKind.value = kind;
-  setTimeout(() => (notice.value = null), 3000);
+  // 成功提示 3s 自动消失；错误提示常驻，直到下一次操作，避免错过失败原因
+  if (kind === "ok") setTimeout(() => (notice.value = null), 3000);
 }
 
 async function save(): Promise<void> {
@@ -55,6 +62,8 @@ async function save(): Promise<void> {
     password.value = "";
     accessToken.value = "";
     flash("已连接并开启同步");
+    // 重新回填一次表单：令牌路径会把邮箱修正为令牌属主
+    formLoaded = false;
     await refresh();
   } catch (err) {
     flash(String(err), "err");
