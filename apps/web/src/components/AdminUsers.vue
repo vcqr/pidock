@@ -21,18 +21,85 @@ const loading = ref(true);
 const error = ref<string | null>(null);
 const busyId = ref("");
 
+// 注册策略：全局开关（关闭后仅管理员在此建号）
+const allowRegister = ref(true);
+const savingPolicy = ref(false);
+const savedPolicy = ref(false);
+
+// 后台建号
+const showAdd = ref(false);
+const newEmail = ref("");
+const newPassword = ref("");
+const newRole = ref<"user" | "admin">("user");
+const creating = ref(false);
+const notice = ref<string | null>(null);
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+
 onMounted(load);
 
 async function load(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    const r = await props.client.request(`/admin/users?token=${props.client.token}`);
+    const [r, p] = await Promise.all([
+      props.client.request(`/admin/users?token=${props.client.token}`),
+      props.client.request(`/admin/auth/policy?token=${props.client.token}`),
+    ]);
     users.value = r.users ?? [];
+    allowRegister.value = p.config?.allow_register ?? true;
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err);
   } finally {
     loading.value = false;
+  }
+}
+
+function flash(msg: string): void {
+  notice.value = msg;
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => (notice.value = ""), 2500);
+}
+
+async function savePolicy(): Promise<void> {
+  savingPolicy.value = true;
+  error.value = null;
+  try {
+    await props.client.request(`/admin/auth/policy?token=${props.client.token}`, {
+      method: "PUT",
+      body: JSON.stringify({ token: props.client.token, allow_register: allowRegister.value }),
+    });
+    savedPolicy.value = true;
+    setTimeout(() => (savedPolicy.value = false), 2000);
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err);
+  } finally {
+    savingPolicy.value = false;
+  }
+}
+
+async function create(): Promise<void> {
+  creating.value = true;
+  error.value = null;
+  try {
+    const r = await props.client.request(`/admin/users?token=${props.client.token}`, {
+      method: "POST",
+      body: JSON.stringify({
+        token: props.client.token,
+        email: newEmail.value,
+        password: newPassword.value,
+        role: newRole.value,
+      }),
+    });
+    showAdd.value = false;
+    newEmail.value = "";
+    newPassword.value = "";
+    newRole.value = "user";
+    flash(`已创建账号「${r.email}」（${r.role === "admin" ? "管理员" : "用户"}）`);
+    await load();
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err);
+  } finally {
+    creating.value = false;
   }
 }
 
@@ -108,6 +175,41 @@ function fmtDate(s: string): string {
     </div>
 
     <div v-if="error" class="usr-error">{{ error }}</div>
+    <div v-if="notice" class="usr-notice">{{ notice }}</div>
+
+    <!-- 注册策略：全局开关 -->
+    <div class="policy-row">
+      <label class="switch">
+        <input v-model="allowRegister" type="checkbox" />
+        开放注册（凭邀请码）
+      </label>
+      <button class="op" :disabled="savingPolicy" @click="savePolicy">
+        {{ savingPolicy ? "保存中…" : savedPolicy ? "已保存 ✓" : "保存" }}
+      </button>
+      <span class="policy-hint">关闭后注册入口隐藏，账号由管理员在此创建</span>
+    </div>
+
+    <!-- 后台建号 -->
+    <div class="add-row">
+      <button v-if="!showAdd" class="op" @click="showAdd = true">添加账号</button>
+      <div v-else class="add-form">
+        <input v-model="newEmail" placeholder="邮箱" spellcheck="false" />
+        <input
+          v-model="newPassword"
+          type="password"
+          placeholder="初始密码（≥8 位）"
+          autocomplete="new-password"
+        />
+        <select v-model="newRole">
+          <option value="user">用户</option>
+          <option value="admin">管理员</option>
+        </select>
+        <button class="op" :disabled="creating || !newEmail || newPassword.length < 8" @click="create">
+          {{ creating ? "创建中…" : "创建" }}
+        </button>
+        <button class="op" @click="showAdd = false">取消</button>
+      </div>
+    </div>
 
     <div class="usr-list">
       <div v-if="loading" class="usr-empty">加载中…</div>
@@ -176,6 +278,55 @@ function fmtDate(s: string): string {
   color: var(--pd-red-text, #e5484d);
   font-size: calc(12px * var(--pd-font-scale));
   padding: 8px 0;
+}
+.usr-notice {
+  color: var(--pd-green);
+  font-size: calc(12px * var(--pd-font-scale));
+  padding: 8px 0;
+}
+.policy-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--pd-bg);
+  border: 1px solid var(--pd-border);
+  border-radius: 8px;
+  margin-top: 10px;
+}
+.policy-row .switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--pd-text);
+  font-size: calc(12px * var(--pd-font-scale));
+  cursor: pointer;
+}
+.policy-hint {
+  color: var(--pd-text-4);
+  font-size: calc(10.5px * var(--pd-font-scale));
+  margin-left: auto;
+}
+.add-row {
+  margin-top: 8px;
+}
+.add-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.add-form input,
+.add-form select {
+  background: var(--pd-bg);
+  border: 1px solid var(--pd-border);
+  border-radius: 8px;
+  color: var(--pd-text);
+  padding: 5px 9px;
+  font-size: calc(12px * var(--pd-font-scale));
+}
+.add-form input {
+  flex: 1;
+  min-width: 0;
 }
 .usr-list {
   flex: 1;

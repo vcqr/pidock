@@ -435,7 +435,12 @@ const sessionsEmpty = computed(() => {
             使用 {{ authMethods.oidc.label || "SSO" }} 登录
           </button>
         </template>
-        <button v-if="loginMode === 'standard'" class="auth-switch" type="button" @click="registerMode = !registerMode">
+        <button
+          v-if="loginMode === 'standard' && authMethods?.register?.allowed !== false"
+          class="auth-switch"
+          type="button"
+          @click="registerMode = !registerMode"
+        >
           {{ registerMode ? "已有账号？去登录" : "没有账号？注册一个" }}
         </button>
         <div v-if="loginError" class="auth-error">{{ loginError }}</div>

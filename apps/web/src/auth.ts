@@ -41,6 +41,8 @@ export function clearAuth(): void {
 /** /auth/methods 响应：登录页据此渲染可用登录方式（拉取失败按仅密码处理） */
 export interface AuthMethods {
   password: boolean;
+  /** 注册开关（管理员可全局关闭）；缺省视为允许 */
+  register?: { allowed: boolean };
   ldap: { enabled: boolean };
   oidc: { enabled: boolean; label?: string };
 }
