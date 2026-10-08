@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 const serverUrl = ref("http://localhost:8080");
 const email = ref("");
 const password = ref("");
+const accessToken = ref("");
 const status = ref<any>(null);
 const notice = ref<string | null>(null);
 const noticeKind = ref<"ok" | "err">("ok");
@@ -44,9 +45,15 @@ async function save(): Promise<void> {
   busy.value = true;
   try {
     await invoke("sync_configure", {
-      body: { server_url: serverUrl.value, email: email.value, password: password.value },
+      body: {
+        server_url: serverUrl.value,
+        email: email.value,
+        password: password.value,
+        token: accessToken.value,
+      },
     });
     password.value = "";
+    accessToken.value = "";
     flash("已连接并开启同步");
     await refresh();
   } catch (err) {
@@ -100,10 +107,20 @@ const stateLabel = (s: any): string =>
         <input v-model="email" placeholder="you@example.com" type="email" autocomplete="username" spellcheck="false" />
       </div>
       <div class="field">
-        <label>密码</label>
+        <label>访问令牌（推荐，免密且不过期）</label>
+        <input
+          v-model="accessToken"
+          placeholder="在 Web 端「访问令牌」页创建，粘贴到这里（pd_ 开头）"
+          type="password"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <div class="field">
+        <label>密码（与令牌二选一）</label>
         <input
           v-model="password"
-          placeholder="登录（已保存 token 后可留空）"
+          placeholder="登录（已保存凭据后可留空）"
           type="password"
           autocomplete="current-password"
         />

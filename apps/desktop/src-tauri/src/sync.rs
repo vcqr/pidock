@@ -27,6 +27,9 @@ pub struct SyncConfig {
     pub server_url: String,
     pub email: String,
     pub refresh_token: String,
+    /// 个人访问令牌（pd_ 前缀）：设置后跳过 refresh 轮换，直接作为 access 使用
+    #[serde(default)]
+    pub pat: String,
     pub machine_id: String,
     pub enabled: bool,
 }
@@ -113,8 +116,12 @@ async fn http_json(method: &str, url: &str, body: &Value) -> Result<Value, Strin
 }
 
 /// refresh the access token; returns (access, new_refresh) — the server
-/// ROTATES refresh tokens on every call, so the new one must be persisted
+/// ROTATES refresh tokens on every call, so the new one must be persisted.
+/// PAT 模式下令牌即长期 access，直接返回、不发请求。
 async fn refresh_access(cfg: &SyncConfig) -> Result<(String, String), String> {
+    if !cfg.pat.is_empty() {
+        return Ok((cfg.pat.clone(), cfg.refresh_token.clone()));
+    }
     let data = http_json(
         "POST",
         &format!("{}/auth/refresh", cfg.server_url.trim_end_matches('/')),
@@ -480,7 +487,7 @@ async fn sync_loop(
     'outer: loop {
         let (mut cfg, enabled) = {
             let c = sync.cfg.lock().await;
-            (c.clone(), c.enabled && !c.refresh_token.is_empty())
+            (c.clone(), c.enabled && (!c.refresh_token.is_empty() || !c.pat.is_empty()))
         };
         if !enabled {
             sync.set_status(SyncStatus {
@@ -546,11 +553,20 @@ async fn sync_loop(
         let (ws, _) = match tokio_tungstenite::connect_async(&ws_url).await {
             Ok(pair) => pair,
             Err(e) => {
+                // PAT 模式下 401/403 基本等于令牌被吊销，给出可行动的提示
+                let msg = format!("connect: {e}");
+                let user_msg = if !cfg.pat.is_empty()
+                    && (msg.contains("401") || msg.contains("403"))
+                {
+                    "访问令牌已失效，请在 Web 端「访问令牌」页重新生成".to_string()
+                } else {
+                    msg
+                };
                 sync.set_status(SyncStatus {
                     enabled: true,
                     connected: false,
                     machine_id: cfg.machine_id.clone(),
-                    error: Some(format!("connect: {e}")),
+                    error: Some(user_msg),
                 })
                 .await;
                 tokio::time::sleep(std::time::Duration::from_secs(backoff_secs.min(30))).await;
@@ -778,6 +794,9 @@ pub struct SyncConfigureBody {
     pub email: String,
     #[serde(default)]
     pub password: String,
+    /// 访问令牌（Web 端「访问令牌」页生成）；填了就优先于密码登录
+    #[serde(default)]
+    pub token: String,
 }
 
 #[tauri::command]
@@ -792,7 +811,25 @@ pub async fn sync_configure(
     cfg.email = body.email.clone();
     cfg.enabled = true;
 
-    if !body.password.is_empty() {
+    let token = body.token.trim().to_string();
+    if !token.is_empty() {
+        if !token.starts_with("pd_") {
+            return Err("访问令牌应以 pd_ 开头，请在 Web 端「访问令牌」页重新复制".into());
+        }
+        // 先对 /me 验一次再落盘，坏令牌当场报错；顺带把 email 修正为令牌属主
+        let me = http_json(
+            "GET",
+            &format!("{server_url}/me?token={token}"),
+            &json!({}),
+        )
+        .await
+        .map_err(|e| format!("访问令牌验证失败：{e}"))?;
+        if let Some(owner) = me.get("email").and_then(|v| v.as_str()) {
+            cfg.email = owner.to_string();
+        }
+        cfg.pat = token;
+        cfg.refresh_token.clear();
+    } else if !body.password.is_empty() {
         let data = http_json(
             "POST",
             &format!("{server_url}/auth/login"),
@@ -804,9 +841,10 @@ pub async fn sync_configure(
             .and_then(|v| v.as_str())
             .ok_or("login response missing refresh_token")?
             .to_string();
+        cfg.pat.clear();
     }
-    if cfg.refresh_token.is_empty() {
-        return Err("没有可用的登录凭据，请输入密码".into());
+    if cfg.refresh_token.is_empty() && cfg.pat.is_empty() {
+        return Err("没有可用的登录凭据，请输入密码或访问令牌".into());
     }
 
     state.save(&cfg);
