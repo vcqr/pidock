@@ -184,13 +184,25 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --filter @pidock/web build
 
-      - name: 构建 server
-        run: cargo build --release -p pidock-server
-
-      - name: 打包（二进制 + 配置示例）
+      - name: 构建 server（Kafka 管道，默认特性）
         run: |
-          cp apps/server/pidock.example.toml target/release/
-          tar -czf pidock-server-x86_64-linux.tar.gz -C target/release pidock-server pidock.example.toml
+          cargo build --release -p pidock-server
+          cp target/release/pidock-server /tmp/pidock-server-kafka
+
+      # Redis Streams 变体：--no-default-features 免 librdkafka/cmake，
+      # 面向免 Kafka 的轻量部署（PIDOCK_PIPELINE=redis）
+      - name: 构建 server（Redis Streams 管道）
+        run: |
+          cargo build --release --no-default-features -p pidock-server
+          cp target/release/pidock-server /tmp/pidock-server-redis
+
+      - name: 打包（两变体二进制 + 配置示例）
+        run: |
+          mkdir -p pkg && cp apps/server/pidock.example.toml pkg/pidock.example.toml
+          cp /tmp/pidock-server-kafka pkg/pidock-server
+          tar -czf pidock-server-x86_64-linux.tar.gz -C pkg pidock-server pidock.example.toml
+          cp /tmp/pidock-server-redis pkg/pidock-server
+          tar -czf pidock-server-redis-x86_64-linux.tar.gz -C pkg pidock-server pidock.example.toml
 
       - name: 上传 release 资产
         if: startsWith(github.ref, 'refs/tags/v')
@@ -198,4 +210,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: pidock-server-x86_64-linux.tar.gz
+          files: |
+            pidock-server-x86_64-linux.tar.gz
+            pidock-server-redis-x86_64-linux.tar.gz

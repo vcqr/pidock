@@ -68,3 +68,7 @@ jobs:
       # 绑定重新生成后必须与已提交的 packages/protocol/src 一致
       - name: 检查 TS 绑定是否有 drift
         run: git diff --exit-code -- packages/protocol/src
+
+      # server 双管道变体都要能编译（kafka 变体由 clippy --workspace 覆盖，这里补 redis 变体）
+      - name: cargo check server（Redis Streams 变体）
+        run: cargo check --no-default-features -p pidock-server
