@@ -198,6 +198,18 @@ async fn methods(State(state): State<AppState>) -> Json<Value> {
         "register": { "allowed": policy.allow_register },
         "ldap": { "enabled": ldap.enabled },
         "oidc": { "enabled": oidc.enabled, "label": oidc.effective_label() },
+        // Turnstile 启用时登录页渲染 widget，登录/注册请求须附 turnstile_token
+        "turnstile": {
+            "enabled": crate::turnstile::enabled(
+                &state.cfg.turnstile_site_key,
+                &state.cfg.turnstile_secret_key,
+            ),
+            "site_key": state.cfg.turnstile_site_key,
+        },
+        // 邮箱验证码两步验证：仅作用于密码登录（LDAP/SSO 不适用）
+        "login_code": {
+            "enabled": crate::mailer::login_code_enabled(&state.cfg.email),
+        },
     }))
 }
 

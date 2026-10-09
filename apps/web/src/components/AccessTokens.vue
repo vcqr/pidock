@@ -42,7 +42,7 @@ async function load(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    const r = await props.client.request(`/me/tokens?token=${props.client.token}`);
+    const r = await props.client.request(`/me/tokens`);
     tokens.value = r.tokens ?? [];
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err);
@@ -56,7 +56,7 @@ async function create(): Promise<void> {
   error.value = null;
   copied.value = false;
   try {
-    const r = await props.client.request(`/me/tokens?token=${props.client.token}`, {
+    const r = await props.client.request(`/me/tokens`, {
       method: "POST",
       body: JSON.stringify({ token: props.client.token, name: newName.value, days: newDays.value }),
     });
@@ -90,7 +90,7 @@ async function revoke(t: PatInfo): Promise<void> {
   busyId.value = t.id;
   error.value = null;
   try {
-    await props.client.request(`/me/tokens/${encodeURIComponent(t.id)}?token=${props.client.token}`, {
+    await props.client.request(`/me/tokens/${encodeURIComponent(t.id)}`, {
       method: "DELETE",
     });
     await load();

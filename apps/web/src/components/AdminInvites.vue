@@ -29,7 +29,7 @@ async function load(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    const r = await props.client.request(`/admin/invites?token=${props.client.token}`);
+    const r = await props.client.request(`/admin/invites`);
     invites.value = r.invites ?? [];
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err);
@@ -42,7 +42,7 @@ async function create(): Promise<void> {
   creating.value = true;
   error.value = null;
   try {
-    const r = await props.client.request(`/admin/invites?token=${props.client.token}`, {
+    const r = await props.client.request(`/admin/invites`, {
       method: "POST",
       // server 惯例：POST 的 token 走 JSON body（InviteCreateBody 必填），query 里那份只是顺手
       body: JSON.stringify({
@@ -70,7 +70,7 @@ async function create(): Promise<void> {
 
 async function revoke(code: string): Promise<void> {
   try {
-    await props.client.request(`/admin/invites/${encodeURIComponent(code)}?token=${props.client.token}`, {
+    await props.client.request(`/admin/invites/${encodeURIComponent(code)}`, {
       method: "DELETE",
     });
     invites.value = invites.value.filter((i) => i.code !== code);

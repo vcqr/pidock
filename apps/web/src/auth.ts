@@ -45,7 +45,29 @@ export interface AuthMethods {
   register?: { allowed: boolean };
   ldap: { enabled: boolean };
   oidc: { enabled: boolean; label?: string };
+  /** 启用时登录/注册前须过 Turnstile 人机验证，请求附 turnstile_token；site_key 渲染 widget 用 */
+  turnstile?: { enabled: boolean; site_key?: string };
+  /** 启用时密码登录走两步验证：先发邮箱验证码，再凭码换 token */
+  login_code?: { enabled: boolean };
 }
+
+/** 登录两步验证中间态：密码已通过，等待邮箱验证码（此时不发 token） */
+export interface LoginPending {
+  pending: "email_code";
+  challenge: string;
+  /** 脱敏邮箱，如 u***@example.com */
+  email: string;
+}
+
+/** 注册两段式中间态：预检已过、验证码已发，验证通过才建号并自动登录 */
+export interface RegisterPending {
+  pending: "register_code";
+  challenge: string;
+  email: string;
+}
+
+/** register() 的两种结局：直接建号成功（未开注册验证码）或进入验证码步骤 */
+export type RegisterResult = { user_id: string; role: string } | RegisterPending;
 
 export async function fetchAuthMethods(serverUrl: string): Promise<AuthMethods | null> {
   try {
@@ -135,17 +157,38 @@ export class AuthClient {
     }
   }
 
+  /** 登出：尽力而为吊销服务端 refresh token（结果不影响本地清理） */
+  async logoutRemote(): Promise<void> {
+    try {
+      await fetch(`${this.state.server_url.replace(/\/+$/, "")}/auth/logout`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ refresh_token: this.state.refresh_token }),
+      });
+    } catch {
+      // 尽力而为：网络失败也照常清本地
+    }
+  }
+
   async request(path: string, init?: RequestInit): Promise<any> {
     const url = `${this.state.server_url}${path}`;
     let res = await fetch(url, {
       ...init,
-      headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${this.state.access_token}`,
+        ...(init?.headers ?? {}),
+      },
     });
     if (res.status === 401) {
       if (await this.refreshTokens()) {
         res = await fetch(url, {
           ...init,
-          headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${this.state.access_token}`,
+            ...(init?.headers ?? {}),
+          },
         });
       }
     }
@@ -162,33 +205,104 @@ export class AuthClient {
     email: string,
     password: string,
     inviteCode: string,
-  ): Promise<void> {
+    turnstileToken = "",
+  ): Promise<RegisterResult> {
     const res = await fetch(`${serverUrl}/auth/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password, invite_code: inviteCode.trim() }),
+      body: JSON.stringify({
+        email,
+        password,
+        invite_code: inviteCode.trim(),
+        turnstile_token: turnstileToken,
+      }),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new ApiError(res.status, data?.error ?? `注册失败 (${res.status})`);
     }
+    return (await res.json()) as RegisterResult;
   }
 
-  async login(serverUrl: string, email: string, password: string): Promise<AuthState> {
+  /** 注册两段式第二步：验证码通过 → 服务端建号并直接发 token 对（自动登录） */
+  async verifyRegisterCode(serverUrl: string, challenge: string, code: string): Promise<AuthState> {
+    const res = await fetch(`${serverUrl.replace(/\/+$/, "")}/auth/register/code/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challenge, code: code.trim() }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, data?.error ?? `验证码校验失败 (${res.status})`);
+    }
+    const data = await res.json();
+    return this.adoptData(serverUrl, data.email ?? "", data, "注册失败");
+  }
+
+  async login(
+    serverUrl: string,
+    email: string,
+    password: string,
+    turnstileToken = "",
+  ): Promise<AuthState | LoginPending> {
     const res = await fetch(`${serverUrl.replace(/\/+$/, "")}/auth/login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, turnstile_token: turnstileToken }),
     });
-    return this.adoptLogin(serverUrl, email, res, "登录失败");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, data?.error ?? `登录失败 (${res.status})`);
+    }
+    const data = await res.json();
+    // 两步验证：密码已通过，返回待验证中间态，由调用方进入验证码步骤
+    if (data?.pending === "email_code") return data as LoginPending;
+    return this.adoptData(serverUrl, email, data, "登录失败");
+  }
+
+  /** 两步验证第二步：challenge + 邮箱验证码换正式 token 对 */
+  async verifyLoginCode(serverUrl: string, challenge: string, code: string): Promise<AuthState> {
+    const res = await fetch(`${serverUrl.replace(/\/+$/, "")}/auth/login/code/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challenge, code: code.trim() }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, data?.error ?? `验证码校验失败 (${res.status})`);
+    }
+    const data = await res.json();
+    return this.adoptData(serverUrl, data.email ?? "", data, "登录失败");
+  }
+
+  /** 重发验证码（登录/注册挑战共用，服务端 60s 冷却 + 每邮箱小时配额） */
+  async resendCode(
+    serverUrl: string,
+    challenge: string,
+  ): Promise<{ challenge: string; email: string }> {
+    const res = await fetch(`${serverUrl.replace(/\/+$/, "")}/auth/code/resend`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challenge }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, data?.error ?? `重发失败 (${res.status})`);
+    }
+    return res.json();
   }
 
   /** LDAP 登录：独立端点，用户名走 LDAP 目录（uid/mail 由服务端 user_filter 决定） */
-  async loginLdap(serverUrl: string, username: string, password: string): Promise<AuthState> {
+  async loginLdap(
+    serverUrl: string,
+    username: string,
+    password: string,
+    turnstileToken = "",
+  ): Promise<AuthState> {
     const res = await fetch(`${serverUrl.replace(/\/+$/, "")}/auth/login/ldap`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, turnstile_token: turnstileToken }),
     });
     return this.adoptLogin(serverUrl, username, res, "LDAP 登录失败");
   }
@@ -204,13 +318,23 @@ export class AuthClient {
       throw new ApiError(res.status, data?.error ?? `${fallbackMsg} (${res.status})`);
     }
     const data = await res.json();
+    return this.adoptData(serverUrl, account, data, fallbackMsg);
+  }
+
+  /** 解析登录成功响应并落地 token 对 */
+  private adoptData(
+    serverUrl: string,
+    account: string,
+    data: Record<string, unknown>,
+    fallbackMsg: string,
+  ): AuthState {
     const state: AuthState = {
       server_url: serverUrl,
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      user_id: data.user_id,
-      email: data.email ?? account,
-      role: data.role,
+      access_token: data.access_token as string,
+      refresh_token: data.refresh_token as string,
+      user_id: data.user_id as string,
+      email: (data.email as string) ?? account,
+      role: data.role as string | undefined,
     };
     this.state = state;
     saveAuth(state);

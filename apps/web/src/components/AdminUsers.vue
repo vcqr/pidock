@@ -42,8 +42,8 @@ async function load(): Promise<void> {
   error.value = null;
   try {
     const [r, p] = await Promise.all([
-      props.client.request(`/admin/users?token=${props.client.token}`),
-      props.client.request(`/admin/auth/policy?token=${props.client.token}`),
+      props.client.request(`/admin/users`),
+      props.client.request(`/admin/auth/policy`),
     ]);
     users.value = r.users ?? [];
     allowRegister.value = p.config?.allow_register ?? true;
@@ -64,7 +64,7 @@ async function savePolicy(): Promise<void> {
   savingPolicy.value = true;
   error.value = null;
   try {
-    await props.client.request(`/admin/auth/policy?token=${props.client.token}`, {
+    await props.client.request(`/admin/auth/policy`, {
       method: "PUT",
       body: JSON.stringify({ token: props.client.token, allow_register: allowRegister.value }),
     });
@@ -81,7 +81,7 @@ async function create(): Promise<void> {
   creating.value = true;
   error.value = null;
   try {
-    const r = await props.client.request(`/admin/users?token=${props.client.token}`, {
+    const r = await props.client.request(`/admin/users`, {
       method: "POST",
       body: JSON.stringify({
         token: props.client.token,
@@ -107,7 +107,7 @@ async function patch(id: string, body: Record<string, unknown>): Promise<void> {
   busyId.value = id;
   error.value = null;
   try {
-    await props.client.request(`/admin/users/${encodeURIComponent(id)}?token=${props.client.token}`, {
+    await props.client.request(`/admin/users/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify({ token: props.client.token, ...body }),
     });
@@ -139,7 +139,7 @@ async function remove(u: AdminUser): Promise<void> {
   busyId.value = u.user_id;
   error.value = null;
   try {
-    await props.client.request(`/admin/users/${encodeURIComponent(u.user_id)}?token=${props.client.token}`, {
+    await props.client.request(`/admin/users/${encodeURIComponent(u.user_id)}`, {
       method: "DELETE",
     });
     await load();

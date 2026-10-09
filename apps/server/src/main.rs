@@ -7,11 +7,14 @@ mod gateway;
 mod guard;
 mod ingest;
 mod ldap;
+mod mailer;
+mod otp;
 mod pat;
 mod pipeline;
 mod s3;
 mod sso;
 mod state;
+mod turnstile;
 
 use axum::{
     extract::{Path, Query, State},
@@ -28,6 +31,7 @@ use std::borrow::Cow;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
+use crate::auth::{Bearer, BearerOpt};
 use crate::state::AppState;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> (StatusCode, Json<Value>) {
@@ -66,11 +70,6 @@ async fn web_console(uri: Uri) -> Response {
         }
     }
     (StatusCode::NOT_FOUND, "not found").into_response()
-}
-
-#[derive(Deserialize)]
-struct TokenQuery {
-    token: String,
 }
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
@@ -133,9 +132,9 @@ async fn attachments_presign(
 async fn attachment_url(
     State(state): State<AppState>,
     Path(attachment_id): Path<String>,
-    Query(q): Query<TokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = auth::verify_token(&state, &q.token, "access")
+    let user_id = auth::verify_token(&state, &tok.0, "access")
         .await
         .map(|c| c.sub)
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
@@ -156,9 +155,9 @@ async fn attachment_url(
 
 async fn me(
     State(state): State<AppState>,
-    Query(q): Query<TokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let claims = auth::verify_token(&state, &q.token, "access")
+    let claims = auth::verify_token(&state, &tok.0, "access")
         .await
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
     let user = state
@@ -178,9 +177,9 @@ async fn me(
 /// machines list: Mongo archive + Redis online status merged
 async fn machines(
     State(state): State<AppState>,
-    Query(q): Query<TokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = auth::verify_token(&state, &q.token, "access")
+    let user_id = auth::verify_token(&state, &tok.0, "access")
         .await
         .map(|c| c.sub)
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
@@ -221,9 +220,9 @@ async fn machines(
 async fn delete_machine(
     State(state): State<AppState>,
     Path(machine_id): Path<String>,
-    Query(q): Query<TokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = auth::verify_token(&state, &q.token, "access")
+    let user_id = auth::verify_token(&state, &tok.0, "access")
         .await
         .map(|c| c.sub)
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
@@ -269,9 +268,9 @@ async fn delete_machine(
 async fn machine_sessions(
     State(state): State<AppState>,
     Path(machine_id): Path<String>,
-    Query(q): Query<TokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = auth::verify_token(&state, &q.token, "access")
+    let user_id = auth::verify_token(&state, &tok.0, "access")
         .await
         .map(|c| c.sub)
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
@@ -325,9 +324,9 @@ async fn machine_sessions(
 async fn delete_machine_session(
     State(state): State<AppState>,
     Path((machine_id, session_id)): Path<(String, String)>,
-    Query(q): Query<TokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = auth::verify_token(&state, &q.token, "access")
+    let user_id = auth::verify_token(&state, &tok.0, "access")
         .await
         .map(|c| c.sub)
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
@@ -354,16 +353,16 @@ async fn delete_machine_session(
 /// persisted history replay for one session
 #[derive(Deserialize)]
 struct EventsQuery {
-    token: String,
     after_seq: Option<i64>,
 }
 
 async fn session_events(
     State(state): State<AppState>,
     Path((machine_id, session_id)): Path<(String, String)>,
+    tok: Bearer,
     Query(q): Query<EventsQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = auth::verify_token(&state, &q.token, "access")
+    let user_id = auth::verify_token(&state, &tok.0, "access")
         .await
         .map(|c| c.sub)
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
@@ -405,6 +404,8 @@ async fn session_events(
 /// web -> desktop command (prompt / steer / abort / approve), online-only
 #[derive(Deserialize)]
 struct CommandBody {
+    /// 旧客户端把 token 放 body；新前端走 Authorization 头。header 优先，body 兜底
+    #[serde(default)]
     token: String,
     machine_id: String,
     session_id: String,
@@ -415,9 +416,14 @@ struct CommandBody {
 
 async fn post_command(
     State(state): State<AppState>,
+    tok: BearerOpt,
     Json(body): Json<CommandBody>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = auth::verify_token(&state, &body.token, "access")
+    let bearer = tok
+        .0
+        .or_else(|| (!body.token.is_empty()).then(|| body.token.clone()))
+        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token".to_string()))?;
+    let user_id = auth::verify_token(&state, &bearer, "access")
         .await
         .map(|c| c.sub)
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
@@ -483,6 +489,7 @@ async fn main() {
 
     let cfg = config::Config::load(cli_config_path()).expect("配置加载失败");
     let web_dir = cfg.web_dir.clone(); // cfg 随后 move 进 AppState，先取出
+    let web_origin = cfg.web_origin.trim().to_string();
     let sink = match pipeline::make_sink(&cfg).await {
         Ok(p) => p,
         Err(e) => {
@@ -597,6 +604,27 @@ async fn main() {
         }
     });
 
+    // CORS：配置 server.web_origin（PIDOCK_WEB_ORIGIN）后收紧为白名单 origin；
+    // 留空维持 permissive（自托管/反代同域部署不受 CORS 影响，但公网建议显式收紧）
+    let cors = if web_origin.is_empty() {
+        tracing::info!("cors: permissive（公网部署建议配置 server.web_origin 白名单）");
+        CorsLayer::permissive()
+    } else {
+        match web_origin.parse::<axum::http::HeaderValue>() {
+            Ok(origin) => {
+                tracing::info!(%web_origin, "cors: 白名单 origin");
+                CorsLayer::new()
+                    .allow_origin(origin)
+                    .allow_methods(tower_http::cors::Any)
+                    .allow_headers(tower_http::cors::Any)
+            }
+            Err(e) => {
+                tracing::warn!(%web_origin, "cors: web_origin 无效（{e}），回落 permissive");
+                CorsLayer::permissive()
+            }
+        }
+    };
+
     // web UI static hosting：PIDOCK_WEB_DIR / 配置文件 [web].dir 显式指定目录时走
     // ServeDir（本地改前端即生效）；否则用编译期嵌入的 apps/web/dist——debug 构建走
     // 磁盘、release 构建真嵌入，产物即单文件。API 路由优先，未命中路径交给兜底。
@@ -625,7 +653,7 @@ async fn main() {
         .merge(admin::router())
         .merge(sso::router())
         .merge(pat::router())
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(state.clone());
     let app = if web_dir.is_empty() {
         tracing::info!("hosting web console from embedded assets");

@@ -6,7 +6,7 @@
 //! 吊销 = 删 Mongo 文档 + 失效缓存，即时生效；每次使用实时校验账号状态。
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::Response,
     routing::{delete, get},
@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::auth::{api_err, verify_token, Claims};
+use crate::auth::{api_err, verify_token, Bearer, Claims};
 use crate::state::AppState;
 
 /// 令牌前缀：verify_token 据此分流到 PAT 校验路径
@@ -225,13 +225,7 @@ async fn revoke(state: &AppState, user_id: &str, id: &str) -> Result<(), String>
 // ------------------------------------------------------------ endpoints
 
 #[derive(Deserialize)]
-struct TokenQuery {
-    token: String,
-}
-
-#[derive(Deserialize)]
 struct TokenCreateBody {
-    token: String,
     #[serde(default)]
     name: String,
     /// 有效期天数（EXPIRY_CHOICES 之一，0 = 不过期）
@@ -241,9 +235,9 @@ struct TokenCreateBody {
 
 async fn tokens_list(
     State(state): State<AppState>,
-    Query(q): Query<TokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, Response> {
-    let user_id = verify_token(&state, &q.token, "access")
+    let user_id = verify_token(&state, &tok.0, "access")
         .await
         .map_err(|e| api_err(StatusCode::UNAUTHORIZED, e))?
         .sub;
@@ -274,9 +268,10 @@ async fn tokens_list(
 
 async fn tokens_create(
     State(state): State<AppState>,
+    tok: Bearer,
     Json(body): Json<TokenCreateBody>,
 ) -> Result<Json<Value>, Response> {
-    let user_id = verify_token(&state, &body.token, "access")
+    let user_id = verify_token(&state, &tok.0, "access")
         .await
         .map_err(|e| api_err(StatusCode::UNAUTHORIZED, e))?
         .sub;
@@ -290,9 +285,9 @@ async fn tokens_create(
 async fn tokens_revoke(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(q): Query<TokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, Response> {
-    let user_id = verify_token(&state, &q.token, "access")
+    let user_id = verify_token(&state, &tok.0, "access")
         .await
         .map_err(|e| api_err(StatusCode::UNAUTHORIZED, e))?
         .sub;

@@ -76,8 +76,8 @@ async function load(): Promise<void> {
   error.value = null;
   try {
     const [l, o] = await Promise.all([
-      props.client.request(`/admin/auth/ldap?token=${props.client.token}`),
-      props.client.request(`/admin/auth/oidc?token=${props.client.token}`),
+      props.client.request(`/admin/auth/ldap`),
+      props.client.request(`/admin/auth/oidc`),
     ]);
     ldap.value = { ...emptyLdap(), ...(l.config ?? {}) };
     oidc.value = { ...emptyOidc(), ...(o.config ?? {}) };
@@ -97,7 +97,7 @@ async function saveLdap(): Promise<void> {
   saving.value = "ldap";
   error.value = null;
   try {
-    await props.client.request(`/admin/auth/ldap?token=${props.client.token}`, {
+    await props.client.request(`/admin/auth/ldap`, {
       method: "PUT",
       body: JSON.stringify({ token: props.client.token, ...ldap.value }),
     });
@@ -113,7 +113,7 @@ async function saveOidc(): Promise<void> {
   saving.value = "oidc";
   error.value = null;
   try {
-    await props.client.request(`/admin/auth/oidc?token=${props.client.token}`, {
+    await props.client.request(`/admin/auth/oidc`, {
       method: "PUT",
       body: JSON.stringify({ token: props.client.token, ...oidc.value }),
     });
@@ -131,11 +131,11 @@ async function testLdap(): Promise<void> {
   testMsg.value = "";
   try {
     // 用当前表单值先存一份再测试，保证测的就是所见配置
-    await props.client.request(`/admin/auth/ldap?token=${props.client.token}`, {
+    await props.client.request(`/admin/auth/ldap`, {
       method: "PUT",
       body: JSON.stringify({ token: props.client.token, ...ldap.value }),
     });
-    const r = await props.client.request(`/admin/auth/ldap/test?token=${props.client.token}`, {
+    const r = await props.client.request(`/admin/auth/ldap/test`, {
       method: "POST",
       body: JSON.stringify({
         token: props.client.token,

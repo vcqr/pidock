@@ -9,7 +9,23 @@ jwt_secret = "change-me-please"  # ⚠️ 公网部署必改，建议 openssl ra
 # bootstrap_invite = ""          # 首个管理员引导邀请码（或 env PIDOCK_BOOTSTRAP_INVITE）：
 #                                # 用它注册的第一个账号即管理员，产生管理员后自动失效
 # trust_proxy = false            # Nginx/反代后置 true：登录/注册限流取 X-Forwarded-For
-#                                # 的客户端 IP（伪造头无效）；默认取直连对端地址
+#                                # 的客户端 IP（伪造头无效）；默认取直连对端地址。
+#                                # ⚠️ 两个方向都有坑，公网部署务必想清楚：
+#                                #   保持 false + 反代 → 所有用户共享代理 IP，攻击者
+#                                #   故意输错 20 次密码可锁全站登录 15 分钟；
+#                                #   置 true → 必须确保反代「覆写」而非追加 X-Forwarded-For，
+#                                #   否则客户端可伪造该头绕过 IP 维度限流（账号维度仍有效）
+# Cloudflare Turnstile 登录/注册人机校验（可选）：开关式配置——
+# 两个都配置 = 启用；都留空 = 关闭（默认）；只配一个 = 视为关闭，启动时打警告。
+# site key 在 Cloudflare Turnstile 控制台创建 widget 后获得，明面下发前端；
+# secret key 保密，服务端调 siteverify 验 token。本地联调用官方测试键恒通过：
+#   site_key   = "1x00000000000000000000AA"
+#   secret_key = "1x0000000000000000000000000000000AA"
+# turnstile_site_key = ""
+# turnstile_secret_key = ""
+# CORS 白名单 origin（公网部署建议配置，如 https://pidock.example.com）；
+# 留空 = permissive（任意站点可跨域调用 API；反代同域部署不配也不受影响）
+# web_origin = ""
 
 [mongo]
 uri = "mongodb://localhost:27017"
@@ -31,3 +47,17 @@ secret_key = "pidock-secret"
 # Web 控制台静态目录（留空 = 用二进制内嵌的前端）
 [web]
 dir = ""
+
+# 登录邮箱验证码（两步验证，可选）：密码校验通过后向账号邮箱发 6 位验证码，
+# 凭验证码换 token。开关 = login_code = true 且 smtp_host 非空；缺一视为关闭。
+# 仅作用于密码登录（LDAP/SSO 不适用）。
+# [email]
+# login_code = true
+# register_code = true           # 注册也发码验证邮箱所有权（开放注册时建议开启）；
+#                                # 开启后注册先发码，验证通过才建号并自动登录
+# smtp_host = "smtp.example.com"
+# smtp_port = 465                # 465=隐式 TLS；587 配 smtp_tls="starttls"；25 配 "none"（仅内网调试）
+# smtp_tls = "tls"               # tls | starttls | none
+# smtp_user = "noreply@example.com"
+# smtp_pass = "app-password"
+# from = "PiDock <noreply@example.com>"  # 留空回落 smtp_user

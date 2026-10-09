@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
 import { darkTheme, NConfigProvider } from "naive-ui";
 import {
   appConfirm,
@@ -30,6 +30,7 @@ import {
   fetchAuthMethods,
   loadAuth,
   type AuthMethods,
+  type LoginPending,
 } from "./auth.js";
 import { createWebBus, type WebBus } from "./bus.js";
 import AdminAuthCfg from "./components/AdminAuthCfg.vue";
@@ -74,11 +75,169 @@ async function refreshMethods(): Promise<void> {
   authMethods.value = await fetchAuthMethods(serverUrl);
 }
 
+// Turnstile 人机验证：服务端启用时登录/注册前须拿到 token（一次性，失败后 reset 重来）
+const turnstileToken = ref("");
+const turnstileBox = ref<HTMLElement | null>(null);
+const turnstileEnabled = computed(
+  () => !!authMethods.value?.turnstile?.enabled && !!authMethods.value?.turnstile?.site_key,
+);
+let turnstileWidget = "";
+
+interface TurnstileApi {
+  render: (el: HTMLElement, params: Record<string, unknown>) => string;
+  reset: (id?: string) => void;
+  remove: (id?: string) => void;
+}
+declare global {
+  interface Window {
+    turnstile?: TurnstileApi;
+  }
+}
+
+function loadTurnstile(): Promise<TurnstileApi> {
+  if (window.turnstile) return Promise.resolve(window.turnstile);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    s.async = true;
+    s.onload = () =>
+      window.turnstile
+        ? resolve(window.turnstile)
+        : reject(new Error("turnstile loaded but missing global"));
+    s.onerror = () => reject(new Error("Turnstile 脚本加载失败"));
+    document.head.appendChild(s);
+  });
+}
+
+/** 渲染 widget（幂等）；主题跟随应用主题，切主题由 watch 重挂 */
+async function mountTurnstile(): Promise<void> {
+  const siteKey = authMethods.value?.turnstile?.site_key;
+  if (turnstileWidget || !siteKey || !turnstileBox.value) return;
+  try {
+    const ts = await loadTurnstile();
+    if (!turnstileBox.value) return; // 脚本加载期间表单可能已随登录卸载
+    turnstileWidget = ts.render(turnstileBox.value, {
+      sitekey: siteKey,
+      theme: themeMode.value === "dark" ? "dark" : "light",
+      callback: (token: string) => (turnstileToken.value = token),
+      "expired-callback": () => (turnstileToken.value = ""),
+      "error-callback": () => (turnstileToken.value = ""),
+    });
+  } catch (err) {
+    console.warn("turnstile mount failed", err);
+  }
+}
+
+/** token 已被服务端消费（siteverify 一次性），失败后重置让用户重新过验证 */
+function resetTurnstile(): void {
+  turnstileToken.value = "";
+  if (turnstileWidget) window.turnstile?.reset(turnstileWidget);
+}
+
+watch(
+  turnstileEnabled,
+  (on) => {
+    if (on) void nextTick(mountTurnstile);
+  },
+  { immediate: true },
+);
+
+// Turnstile 渲染后主题不可改，切主题需卸载重挂
+watch(themeMode, () => {
+  if (!turnstileEnabled.value || !window.turnstile) return;
+  if (turnstileWidget) window.turnstile.remove(turnstileWidget);
+  turnstileWidget = "";
+  turnstileToken.value = "";
+  void nextTick(mountTurnstile);
+});
+
 /** 跳转 IdP 发起 SSO 登录；记住 server 地址供回调后交换 token */
 function ssoLogin(): void {
   const base = serverUrl.replace(/\/+$/, "");
   sessionStorage.setItem("pidock.sso.server", base);
   window.location.href = `${base}/auth/sso/oidc/login`;
+}
+
+// 邮箱验证码两步验证：密码通过（登录）或预检通过（注册）后进入验证码步骤
+const otpStep = ref(false);
+const otpPurpose = ref<"login" | "register">("login");
+const otpChallenge = ref("");
+const otpMaskedEmail = ref("");
+const otpCode = ref("");
+const otpCooldown = ref(0);
+let otpTimerId = 0;
+
+function startOtpCooldown(): void {
+  otpCooldown.value = 60;
+  window.clearInterval(otpTimerId);
+  otpTimerId = window.setInterval(() => {
+    if (otpCooldown.value > 0) otpCooldown.value--;
+    if (otpCooldown.value === 0) window.clearInterval(otpTimerId);
+  }, 1000);
+}
+
+function enterOtpStep(
+  pending: { challenge: string; email: string },
+  purpose: "login" | "register",
+): void {
+  otpPurpose.value = purpose;
+  otpStep.value = true;
+  otpChallenge.value = pending.challenge;
+  otpMaskedEmail.value = pending.email;
+  otpCode.value = "";
+  loginError.value = null;
+  startOtpCooldown();
+}
+
+/** 验证码输入只留数字、最多 6 位 */
+function onOtpInput(e: Event): void {
+  otpCode.value = (e.target as HTMLInputElement).value.replace(/\D/g, "").slice(0, 6);
+}
+
+/** 返回密码表单：turnstile token 已被上次提交消费，重置重拿 */
+function backToPassword(): void {
+  otpStep.value = false;
+  otpPurpose.value = "login";
+  otpChallenge.value = "";
+  otpCode.value = "";
+  loginError.value = null;
+  resetTurnstile();
+}
+
+async function verifyOtp(): Promise<void> {
+  if (loginBusy.value || otpCode.value.trim().length !== 6) return;
+  loginBusy.value = true;
+  loginError.value = null;
+  try {
+    const client = new AuthClient(null as never, () => logout());
+    const state =
+      otpPurpose.value === "register"
+        ? await client.verifyRegisterCode(serverUrl, otpChallenge.value, otpCode.value)
+        : await client.verifyLoginCode(serverUrl, otpChallenge.value, otpCode.value);
+    otpStep.value = false;
+    boot(state, client);
+  } catch (err) {
+    loginError.value = String(err instanceof ApiError ? err.message : err);
+  } finally {
+    loginBusy.value = false;
+  }
+}
+
+async function resendOtp(): Promise<void> {
+  if (loginBusy.value || otpCooldown.value > 0) return;
+  loginBusy.value = true;
+  loginError.value = null;
+  try {
+    const client = new AuthClient(null as never, () => logout());
+    const r = await client.resendCode(serverUrl, otpChallenge.value);
+    otpChallenge.value = r.challenge;
+    otpMaskedEmail.value = r.email;
+    startOtpCooldown();
+  } catch (err) {
+    loginError.value = String(err instanceof ApiError ? err.message : err);
+  } finally {
+    loginBusy.value = false;
+  }
 }
 
 /** 首页节点搜索过滤（主机名/系统/版本/ID），Ctrl+K 聚焦 */
@@ -124,7 +283,7 @@ const wsSideOpen = ref(false);
 async function refreshMachines(): Promise<void> {
   if (!auth.value || !bus.value) return;
   try {
-    const r = await auth.value.request(`/machines?token=${auth.value.token}`);
+    const r = await auth.value.request(`/machines`);
     machines.value = r.machines ?? [];
     if (!activeMachineId.value) {
       const firstOnline = machines.value.find((m) => m.online) ?? machines.value[0];
@@ -140,7 +299,7 @@ async function deleteMachine(m: MachineUi): Promise<void> {
   if (!auth.value) return;
   if (!(await appConfirm({ title: `删除节点「${m.hostname || m.machine_id.slice(0, 8)}」？`, message: "将删除该节点及其全部同步数据。", danger: true }))) return;
   try {
-    await auth.value.request(`/machines/${m.machine_id}?token=${auth.value.token}`, { method: "DELETE" });
+    await auth.value.request(`/machines/${m.machine_id}`, { method: "DELETE" });
     if (activeMachineId.value === m.machine_id) {
       activeMachineId.value = null;
       if (bus.value) bus.value.setMachine("");
@@ -163,7 +322,7 @@ async function refreshSessionCounts(): Promise<void> {
   await Promise.all(
     machines.value.map(async (m) => {
       try {
-        const r = await auth.value!.request(`/machines/${m.machine_id}/sessions?token=${auth.value!.token}`);
+        const r = await auth.value!.request(`/machines/${m.machine_id}/sessions`);
         sessionCounts.value[m.machine_id] = (r.sessions ?? []).length;
       } catch {
         /* 保留上次计数 */
@@ -253,23 +412,46 @@ async function doLogin(): Promise<void> {
   try {
     const client = new AuthClient(null as never, () => logout());
     if (loginMode.value === "ldap") {
-      const state = await client.loginLdap(serverUrl, email.value.trim(), password.value);
+      const state = await client.loginLdap(
+        serverUrl,
+        email.value.trim(),
+        password.value,
+        turnstileToken.value,
+      );
       boot(state, client);
       return;
     }
     if (registerMode.value) {
-      await client.register(serverUrl, email.value.trim(), password.value, inviteCode.value);
+      const r = await client.register(
+        serverUrl,
+        email.value.trim(),
+        password.value,
+        inviteCode.value,
+        turnstileToken.value,
+      );
+      // 注册验证码：预检已过、验证码已发，进验证码步骤（验证通过即建号并自动登录）
+      if ("pending" in r) {
+        enterOtpStep(r, "register");
+        return;
+      }
     }
-    const state = await client.login(serverUrl, email.value.trim(), password.value);
-    boot(state, client);
+    const r = await client.login(serverUrl, email.value.trim(), password.value, turnstileToken.value);
+    if ("pending" in r) {
+      enterOtpStep(r, "login");
+      return;
+    }
+    boot(r, client);
   } catch (err) {
     loginError.value = String(err instanceof ApiError ? err.message : err);
+    resetTurnstile(); // token 一次性，重新过验证再试
   } finally {
     loginBusy.value = false;
   }
 }
 
 function logout(): void {
+  // 先尽力而为吊销服务端 refresh token，再清本地（网络失败不阻塞登出）
+  void auth.value?.logoutRemote();
   clearAuth();
   folderPick.value?.resolve(null);
   folderPick.value = null;
@@ -421,7 +603,11 @@ onMounted(() => {
   }
 });
 
-onBeforeUnmount(() => window.removeEventListener("keydown", onGlobalKey));
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onGlobalKey);
+  if (turnstileWidget) window.turnstile?.remove(turnstileWidget);
+  window.clearInterval(otpTimerId);
+});
 
 const sessionsEmpty = computed(() => {
   const items = store.value?.sessions ?? [];
@@ -446,10 +632,16 @@ const sessionsEmpty = computed(() => {
       </ul>
     </div>
     <div class="auth-side">
-      <form class="auth-card" @submit.prevent="doLogin">
-        <h2 class="auth-title">{{ registerMode ? "创建账号" : "欢迎回来" }}</h2>
-        <p class="auth-sub">{{ registerMode ? "凭邀请码注册新账号" : "登录你的 PiDock 账号" }}</p>
-        <div v-if="authMethods?.ldap?.enabled" class="auth-tabs">
+      <form class="auth-card" @submit.prevent="otpStep ? verifyOtp() : doLogin()">
+        <h2 class="auth-title">{{ otpStep ? (otpPurpose === "register" ? "验证邮箱" : "两步验证") : registerMode ? "创建账号" : "欢迎回来" }}</h2>
+        <p class="auth-sub">{{
+          otpStep
+            ? `验证码已发送至 ${otpMaskedEmail}${otpPurpose === "register" ? "，验证后创建账号" : ""}`
+            : registerMode
+              ? "凭邀请码注册新账号"
+              : "登录你的 PiDock 账号"
+        }}</p>
+        <div v-if="!otpStep && authMethods?.ldap?.enabled" class="auth-tabs">
           <button
             type="button"
             class="auth-tab"
@@ -467,34 +659,65 @@ const sessionsEmpty = computed(() => {
             LDAP 登录
           </button>
         </div>
-        <label>{{ loginMode === "ldap" ? "用户名" : "邮箱" }}<input
-            v-model="email"
-            :type="loginMode === 'ldap' ? 'text' : 'email'"
-            :placeholder="loginMode === 'ldap' ? 'LDAP 目录中的用户名' : 'you@example.com'"
-            autocomplete="username"
-        /></label>
-        <label>密码<input v-model="password" type="password" autocomplete="current-password" /></label>
-        <label v-if="registerMode"
-          >邀请码<input
-            v-model="inviteCode"
-            placeholder="向管理员索取"
-            autocomplete="off"
-            spellcheck="false"
-        /></label>
+        <template v-if="!otpStep">
+          <label>{{ loginMode === "ldap" ? "用户名" : "邮箱" }}<input
+              v-model="email"
+              :type="loginMode === 'ldap' ? 'text' : 'email'"
+              :placeholder="loginMode === 'ldap' ? 'LDAP 目录中的用户名' : 'you@example.com'"
+              autocomplete="username"
+          /></label>
+          <label>密码<input v-model="password" type="password" autocomplete="current-password" /></label>
+          <label v-if="registerMode"
+            >邀请码<input
+              v-model="inviteCode"
+              placeholder="向管理员索取"
+              autocomplete="off"
+              spellcheck="false"
+          /></label>
+          <!-- Turnstile：容器内容由 Cloudflare 脚本接管，这里只占位 -->
+          <div v-if="turnstileEnabled" ref="turnstileBox" class="auth-captcha"></div>
+        </template>
+        <template v-else>
+          <label>验证码<input
+              :value="otpCode"
+              @input="onOtpInput"
+              type="text"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              maxlength="6"
+              placeholder="6 位数字"
+          /></label>
+          <div class="auth-otp-actions">
+            <button
+              type="button"
+              class="auth-link"
+              :disabled="loginBusy || otpCooldown > 0"
+              @click="resendOtp"
+            >
+              {{ otpCooldown > 0 ? `重新发送（${otpCooldown}s）` : "重新发送验证码" }}
+            </button>
+            <button type="button" class="auth-link" @click="backToPassword">返回上一步</button>
+          </div>
+        </template>
         <button
           class="auth-primary"
-          :disabled="loginBusy || !email || !password || (registerMode && !inviteCode.trim())"
+          :disabled="
+            loginBusy ||
+            (otpStep
+              ? otpCode.length !== 6
+              : !email || !password || (registerMode && !inviteCode.trim()) || (turnstileEnabled && !turnstileToken))
+          "
         >
-          {{ loginBusy ? "提交中…" : loginMode === "ldap" ? "LDAP 登录" : registerMode ? "注册并登录" : "登录" }}
+          {{ loginBusy ? "提交中…" : otpStep ? (otpPurpose === "register" ? "验证并创建账号" : "验证并登录") : loginMode === "ldap" ? "LDAP 登录" : registerMode ? "注册并登录" : "登录" }}
         </button>
-        <template v-if="authMethods?.oidc?.enabled">
+        <template v-if="!otpStep && authMethods?.oidc?.enabled">
           <div class="auth-divider"><span>或</span></div>
           <button class="auth-sso" type="button" @click="ssoLogin">
             使用 {{ authMethods.oidc.label || "SSO" }} 登录
           </button>
         </template>
         <button
-          v-if="loginMode === 'standard' && authMethods?.register?.allowed !== false"
+          v-if="!otpStep && loginMode === 'standard' && authMethods?.register?.allowed !== false"
           class="auth-switch"
           type="button"
           @click="registerMode = !registerMode"

@@ -44,6 +44,32 @@ async fn gate(state: &AppState, token: &str) -> Result<String, (axum::http::Stat
     Ok(claims.sub)
 }
 
+/// WS 鉴权：`?ticket=`（/auth/ws-ticket 签发的一次性票据，60 秒有效）优先，
+/// 回落 `?token=`（旧桌面端兼容，逐步淘汰——token 会落反代访问日志）。返回 user_id
+async fn ws_auth_user(
+    state: &AppState,
+    params: &HashMap<String, String>,
+) -> Result<String, (axum::http::StatusCode, String)> {
+    if let Some(t) = params.get("ticket").filter(|t| !t.trim().is_empty()) {
+        let mut conn = state.redis.clone();
+        let uid: Option<String> = redis::cmd("GETDEL")
+            .arg(format!("ws:ticket:{}", t.trim()))
+            .query_async(&mut conn)
+            .await
+            .unwrap_or(None);
+        return match uid {
+            Some(uid) if user_active(state, &uid).await => Ok(uid),
+            Some(_) => Err((axum::http::StatusCode::FORBIDDEN, "账号已被禁用".into())),
+            None => Err((
+                axum::http::StatusCode::UNAUTHORIZED,
+                "ticket 已使用或过期".into(),
+            )),
+        };
+    }
+    let token = query_token(params).map_err(|e| (axum::http::StatusCode::UNAUTHORIZED, e))?;
+    gate(state, &token).await
+}
+
 // ---------------------------------------------------------------- desktop ---
 
 pub async fn ws_desktop(
@@ -51,11 +77,7 @@ pub async fn ws_desktop(
     Query(params): Query<HashMap<String, String>>,
     upgrade: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    let token = match query_token(&params) {
-        Ok(t) => t,
-        Err(e) => return IntoResponse::into_response((axum::http::StatusCode::UNAUTHORIZED, e)),
-    };
-    let user_id = match gate(&state, &token).await {
+    let user_id = match ws_auth_user(&state, &params).await {
         Ok(u) => u,
         Err((s, e)) => return IntoResponse::into_response((s, e)),
     };
@@ -172,11 +194,7 @@ pub async fn ws_web(
     Query(params): Query<HashMap<String, String>>,
     upgrade: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    let token = match query_token(&params) {
-        Ok(t) => t,
-        Err(e) => return IntoResponse::into_response((axum::http::StatusCode::UNAUTHORIZED, e)),
-    };
-    let user_id = match gate(&state, &token).await {
+    let user_id = match ws_auth_user(&state, &params).await {
         Ok(u) => u,
         Err((s, e)) => return IntoResponse::into_response((s, e)),
     };

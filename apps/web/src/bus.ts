@@ -77,53 +77,67 @@ export function createWebBus(auth: AuthClient): DataBus & {
     }
   }
 
+  let wsTicketBusy = false;
   function connectWs(): void {
-    if (ws) return;
-    const url = `${auth.serverUrl.replace(/^http/, "ws")}/ws/web?token=${auth.token}`;
-    const socket = new WebSocket(url);
-    ws = socket;
-    socket.onopen = () => {
-      wsOpen = true;
-      // 重连对账：断线窗口内丢的推送（machine_status/session_upserted 等）不会补发
-      for (const cb of reconnectCbs) cb();
-      // gap-fill: refetch everything after the last seen seq per session
-      if (GAP_FILL_AFTER_SEQ && eventHandler) {
-        for (const [sessionId, seq] of lastSeqBySession) {
-          if (!activeMachine || seq <= 0) continue;
-          auth
-            .request(`/machines/${activeMachine}/sessions/${sessionId}/events?token=${auth.token}&after_seq=${seq}`)
-            .then((r) => {
-              for (const ev of r.events ?? []) {
-                eventHandler?.({
-                  event_id: "",
-                  session_id: sessionId,
-                  seq: ev.seq,
-                  persist: true,
-                  ts: ev.ts,
-                  kind: ev.kind,
-                  payload: ev.payload,
-                });
-              }
-            })
-            .catch(() => {});
-        }
-      }
-    };
-    socket.onmessage = (msg) => {
+    if (ws || wsTicketBusy) return;
+    wsTicketBusy = true;
+    // WS 鉴权走一次性 ticket（/auth/ws-ticket 换发，60s 单次有效）：
+    // 长期 token 不再出现在 URL / 反代访问日志里；取票失败按断线节奏重试
+    void (async () => {
       try {
-        handleFrame(JSON.parse(String(msg.data)));
-      } catch {
-        // ignore bad frames
-      }
-    };
-    socket.onclose = () => {
-      ws = null;
-      wsOpen = false;
-      if (!closedByUs) {
+        const r = await auth.request("/auth/ws-ticket");
+        const url = `${auth.serverUrl.replace(/^http/, "ws")}/ws/web?ticket=${r.ticket}`;
+        const socket = new WebSocket(url);
+        ws = socket;
+        socket.onopen = () => {
+          wsOpen = true;
+          // 重连对账：断线窗口内丢的推送（machine_status/session_upserted 等）不会补发
+          for (const cb of reconnectCbs) cb();
+          // gap-fill: refetch everything after the last seen seq per session
+          if (GAP_FILL_AFTER_SEQ && eventHandler) {
+            for (const [sessionId, seq] of lastSeqBySession) {
+              if (!activeMachine || seq <= 0) continue;
+              auth
+                .request(`/machines/${activeMachine}/sessions/${sessionId}/events?after_seq=${seq}`)
+                .then((r) => {
+                  for (const ev of r.events ?? []) {
+                    eventHandler?.({
+                      event_id: "",
+                      session_id: sessionId,
+                      seq: ev.seq,
+                      persist: true,
+                      ts: ev.ts,
+                      kind: ev.kind,
+                      payload: ev.payload,
+                    });
+                  }
+                })
+                .catch(() => {});
+            }
+          }
+        };
+        socket.onmessage = (msg) => {
+          try {
+            handleFrame(JSON.parse(String(msg.data)));
+          } catch {
+            // ignore bad frames
+          }
+        };
+        socket.onclose = () => {
+          ws = null;
+          wsOpen = false;
+          if (!closedByUs) {
+            setTimeout(connectWs, 2000);
+          }
+        };
+        socket.onerror = () => socket.close();
+      } catch (err) {
+        console.warn("ws ticket fetch failed", err);
         setTimeout(connectWs, 2000);
+      } finally {
+        wsTicketBusy = false;
       }
-    };
-    socket.onerror = () => socket.close();
+    })();
   }
 
   async function command(sessionId: string, type: string, payload: unknown): Promise<any> {
@@ -131,7 +145,6 @@ export function createWebBus(auth: AuthClient): DataBus & {
     const res = await auth.request("/commands", {
       method: "POST",
       body: JSON.stringify({
-        token: auth.token,
         machine_id: activeMachine,
         session_id: sessionId,
         type,
@@ -173,7 +186,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
       switch (method) {
         case "session.list": {
           if (!activeMachine) return { sessions: [] };
-          const r = await auth.request(`/machines/${activeMachine}/sessions?token=${auth.token}`);
+          const r = await auth.request(`/machines/${activeMachine}/sessions`);
           const sessions = (r.sessions ?? []).map((s: any) => ({
             session_id: s.session_id,
             file: "",
@@ -191,7 +204,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
         }
         case "session.events": {
           if (!activeMachine) return { events: [] };
-          const q = new URLSearchParams({ token: auth.token });
+          const q = new URLSearchParams();
           if (params?.after_seq !== undefined) q.set("after_seq", String(params.after_seq));
           const r = await auth.request(
             `/machines/${activeMachine}/sessions/${params.session_id}/events?${q}`,
@@ -266,7 +279,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
           if (activeMachine && ids.length) {
             await Promise.allSettled(
               ids.map((sid) =>
-                auth.request(`/machines/${activeMachine}/sessions/${sid}?token=${auth.token}`, {
+                auth.request(`/machines/${activeMachine}/sessions/${sid}`, {
                   method: "DELETE",
                 }),
               ),
@@ -386,7 +399,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
     },
 
     async loadAttachment(attachmentId: string): Promise<string> {
-      const r = await auth.request(`/attachments/${attachmentId}/url?token=${auth.token}`);
+      const r = await auth.request(`/attachments/${attachmentId}/url`);
       const res = await fetch(r.url);
       if (!res.ok) throw new Error(`附件下载失败 (${res.status})`);
       return await res.text();

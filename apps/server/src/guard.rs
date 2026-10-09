@@ -3,7 +3,8 @@
 //! - 登录（标准/LDAP）按「目标账号」与「来源 IP」双维度计数：账号 5 次、
 //!   IP 20 次（防撞库横扫），窗口 15 分钟，超限 429；成功登录清零
 //! - 注册按「来源 IP」计所有尝试（成功失败都算），1 小时 10 次
-//! - Redis 故障时放行并记日志（可用性优先，自托管场景不能因 Redis 抖动锁死所有人）
+//! - Redis 故障时：登录限流放行并记日志（可用性优先，自托管场景不能因 Redis
+//!   抖动锁死所有人）；注册路径 fail-closed 拒绝（公网防「打挂 Redis 解锁爆破」）
 
 use axum::http::{HeaderMap, StatusCode};
 use mongodb::bson::doc;
@@ -38,25 +39,31 @@ pub fn client_ip(cfg: &crate::config::Config, headers: &HeaderMap, peer: std::ne
 
 /// Redis INCR + 首次 EXPIRE；返回 (次数, 剩余锁定秒数)
 async fn incr_window(state: &AppState, key: &str, window: u64) -> (i64, u64) {
+    incr_window_raw(state, key, window)
+        .await
+        .unwrap_or((0, 0))
+}
+
+/// 同上，但 Redis 故障时返回 Err——由调用方决定放行（登录，可用性优先）
+/// 还是拒绝（注册/发码，安全门槛 fail-closed）
+async fn incr_window_raw(
+    state: &AppState,
+    key: &str,
+    window: u64,
+) -> Result<(i64, u64), ()> {
     let mut conn = state.redis.clone();
-    let count: i64 = match redis::cmd("INCR")
+    let count: i64 = redis::cmd("INCR")
         .arg(key)
         .query_async(&mut conn)
         .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("guard: redis incr failed ({key}): {e}");
-            return (0, 0);
-        }
-    };
+        .map_err(|_| ())?;
     if count == 1 {
         let _: Result<(), _> = conn
             .expire(key, window as i64)
             .await;
     }
     let ttl: u64 = conn.ttl(key).await.unwrap_or(0).max(0) as u64;
-    (count, ttl)
+    Ok((count, ttl))
 }
 
 async fn get_count(state: &AppState, key: &str) -> i64 {
@@ -133,10 +140,16 @@ pub async fn login_clear(state: &AppState, account: &str, ip: &str) {
     .await;
 }
 
-/// 注册前置检查：同 IP 1 小时内全部尝试（成功+失败）计入
+/// 注册前置检查：同 IP 1 小时内全部尝试（成功+失败）计入。
+/// fail-closed：Redis 故障时拒绝——公网不能留「打挂 Redis 解锁爆破/刷邮件」的门
 pub async fn register_allowed(state: &AppState, ip: &str) -> Result<(), axum::response::Response> {
     let key = format!("guard:reg:ip:{ip}");
-    let (n, ttl) = incr_window(state, &key, REG_WINDOW).await;
+    let (n, ttl) = incr_window_raw(state, &key, REG_WINDOW).await.map_err(|_| {
+        api_err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "注册服务暂不可用，请稍后再试",
+        )
+    })?;
     if n > REG_IP_MAX {
         return Err(too_many("此来源 IP 的注册", ttl));
     }
