@@ -2,7 +2,8 @@
 //!
 //! /ws/desktop — PiDock desktop sync-agent: upstream message-level envelopes
 //! (pushed into the pipeline), downstream user commands. Connection registers
-//! the machine online (Redis + Mongo), heartbeat keeps the TTL alive.
+//! the machine online (Redis + Mongo); the gateway renews the TTL itself
+//! (desktop clients never send heartbeat frames).
 //!
 //! /ws/web — browser clients: downstream realtime push (Redis pub/sub of the
 //! user's channel), upstream nothing in v1 (commands go via POST /commands).
@@ -67,6 +68,9 @@ async fn desktop_socket(state: AppState, user_id: String, socket: WebSocket) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Value>();
     let mut machine_id: Option<String> = None;
+    // 在线 TTL 由服务端周期续期：桌面端从不发 heartbeat 帧，
+    // 若只靠客户端心跳，任何连接都会在 90s TTL 过期后被误判离线
+    let mut keepalive: Option<tokio::task::JoinHandle<()>> = None;
 
     // forward downstream frames (commands) to the websocket
     let forward = tokio::spawn(async move {
@@ -118,7 +122,21 @@ async fn desktop_socket(state: AppState, user_id: String, socket: WebSocket) {
                     },
                 );
                 let _ = out_tx.send(json!({"ctrl":"registered","machine_id": mid}));
-                machine_id = Some(mid);
+                machine_id = Some(mid.clone());
+                // 每 30s 续 90s TTL（TCP 活着即在线；断开走 machine_offline 立即下线）
+                if let Some(prev) = keepalive.take() {
+                    prev.abort();
+                }
+                let hb_state = state.clone();
+                let hb_mid = mid;
+                keepalive = Some(tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        tick.tick().await;
+                        hb_state.machine_heartbeat(&hb_mid).await;
+                    }
+                }));
             }
             Some("heartbeat") => {
                 if let Some(mid) = &machine_id {
@@ -137,6 +155,9 @@ async fn desktop_socket(state: AppState, user_id: String, socket: WebSocket) {
     }
 
     forward.abort();
+    if let Some(hb) = keepalive.take() {
+        hb.abort();
+    }
     if let Some(mid) = &machine_id {
         state.routes.lock().await.remove(mid);
         state.machine_offline(&user_id, mid).await;

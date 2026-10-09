@@ -151,5 +151,14 @@ impl AppState {
         let _: Result<(), _> = conn
             .expire(format!("online:machine:{machine_id}"), 90)
             .await;
+        // last_seen 同步刷新：机器卡片「最后活跃」反映真实在线时间而非注册时刻
+        let _: Result<mongodb::results::UpdateResult, _> = self
+            .mongo
+            .collection::<mongodb::bson::Document>("machines")
+            .update_one(
+                mongodb::bson::doc! { "_id": machine_id },
+                mongodb::bson::doc! { "$set": { "last_seen": chrono::Utc::now().to_rfc3339() } },
+            )
+            .await;
     }
 }
