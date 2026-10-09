@@ -424,12 +424,17 @@ async function toggleReview(path: string, turnId: string): Promise<void> {
       break;
     }
   }
-  const r = await props.store.fileDiff(path, turnId);
-  const data = { path, oldText: r.oldText, newText: r.newText, added, removed };
-  const i = reviewTabs.value.findIndex((t) => t.path === path);
-  if (i >= 0) reviewTabs.value[i] = data;
-  else reviewTabs.value.push(data);
-  reviewActive.value = path;
+  try {
+    const r = await props.store.fileDiff(path, turnId);
+    const data = { path, oldText: r.oldText, newText: r.newText, added, removed };
+    const i = reviewTabs.value.findIndex((t) => t.path === path);
+    if (i >= 0) reviewTabs.value[i] = data;
+    else reviewTabs.value.push(data);
+    reviewActive.value = path;
+  } catch (err) {
+    // 拉快照失败（命令超时/桌面忙）别静默：面板出不来又无提示，像点了没反应
+    props.store.lastError = `审查快照拉取失败：${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 function closeReviewTab(path: string): void {
   const i = reviewTabs.value.findIndex((t) => t.path === path);
@@ -455,13 +460,37 @@ function readReviewWidth(): number | null {
   const v = Number(localStorage.getItem(REVIEW_KEY));
   return Number.isFinite(v) && v >= REVIEW_MIN && v <= 1200 ? Math.round(v) : null;
 }
-/** pane1（对话区）flex-basis：未开审查时占满；打开时 = 容器 − 触发条 − 面板宽 */
+/** 窄屏：审查面板改全屏浮层（分栏会把对话区挤到无法阅读） */
+const isNarrow = ref(typeof matchMedia !== "undefined" && matchMedia("(max-width: 768px)").matches);
+if (typeof matchMedia !== "undefined") {
+  const mq = matchMedia("(max-width: 768px)");
+  const onNarrowChange = (e: MediaQueryListEvent): void => {
+    isNarrow.value = e.matches;
+  };
+  mq.addEventListener("change", onNarrowChange);
+  onBeforeUnmount(() => mq.removeEventListener("change", onNarrowChange));
+}
+/** pane1（对话区）flex-basis：未开审查时占满；打开时 = 容器 − 触发条 − 面板宽；窄屏恒占满（面板浮层） */
 const reviewPane1Size = computed(() =>
-  reviewTabs.value.length
-    ? `calc(100% - ${SPLIT_TRIGGER}px - ${(reviewWidth.value ?? Math.round(chatW.value * 0.42))}px)`
-    : "100%",
+  !reviewTabs.value.length || isNarrow.value
+    ? "100%"
+    : `calc(100% - ${SPLIT_TRIGGER}px - ${(reviewWidth.value ?? Math.round(chatW.value * 0.42))}px)`,
 );
-const reviewPane1Max = computed(() => `${Math.max(360, chatW.value - SPLIT_TRIGGER - REVIEW_MIN)}px`);
+const reviewPane1Max = computed(() => (isNarrow.value ? "100%" : `${Math.max(360, chatW.value - SPLIT_TRIGGER - REVIEW_MIN)}px`));
+const reviewSplitDisabled = computed(() => isNarrow.value || !reviewTabs.value.length);
+const reviewPane2Style = computed(() =>
+  isNarrow.value
+    ? {
+        position: "absolute" as const,
+        inset: "0",
+        zIndex: 45,
+        width: "100%",
+        boxShadow: "0 10px 32px rgba(0, 0, 0, 0.4)",
+        // 无审查 tab 时空浮层不得拦截对话区的点击
+        pointerEvents: reviewTabs.value.length ? ("auto" as const) : ("none" as const),
+      }
+    : { flex: "1 1 0", minWidth: "0", overflow: "hidden" },
+);
 function onReviewSplitSize(s: string | number): void {
   const usable = Math.max(0, chatW.value - SPLIT_TRIGGER);
   const px = typeof s === "string" ? parseFloat(s) : s * usable;
@@ -783,12 +812,12 @@ watch(
         direction="horizontal"
         class="chat-split"
         :size="reviewPane1Size"
-        min="360px"
+        :min="isNarrow ? '0px' : '360px'"
         :max="reviewPane1Max"
         :resize-trigger-size="6"
-        :disabled="!reviewTabs.length"
+        :disabled="reviewSplitDisabled"
         :pane1-style="{ display: 'flex' }"
-        :pane2-style="{ flex: '1 1 0', minWidth: '0', overflow: 'hidden' }"
+        :pane2-style="reviewPane2Style"
         @update:size="onReviewSplitSize"
         @drag-end="saveReview"
       >
@@ -1008,6 +1037,8 @@ export default { components: { ToolCard, MessageItem } };
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  /* 窄屏审查浮层（pane2 absolute）的定位上下文 */
+  position: relative;
 }
 /* NSplit 触发条内容：6px 命中区 + 悬停主题色线 */
 .rz-line {
