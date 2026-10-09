@@ -237,6 +237,28 @@ export function createWebBus(auth: AuthClient): DataBus & {
           });
           return result ?? {};
         }
+        // 目录列举 / git 分支：本机命令（不经 host），中继到当前控制的节点上执行；
+        // 节点侧跑旧版桌面端时会报 "command type ... not supported"
+        case "fs_list": {
+          const result = await command("", "fs_list", { path: params?.path ?? null });
+          return result ?? {};
+        }
+        case "git_info": {
+          const result = await command("", "git_info", { cwd: params?.cwd });
+          return result ?? {};
+        }
+        case "git_branches": {
+          const result = await command("", "git_branches", { cwd: params?.cwd });
+          return result ?? {};
+        }
+        case "git_checkout": {
+          const result = await command("", "git_checkout", {
+            cwd: params?.cwd,
+            branch: params?.branch,
+            create: params?.create === true,
+          });
+          return result ?? {};
+        }
         case "session.remove": {
           // 先命令桌面端删 host 注册表条目（权威数据），再清 server 侧镜像；机器离线时整体拒绝
           const ids: string[] = Array.isArray(params?.session_ids) ? params.session_ids : [];
@@ -325,6 +347,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
         case "experts.save":
         case "experts.delete":
         case "experts.private_list":
+        case "experts.read_avatar_file":
         case "experts.install_resource":
         case "experts.remove_resource":
         case "automation.list":

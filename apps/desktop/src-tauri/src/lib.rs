@@ -8,73 +8,6 @@ use serde_json::Value;
 use tauri::{Emitter, Manager, WindowEvent};
 use tokio::sync::{broadcast, mpsc};
 
-/// 打开系统原生目录选择器（Windows: PowerShell WinForms FolderBrowserDialog）。
-/// 用户取消时返回 None。
-#[tauri::command]
-async fn pick_folder() -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(|| -> Result<Option<String>, String> {
-        const SCRIPT: &str = "\
-Add-Type -AssemblyName System.Windows.Forms; \
-$owner = New-Object System.Windows.Forms.Form; \
-$owner.TopMost = $true; \
-$d = New-Object System.Windows.Forms.FolderBrowserDialog; \
-$d.Description = '选择项目文件夹'; \
-if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }";
-        let mut command = std::process::Command::new("powershell");
-        command.args(["-NoProfile", "-STA", "-Command", SCRIPT]);
-        // CREATE_NO_WINDOW：GUI 进程 spawn powershell 不弹终端
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x0800_0000);
-        }
-        let output = command
-            .output()
-            .map_err(|e| format!("failed to launch folder picker: {e}"))?;
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok(if text.is_empty() { None } else { Some(text) })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// 打开系统原生文件选择器（单选）。kind 决定过滤器预设：
-/// "image" = 头像图片；缺省 = 技能压缩包/插件源文件。取消返回 None。
-#[tauri::command]
-async fn pick_file(kind: Option<String>) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<Option<String>, String> {
-        let (filter, title) = match kind.as_deref() {
-            Some("image") => (
-                "图片 (*.png;*.jpg;*.jpeg;*.webp;*.gif)|*.png;*.jpg;*.jpeg;*.webp;*.gif|所有文件 (*.*)|*.*",
-                "选择头像图片",
-            ),
-            _ => (
-                "技能包/插件 (*.zip;*.tgz;*.tar.gz;*.gz;*.ts;*.js)|*.zip;*.tgz;*.tar.gz;*.gz;*.ts;*.js|所有文件 (*.*)|*.*",
-                "选择要安装的技能包或插件",
-            ),
-        };
-        let script = format!(
-            "Add-Type -AssemblyName System.Windows.Forms; $owner = New-Object System.Windows.Forms.Form; $owner.TopMost = $true; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = '{}'; $d.Title = '{}'; if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $d.FileName }}",
-            filter, title
-        );
-        let mut command = std::process::Command::new("powershell");
-        command.args(["-NoProfile", "-STA", "-Command", &script]);
-        // CREATE_NO_WINDOW：GUI 进程 spawn powershell 不弹终端
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x0800_0000);
-        }
-        let output = command
-            .output()
-            .map_err(|e| format!("failed to launch file picker: {e}"))?;
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok(if text.is_empty() { None } else { Some(text) })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 /// 在系统文件管理器中打开目录（Windows: explorer，macOS: Finder，Linux: xdg-open）。
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
@@ -141,6 +74,38 @@ async fn sync_status(state: tauri::State<'_, Arc<CoreCtx>>) -> Result<Value, Str
     state.sync.status().await
 }
 
+// git 分支信息与切换（项目 chip 的分支选择器）：CoreCtx::handle 的薄转换层
+
+#[tauri::command]
+async fn git_info(state: tauri::State<'_, Arc<CoreCtx>>, cwd: String) -> Result<Value, String> {
+    state.handle("git_info", serde_json::json!({ "cwd": cwd })).await
+}
+
+#[tauri::command]
+async fn git_branches(state: tauri::State<'_, Arc<CoreCtx>>, cwd: String) -> Result<Value, String> {
+    state.handle("git_branches", serde_json::json!({ "cwd": cwd })).await
+}
+
+#[tauri::command]
+async fn git_checkout(
+    state: tauri::State<'_, Arc<CoreCtx>>,
+    cwd: String,
+    branch: String,
+    create: Option<bool>,
+) -> Result<Value, String> {
+    state
+        .handle(
+            "git_checkout",
+            serde_json::json!({ "cwd": cwd, "branch": branch, "create": create }),
+        )
+        .await
+}
+
+#[tauri::command]
+async fn fs_list(state: tauri::State<'_, Arc<CoreCtx>>, path: Option<String>) -> Result<Value, String> {
+    state.handle("fs_list", serde_json::json!({ "path": path })).await
+}
+
 pub fn run() {
     let (sync_tx, sync_rx) = mpsc::channel::<pidock_core::sync::SyncControl>(8);
     let ctx = CoreCtx::new(CorePaths::default_data(), sync_tx);
@@ -162,10 +127,12 @@ pub fn run() {
             sync_configure,
             sync_status,
             sync_disable,
+            git_info,
+            git_branches,
+            git_checkout,
+            fs_list,
             tray::desktop_config_get,
             tray::desktop_config_set,
-            pick_folder,
-            pick_file,
             reveal_path
         ])
         .setup(move |app| {

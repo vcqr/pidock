@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { basename, fmtBytes } from "../utils/time.js";
-import { FOLDER_PICKER } from "../databus.js";
+import { FOLDER_PICKER, GIT_API } from "../databus.js";
 import FileIcon from "./FileIcon.vue";
 import Icon from "./Icon.vue";
 
@@ -66,6 +66,7 @@ const emit = defineEmits<{
 const I = {
   folder: "folder-line",
   folderAdd: "folder-add-line",
+  branch: "git-branch-line",
   chevD: "arrow-down-s-line",
   x: "close-line",
   check: "check-line",
@@ -95,6 +96,8 @@ const newPath = ref("");
 const rootEl = ref<HTMLElement | null>(null);
 /** 桌面端注入系统目录选择器；web / 未注入时回退到行内路径输入 */
 const folderPicker = inject(FOLDER_PICKER, null);
+/** git 分支信息与切换（CoreCtx 命令面）；未注入（理论上不会）时不显示分支 chip */
+const gitApi = inject(GIT_API, null);
 
 /** 底栏下拉状态 */
 const plusOpen = ref(false);
@@ -609,6 +612,120 @@ function addFolder(): void {
   newPath.value = "";
 }
 
+// ---- git 分支选择（所选项目目录是 git 仓库时显示分支 chip） ----
+const gitBranch = ref<string | null>(null);
+const gitIsRepo = ref(false);
+const gitDetached = ref(false);
+const branchOpen = ref(false);
+const branchQuery = ref("");
+const branchList = ref<Array<{ name: string; current: boolean }>>([]);
+const branchLoading = ref(false);
+const branchBusy = ref(false);
+const branchErr = ref("");
+const creatingBranch = ref(false);
+const newBranchName = ref("");
+
+/** 拉取所选目录的 git 信息；非仓库 / git 不可用都按无 git 信息处理 */
+async function refreshGitInfo(): Promise<void> {
+  const cwd = selected.value;
+  if (!cwd || !gitApi || !props.centered) {
+    gitIsRepo.value = false;
+    gitBranch.value = null;
+    return;
+  }
+  try {
+    const info = await gitApi.info(cwd);
+    if (selected.value !== cwd) return; // 期间目录已切换
+    gitIsRepo.value = info.is_repo;
+    gitBranch.value = info.branch;
+    gitDetached.value = info.detached;
+  } catch {
+    if (selected.value === cwd) {
+      gitIsRepo.value = false;
+      gitBranch.value = null;
+    }
+  }
+}
+watch(selected, refreshGitInfo, { immediate: true });
+
+async function refreshBranches(): Promise<void> {
+  const cwd = selected.value;
+  if (!cwd || !gitApi) return;
+  branchLoading.value = true;
+  try {
+    const res = await gitApi.branches(cwd);
+    if (selected.value !== cwd) return;
+    branchList.value = res.branches;
+  } catch (e) {
+    branchErr.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    branchLoading.value = false;
+  }
+}
+
+const filteredBranches = computed(() => {
+  const q = branchQuery.value.trim().toLowerCase();
+  if (!q) return branchList.value;
+  return branchList.value.filter((b) => b.name.toLowerCase().includes(q));
+});
+
+function toggleProjectMenu(): void {
+  menuOpen.value = !menuOpen.value;
+  branchOpen.value = false;
+}
+
+async function toggleBranchMenu(): Promise<void> {
+  branchOpen.value = !branchOpen.value;
+  if (!branchOpen.value) return;
+  menuOpen.value = false;
+  adding.value = false;
+  branchQuery.value = "";
+  branchErr.value = "";
+  creatingBranch.value = false;
+  await refreshBranches();
+}
+
+/** 检出分支；已在当前分支时仅收起菜单 */
+async function checkoutBranch(name: string): Promise<void> {
+  const cwd = selected.value;
+  if (!cwd || !gitApi || branchBusy.value) return;
+  if (branchList.value.find((b) => b.name === name)?.current) {
+    branchOpen.value = false;
+    return;
+  }
+  branchBusy.value = true;
+  branchErr.value = "";
+  try {
+    await gitApi.checkout(cwd, name);
+    await Promise.all([refreshGitInfo(), refreshBranches()]);
+    branchOpen.value = false;
+  } catch (e) {
+    branchErr.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    branchBusy.value = false;
+  }
+}
+
+/** 创建并检出新分支 */
+async function createBranch(): Promise<void> {
+  const cwd = selected.value;
+  const name = newBranchName.value.trim();
+  if (!cwd || !gitApi || !name || branchBusy.value) return;
+  branchBusy.value = true;
+  branchErr.value = "";
+  try {
+    await gitApi.checkout(cwd, name, true);
+    await Promise.all([refreshGitInfo(), refreshBranches()]);
+    branchOpen.value = false;
+    creatingBranch.value = false;
+    newBranchName.value = "";
+  } catch (e) {
+    branchErr.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    branchBusy.value = false;
+  }
+}
+
 function onDocClick(e: MouseEvent): void {
   if (rootEl.value && !rootEl.value.contains(e.target as Node)) {
     menuOpen.value = false;
@@ -619,6 +736,9 @@ function onDocClick(e: MouseEvent): void {
     modelOpen.value = false;
     plusOpen.value = false;
     modelQuery.value = "";
+    branchOpen.value = false;
+    creatingBranch.value = false;
+    branchErr.value = "";
   }
 }
 onMounted(() => document.addEventListener("click", onDocClick));
@@ -707,56 +827,108 @@ function onKeydown(e: KeyboardEvent): void {
 
 <template>
   <div ref="rootEl" class="composer" :class="{ centered }" :title="disabled ? disabledHint : ''">
-    <div v-if="centered" class="c-folder" @click="menuOpen = !menuOpen">
-      <template v-if="selected">
-        <span class="c-clear" title="清除项目选择" @click.stop="clearSelected">
-          <Icon :name="I.x" :size="11" />
-        </span>
-        <Icon :name="I.folder" :size="14" />
-        <span class="c-name">{{ chipLabel }}</span>
-      </template>
-      <template v-else>
-        <Icon :name="I.chat" :size="14" />
-        <span class="c-name">不在项目中工作</span>
-      </template>
-      <span class="c-chev" :class="{ open: menuOpen }"><Icon :name="I.chevD" :size="12" /></span>
-
-      <!-- 项目菜单：搜索 / 项目列表 / 打开文件夹 / 不在项目中工作 -->
-      <div v-if="menuOpen" class="c-menu" @click.stop>
-        <div class="c-search">
-          <Icon :name="I.search" :size="14" />
-          <input v-model="menuQuery" placeholder="搜索工作区" @keydown.enter="filteredProjects[0] && pick(filteredProjects[0]!)" />
-        </div>
-        <div class="c-list">
-          <button
-            v-for="p in filteredProjects"
-            :key="p"
-            class="c-item"
-            :class="{ on: p === selected }"
-            :title="p"
-            @click="pick(p)"
-          >
-            <Icon :name="I.folder" :size="14" />
-            <span class="c-item-name">{{ basename(p) }}</span>
-            <Icon v-if="p === selected" class="c-check" :name="I.check" :size="14" />
-          </button>
-          <div v-if="!filteredProjects.length" class="c-empty">没有匹配的项目</div>
-        </div>
-        <div class="c-sep"></div>
-        <template v-if="adding">
-          <div class="c-addrow">
-            <input v-model="newPath" placeholder="文件夹绝对路径，如 D:\project\demo" @keydown.enter="addFolder" />
-            <button class="c-addbtn" @click="addFolder">添加</button>
-          </div>
+    <div v-if="centered" class="c-chips">
+      <div class="c-folder" @click="toggleProjectMenu">
+        <template v-if="selected">
+          <span class="c-clear" title="清除项目选择" @click.stop="clearSelected">
+            <Icon :name="I.x" :size="11" />
+          </span>
+          <Icon :name="I.folder" :size="14" />
+          <span class="c-name">{{ chipLabel }}</span>
         </template>
-        <button v-else class="c-item c-action" @click="onOpenFolder">
-          <Icon :name="I.folderAdd" :size="14" />
-          <span>打开文件夹</span>
-        </button>
-        <button class="c-item c-action" :class="{ on: !selected }" @click="selectNone">
+        <template v-else>
           <Icon :name="I.chat" :size="14" />
-          <span>不在项目中工作</span>
-        </button>
+          <span class="c-name">不在项目中工作</span>
+        </template>
+        <span class="c-chev" :class="{ open: menuOpen }"><Icon :name="I.chevD" :size="12" /></span>
+
+        <!-- 项目菜单：搜索 / 项目列表 / 打开文件夹 / 不在项目中工作 -->
+        <div v-if="menuOpen" class="c-menu" @click.stop>
+          <div class="c-search">
+            <Icon :name="I.search" :size="14" />
+            <input v-model="menuQuery" placeholder="搜索工作区" @keydown.enter="filteredProjects[0] && pick(filteredProjects[0]!)" />
+          </div>
+          <div class="c-list">
+            <button
+              v-for="p in filteredProjects"
+              :key="p"
+              class="c-item"
+              :class="{ on: p === selected }"
+              :title="p"
+              @click="pick(p)"
+            >
+              <Icon :name="I.folder" :size="14" />
+              <span class="c-item-name">{{ basename(p) }}</span>
+              <Icon v-if="p === selected" class="c-check" :name="I.check" :size="14" />
+            </button>
+            <div v-if="!filteredProjects.length" class="c-empty">没有匹配的项目</div>
+          </div>
+          <div class="c-sep"></div>
+          <template v-if="adding">
+            <div class="c-addrow">
+              <input v-model="newPath" placeholder="文件夹绝对路径，如 D:\project\demo" @keydown.enter="addFolder" />
+              <button class="c-addbtn" @click="addFolder">添加</button>
+            </div>
+          </template>
+          <button v-else class="c-item c-action" @click="onOpenFolder">
+            <Icon :name="I.folderAdd" :size="14" />
+            <span>打开文件夹</span>
+          </button>
+          <button class="c-item c-action" :class="{ on: !selected }" @click="selectNone">
+            <Icon :name="I.chat" :size="14" />
+            <span>不在项目中工作</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 分支 chip：所选目录是 git 仓库时显示（检测 / 列表 / 检出走 CoreCtx git 命令） -->
+      <div
+        v-if="selected && gitIsRepo && gitApi"
+        class="c-branch"
+        :title="gitDetached ? 'HEAD 处于游离状态（未在任何分支上）' : ''"
+        @click="toggleBranchMenu()"
+      >
+        <Icon :name="I.branch" :size="14" />
+        <span class="c-name">{{ gitBranch ?? "HEAD" }}</span>
+        <span class="c-chev" :class="{ open: branchOpen }"><Icon :name="I.chevD" :size="12" /></span>
+
+        <!-- 分支菜单：搜索 / 本地分支列表（当前分支打勾）/ 创建并检出新分支 -->
+        <div v-if="branchOpen" class="c-menu c-branch-menu" @click.stop>
+          <div class="c-search">
+            <Icon :name="I.search" :size="14" />
+            <input v-model="branchQuery" placeholder="搜索分支" />
+          </div>
+          <div class="c-group">分支</div>
+          <div class="c-list">
+            <button
+              v-for="b in filteredBranches"
+              :key="b.name"
+              class="c-item"
+              :class="{ on: b.current }"
+              :disabled="branchBusy"
+              @click="checkoutBranch(b.name)"
+            >
+              <Icon :name="I.branch" :size="14" />
+              <span class="c-item-name">{{ b.name }}</span>
+              <Icon v-if="b.current" class="c-check" :name="I.check" :size="14" />
+            </button>
+            <div v-if="!filteredBranches.length" class="c-empty">
+              {{ branchLoading ? "加载中..." : "没有匹配的分支" }}
+            </div>
+          </div>
+          <div class="c-sep"></div>
+          <template v-if="creatingBranch">
+            <div class="c-addrow">
+              <input v-model="newBranchName" placeholder="新分支名称" @keydown.enter="createBranch" />
+              <button class="c-addbtn" :disabled="branchBusy" @click="createBranch">创建</button>
+            </div>
+          </template>
+          <button v-else class="c-item c-action" @click="creatingBranch = true; newBranchName = branchQuery.trim()">
+            <Icon :name="I.plus" :size="14" />
+            <span>创建并检出新分支...</span>
+          </button>
+          <div v-if="branchErr" class="c-branch-err">{{ branchErr }}</div>
+        </div>
       </div>
     </div>
 
@@ -1097,20 +1269,30 @@ function onKeydown(e: KeyboardEvent): void {
   color: var(--pd-text-4);
 }
 
-.c-folder {
+.c-chips {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.c-folder,
+.c-branch {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--pd-text-2);
   font-size: calc(13px * var(--pd-font-scale));
-  margin-bottom: 10px;
   cursor: pointer;
   position: relative;
   width: fit-content;
   user-select: none;
 }
-.c-folder:hover { color: var(--pd-text); }
-.c-folder svg { color: var(--pd-text-3); }
+.c-folder:hover,
+.c-branch:hover { color: var(--pd-text); }
+.c-folder svg,
+.c-branch svg { color: var(--pd-text-3); }
+.c-folder > .c-name,
+.c-branch > .c-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .c-clear {
   width: 16px;
   height: 16px;
@@ -1181,6 +1363,22 @@ function onKeydown(e: KeyboardEvent): void {
 .c-empty { padding: 10px; font-size: calc(12px * var(--pd-font-scale)); color: var(--pd-text-4); }
 .c-sep { height: 1px; background: var(--pd-border-soft); margin: 4px; }
 .c-action svg { color: var(--pd-text-3); }
+.c-item:disabled { opacity: 0.5; cursor: default; }
+.c-item:disabled:hover { background: none; color: var(--pd-text-2); }
+/* 分支菜单的分组标题与错误行 */
+.c-group {
+  padding: 6px 10px 3px;
+  font-size: calc(11px * var(--pd-font-scale));
+  color: var(--pd-text-4);
+  user-select: none;
+}
+.c-branch-err {
+  padding: 6px 10px 4px;
+  font-size: calc(12px * var(--pd-font-scale));
+  color: var(--pd-red-text);
+  word-break: break-all;
+  user-select: text;
+}
 .c-addrow {
   display: flex;
   gap: 6px;

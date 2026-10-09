@@ -1,7 +1,7 @@
 export { createAgentStore } from "./store.js";
 export type { AgentStore, UiItem, UiMessageItem, UiToolItem, SessionSummaryUi, UiBlock, ExpertInfo } from "./store.js";
-export type { DataBus, ReplayEvent } from "./databus.js";
-export { ATTACHMENT_LOADER, FOLDER_PICKER, FILE_PICKER, REVEAL_PATH, WINDOW_CONTROLS, type WindowControls } from "./databus.js";
+export type { DataBus, ReplayEvent, FsListing } from "./databus.js";
+export { ATTACHMENT_LOADER, FOLDER_PICKER, FILE_PICKER, REVEAL_PATH, GIT_API, FS_LIST, WINDOW_CONTROLS, type WindowControls, type GitApi } from "./databus.js";
 export { initTheme, toggleTheme, applyTheme, themeMode, themePref, applyFontSettings, fontSettings, type ThemeMode, type ThemePref, type FontSettings } from "./theme.js";
 export { appConfirm, type ConfirmOptions } from "./confirm.js";
 export { default as ChatView } from "./components/ChatView.vue";
@@ -9,6 +9,7 @@ export { default as AutomationView } from "./components/AutomationView.vue";
 export { default as ExpertsView } from "./components/ExpertsView.vue";
 export { default as Composer } from "./components/Composer.vue";
 export { default as FileIcon } from "./components/FileIcon.vue";
+export { default as FolderBrowser } from "./components/FolderBrowser.vue";
 export { default as FilePreview } from "./components/FilePreview.vue";
 export { default as FilesPanel } from "./components/FilesPanel.vue";
 export { default as Icon } from "./components/Icon.vue";

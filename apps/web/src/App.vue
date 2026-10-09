@@ -6,11 +6,16 @@ import {
   AutomationView,
   ChatView,
   ExpertsView,
+  FolderBrowser,
   Icon,
   SessionSidebar,
   SettingsView,
   StatePill,
   ATTACHMENT_LOADER,
+  FOLDER_PICKER,
+  FILE_PICKER,
+  GIT_API,
+  FS_LIST,
   createAgentStore,
   initTheme,
   themeMode,
@@ -266,6 +271,8 @@ async function doLogin(): Promise<void> {
 
 function logout(): void {
   clearAuth();
+  folderPick.value?.resolve(null);
+  folderPick.value = null;
   auth.value = null;
   bus.value = null;
   store.value = null;
@@ -282,6 +289,50 @@ provide(ATTACHMENT_LOADER, (id: string) => {
   if (!b) return Promise.reject(new Error("not connected"));
   return b.loadAttachment(id);
 });
+
+// git 分支与目录列举（远程控制视图的分支 chip 与「打开文件夹」弹层）：
+// 命令中继到当前控制的目标机器上执行，机器侧跑旧版桌面端时会报 not supported
+async function machineReq(method: string, params: unknown): Promise<any> {
+  const b = bus.value;
+  if (!b) throw new Error("not connected");
+  return await b.request(method, params);
+}
+provide(GIT_API, {
+  info: (cwd: string) => machineReq("git_info", { cwd }),
+  branches: (cwd: string) => machineReq("git_branches", { cwd }),
+  checkout: (cwd: string, branch: string, create?: boolean) =>
+    machineReq("git_checkout", { cwd, branch, create: create ?? false }),
+});
+provide(FS_LIST, (path?: string) => machineReq("fs_list", { path: path ?? null }));
+
+// 「打开文件夹」与文件选择（头像/技能包/插件导入）自绘弹层（与桌面共用 FolderBrowser）：
+// fs_list 中继到目标机器，拿到的路径也是机器本地路径，交给 experts.read_avatar_file /
+// config.*.install 等在机器侧读取。Promise 化，取消返回 null。
+const folderPick = ref<null | {
+  resolve: (p: string | null) => void;
+  mode: "dir" | "file";
+  accept?: string[];
+}>(null);
+provide(FOLDER_PICKER, () => openFolderPick("dir"));
+const IMAGE_ACCEPT = [".png", ".jpg", ".jpeg", ".webp", ".gif"];
+const INSTALL_ACCEPT = [".zip", ".tgz", ".tar.gz", ".gz", ".ts", ".js"];
+provide(FILE_PICKER, (kind?: "install" | "image") =>
+  openFolderPick("file", kind === "image" ? IMAGE_ACCEPT : INSTALL_ACCEPT),
+);
+function openFolderPick(mode: "dir" | "file", accept?: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    folderPick.value?.resolve(null); // 上一次未收尾的选择请求按取消处理
+    folderPick.value = { resolve, mode, accept };
+  });
+}
+function onFolderPicked(p: string): void {
+  folderPick.value?.resolve(p);
+  folderPick.value = null;
+}
+function onFolderPickCancel(): void {
+  folderPick.value?.resolve(null);
+  folderPick.value = null;
+}
 
 function boot(state: any, client: AuthClient): void {
   auth.value = client;
@@ -673,6 +724,13 @@ const sessionsEmpty = computed(() => {
     </main>
   </div>
   <div v-else class="boot-screen">加载中…</div>
+  <FolderBrowser
+    v-if="folderPick"
+    :mode="folderPick.mode"
+    :accept="folderPick.accept"
+    @pick="onFolderPicked"
+    @close="onFolderPickCancel"
+  />
   </n-config-provider>
 </template>
 

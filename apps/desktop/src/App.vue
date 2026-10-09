@@ -6,6 +6,7 @@ import {
   AutomationView,
   ChatView,
   ExpertsView,
+  FolderBrowser,
   Icon,
   SessionSidebar,
   SettingsView,
@@ -14,6 +15,8 @@ import {
   FOLDER_PICKER,
   FILE_PICKER,
   REVEAL_PATH,
+  GIT_API,
+  FS_LIST,
   WINDOW_CONTROLS,
   createAgentStore,
   initTheme,
@@ -122,24 +125,44 @@ function resetLayout(): void {
 
 provide(ATTACHMENT_LOADER, (id: string) => bus.loadAttachment(id));
 
-// 系统原生目录选择器（输入卡片项目菜单的「打开文件夹」）；
-// webhost 模式下服务端明确报错，这里照旧吞掉返回 null（视为取消）
-provide(FOLDER_PICKER, async () => {
-  try {
-    return await ipc<string | null>("pick_folder");
-  } catch {
-    return null;
-  }
+// git 分支信息与切换（输入卡片项目 chip 旁的分支选择器）；CoreCtx 命令面，webhost 同样支持
+provide(GIT_API, {
+  info: (cwd: string) => ipc("git_info", { cwd }),
+  branches: (cwd: string) => ipc("git_branches", { cwd }),
+  checkout: (cwd: string, branch: string, create?: boolean) => ipc("git_checkout", { cwd, branch, create: create ?? false }),
 });
 
-// 系统原生文件选择器（本地导入）：kind 决定过滤器（缺省技能/插件包，"image" = 头像图片）
-provide(FILE_PICKER, async (kind?: "install" | "image") => {
-  try {
-    return await ipc<string | null>("pick_file", { kind: kind ?? null });
-  } catch {
-    return null;
-  }
-});
+// 服务端目录列举：「打开文件夹」与文件选择弹层的数据源（桌面与 webhost 统一，替代系统对话框）
+provide(FS_LIST, (path?: string) => ipc("fs_list", { path: path ?? null }));
+
+// 「打开文件夹」与文件选择（头像/技能包/插件导入）统一走自绘 FolderBrowser 弹层：
+// 点行进入子目录、路径栏可跳转，dir 模式「选择当前目录」/ file 模式「选择此文件」确认，
+// Esc·取消返回 null。桌面与 web 模式行为一致（webhost 下 fs_list 即节点机目录）。
+const folderPick = ref<null | {
+  resolve: (p: string | null) => void;
+  mode: "dir" | "file";
+  accept?: string[];
+}>(null);
+provide(FOLDER_PICKER, () => openFolderPick("dir"));
+const IMAGE_ACCEPT = [".png", ".jpg", ".jpeg", ".webp", ".gif"];
+const INSTALL_ACCEPT = [".zip", ".tgz", ".tar.gz", ".gz", ".ts", ".js"];
+provide(FILE_PICKER, (kind?: "install" | "image") =>
+  openFolderPick("file", kind === "image" ? IMAGE_ACCEPT : INSTALL_ACCEPT),
+);
+function openFolderPick(mode: "dir" | "file", accept?: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    folderPick.value?.resolve(null); // 上一次未收尾的选择请求按取消处理
+    folderPick.value = { resolve, mode, accept };
+  });
+}
+function onFolderPicked(p: string): void {
+  folderPick.value?.resolve(p);
+  folderPick.value = null;
+}
+function onFolderPickCancel(): void {
+  folderPick.value?.resolve(null);
+  folderPick.value = null;
+}
 
 // 在系统文件管理器中打开目录（会话右键菜单）
 provide(REVEAL_PATH, async (path: string) => {
@@ -353,6 +376,13 @@ onMounted(async () => {
         <span>正在启动 pi-host…</span>
       </div>
     </div>
+    <FolderBrowser
+      v-if="folderPick"
+      :mode="folderPick.mode"
+      :accept="folderPick.accept"
+      @pick="onFolderPicked"
+      @close="onFolderPickCancel"
+    />
   </n-config-provider>
 </template>
 

@@ -519,6 +519,7 @@ async fn execute_command(
         | "experts.save"
         | "experts.delete"
         | "experts.private_list"
+        | "experts.read_avatar_file"
         | "experts.install_resource"
         | "experts.remove_resource") => (passthrough, payload.clone()),
         // 本地定时任务管理：调度器在核心 Rust 侧，不经 host —— 直连 SchedulerManager
@@ -532,6 +533,18 @@ async fn execute_command(
                 crate::scheduler::dispatch_automation(scheduler, automation, payload.clone())
                     .await?;
             return Ok(Some(result));
+        }
+        // 本机命令：目录列举 / git 分支信息与切换。同样不经 host —— web console 的
+        // 「打开文件夹」弹层与分支 chip 中继到目标机器，在核心 Rust 侧执行
+        // （与桌面 ipc 的 fs_list / git_* 是同一份实现）
+        local @ ("fs_list" | "git_info" | "git_branches" | "git_checkout") => {
+            let result = match local {
+                "fs_list" => crate::fs::list(payload.clone()).await,
+                "git_info" => crate::git::info(payload.clone()).await,
+                "git_branches" => crate::git::branches(payload.clone()).await,
+                _ => crate::git::checkout(payload.clone()).await,
+            };
+            return result.map(Some);
         }
         other => {
             return Err(format!(

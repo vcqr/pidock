@@ -141,6 +141,10 @@ impl CoreCtx {
                 cfg.save(&self.desktop_cfg_path());
                 Ok(json!({"ok": true}))
             }
+            "git_info" => crate::git::info(args).await,
+            "git_branches" => crate::git::branches(args).await,
+            "git_checkout" => crate::git::checkout(args).await,
+            "fs_list" => crate::fs::list(args).await,
             "pick_folder" | "pick_file" => Err("Web 模式不支持系统文件对话框".into()),
             "reveal_path" => Err("Web 模式不支持打开本机文件管理器".into()),
             other => Err(format!("unknown command \"{other}\"")),

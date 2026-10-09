@@ -8,6 +8,8 @@
 
 pub mod config;
 pub mod ctx;
+pub mod fs;
+pub mod git;
 pub mod scheduler;
 pub mod supervisor;
 pub mod sync;

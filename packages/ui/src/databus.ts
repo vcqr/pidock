@@ -32,6 +32,28 @@ export const FILE_PICKER: InjectionKey<(kind?: "install" | "image") => Promise<s
 /** optional provide/inject handle for revealing a path in the OS file manager (desktop only) */
 export const REVEAL_PATH: InjectionKey<(path: string) => Promise<void>> = Symbol("pidock.revealPath");
 
+/** git 分支信息与切换（CoreCtx 命令面，桌面与 webhost 都提供）；项目 chip 的分支选择器用 */
+export interface GitApi {
+  /** 仓库检测 + 当前分支（非仓库时 is_repo = false） */
+  info(cwd: string): Promise<{ is_repo: boolean; branch: string | null; root: string | null; detached: boolean }>;
+  /** 本地分支列表（当前分支排最前） */
+  branches(cwd: string): Promise<{ current: string | null; branches: Array<{ name: string; current: boolean }> }>;
+  /** 检出分支；create = 创建并检出 */
+  checkout(cwd: string, branch: string, create?: boolean): Promise<{ ok: boolean; branch: string }>;
+}
+export const GIT_API: InjectionKey<GitApi> = Symbol("pidock.gitApi");
+
+/** 服务端目录列举（fs_list）：「打开文件夹」与文件选择弹层的数据源，桌面与 webhost 都提供 */
+export interface FsListing {
+  path: string;
+  parent: string | null;
+  /** 目录在前；dir 标志区分目录与文件 */
+  entries: Array<{ name: string; path: string; dir: boolean }>;
+  /** 常用目录快捷入口（桌面/下载/图片/文档），不存在时为 null */
+  specials?: Partial<Record<"desktop" | "downloads" | "pictures" | "documents", string | null>>;
+}
+export const FS_LIST: InjectionKey<(path?: string) => Promise<FsListing>> = Symbol("pidock.fsList");
+
 /** 无边框窗口控制（桌面端提供）；全屏页面（如设置中心）盖住标题栏时用它补齐窗口按钮 */
 export interface WindowControls {
   minimize(): void;

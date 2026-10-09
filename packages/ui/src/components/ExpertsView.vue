@@ -251,8 +251,11 @@ function toggleExclude(name: string): void {
 const avatarUploading = ref(false);
 
 /**
- * 头像上传：host 读本地图片 → data URL → 前端 canvas 缩到 128×128（cover 裁剪）
+ * 头像上传：文件选择器（FolderBrowser file 模式）取节点上的图片路径
+ * → host 读图转 data URL → 前端 canvas 缩到 128×128（cover 裁剪）
  * → 存 data URL（几十 KB，随 experts.json 落盘，免文件管理）。
+ * 走路径读取是为了远程场景：图可能就在节点机器上（agent 截图、项目素材等），
+ * console 远程控制时选的就是节点文件系统。
  */
 async function pickAvatar(): Promise<void> {
   if (avatarUploading.value || !pickFile) return;
