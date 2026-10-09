@@ -14,7 +14,6 @@ use axum::{
 };
 use futures_util::TryStreamExt;
 use mongodb::bson::{doc, Document as BsonDoc};
-use rand::Rng;
 use redis::AsyncCommands;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -306,6 +305,7 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::Rng;
 
     fn hex_char(rng: &mut impl Rng) -> char {
         b"0123456789abcdef"[rng.gen_range(0..16)] as char
