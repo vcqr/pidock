@@ -1674,4 +1674,22 @@ button.abort {
   background: var(--pd-red-soft);
   color: var(--pd-red-text);
 }
+/* 手机（≤480px）适配必须置于文件末尾：覆盖上方 .dd/.dd-menu 基础定位规则。
+ * 工具行只留图标（权限/模型/思考的下拉仍可点开）；弹层改相对 composer 全宽
+ * 定位（.dd 转静态），长模型名不再把菜单撑出屏幕。 */
+@media (max-width: 480px) {
+  .composer { padding: 12px 12px 10px; }
+  .bar { gap: 8px; }
+  .dd-btn > span:not(.ring):not(.c-chev) { display: none; }
+  .dd { position: static; }
+  .dd-menu,
+  .dd-menu.right {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    min-width: 0;
+  }
+  /* 菜单向上弹出，总高须小于 composer 上方视口空间，否则顶部（搜索框）被裁 */
+  .m-list { max-height: 180px; }
+}
 </style>
