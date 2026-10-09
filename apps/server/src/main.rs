@@ -80,6 +80,8 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
 
 #[derive(Deserialize)]
 struct PresignBody {
+    /// 旧桌面端把 token 放 body；新客户端走 Authorization 头。header 优先，body 兜底
+    #[serde(default)]
     token: String,
     sha256: String,
     size: i64,
@@ -89,9 +91,14 @@ struct PresignBody {
 /// payloads upload once. Ownership is bound on first upload.
 async fn attachments_presign(
     State(state): State<AppState>,
+    tok: BearerOpt,
     Json(body): Json<PresignBody>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let user_id = auth::verify_token(&state, &body.token, "access")
+    let bearer = tok
+        .0
+        .or_else(|| (!body.token.is_empty()).then(|| body.token.clone()))
+        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "missing token".to_string()))?;
+    let user_id = auth::verify_token(&state, &bearer, "access")
         .await
         .map(|c| c.sub)
         .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;

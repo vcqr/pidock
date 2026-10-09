@@ -1,9 +1,9 @@
 //! Admin：用户管理（列表/角色/禁用/删除）+ 登录方式（LDAP/OIDC）配置端点。
-//! 鉴权沿用项目惯例：GET/DELETE 的 token 走 query，POST/PUT/PATCH 的 token
-//! 在 JSON body；每个 handler 手动调 verify_admin（每请求查库，改角色立即生效）。
+//! 鉴权走 Authorization: Bearer（Bearer 提取器，query ?token= 兼容回落）；
+//! 每个 handler 手动调 verify_admin（每请求查库，改角色立即生效）。
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::Response,
     routing::{get, patch, post},
@@ -17,7 +17,7 @@ use mongodb::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::auth::{api_err, hash_password, verify_admin};
+use crate::auth::{api_err, hash_password, verify_admin, Bearer};
 use crate::ldap::LdapCfg;
 use crate::sso::OidcCfg;
 use crate::state::AppState;
@@ -42,11 +42,6 @@ impl Default for RegPolicy {
 
 pub async fn load_policy(state: &AppState) -> RegPolicy {
     load_cfg::<RegPolicy>(state, "policy").await
-}
-
-#[derive(Deserialize)]
-struct AdminTokenQuery {
-    token: String,
 }
 
 // ---------------------------------------------------- auth_config 读写
@@ -105,9 +100,9 @@ async fn save_cfg<T: serde::Serialize>(
 
 async fn users_list(
     State(state): State<AppState>,
-    Query(q): Query<AdminTokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, Response> {
-    verify_admin(&state, &q.token)
+    verify_admin(&state, &tok.0)
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     let docs = state
@@ -144,7 +139,6 @@ async fn users_list(
 
 #[derive(Deserialize)]
 struct UserPatchBody {
-    token: String,
     /// "admin" | "user"
     role: Option<String>,
     disabled: Option<bool>,
@@ -152,7 +146,6 @@ struct UserPatchBody {
 
 #[derive(Deserialize)]
 struct UserCreateBody {
-    token: String,
     email: String,
     /// 8~128 位，由管理员交付给用户
     password: String,
@@ -164,9 +157,10 @@ struct UserCreateBody {
 /// 管理员后台建号：绕过邀请码（注册关闭时的账户开通通道）
 async fn users_create(
     State(state): State<AppState>,
+    tok: Bearer,
     Json(body): Json<UserCreateBody>,
 ) -> Result<Json<Value>, Response> {
-    let admin_id = verify_admin(&state, &body.token)
+    let admin_id = verify_admin(&state, &tok.0)
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     let email = body.email.trim().to_lowercase();
@@ -207,16 +201,15 @@ async fn users_create(
 
 #[derive(Deserialize)]
 struct PolicyPutBody {
-    token: String,
     #[serde(flatten)]
     cfg: RegPolicy,
 }
 
 async fn policy_get(
     State(state): State<AppState>,
-    Query(q): Query<AdminTokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, Response> {
-    verify_admin(&state, &q.token)
+    verify_admin(&state, &tok.0)
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     let policy = load_policy(&state).await;
@@ -225,9 +218,10 @@ async fn policy_get(
 
 async fn policy_put(
     State(state): State<AppState>,
+    tok: Bearer,
     Json(body): Json<PolicyPutBody>,
 ) -> Result<Json<Value>, Response> {
-    verify_admin(&state, &body.token)
+    verify_admin(&state, &tok.0)
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     save_cfg(&state, "policy", &body.cfg).await?;
@@ -238,9 +232,10 @@ async fn policy_put(
 async fn users_patch(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    tok: Bearer,
     Json(body): Json<UserPatchBody>,
 ) -> Result<Json<Value>, Response> {
-    let admin_id = verify_admin(&state, &body.token)
+    let admin_id = verify_admin(&state, &tok.0)
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     if body.role.is_none() && body.disabled.is_none() {
@@ -291,9 +286,9 @@ async fn users_patch(
 async fn users_delete(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(q): Query<AdminTokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, Response> {
-    let admin_id = verify_admin(&state, &q.token)
+    let admin_id = verify_admin(&state, &tok.0)
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     if id == admin_id {
@@ -327,16 +322,15 @@ async fn users_delete(
 
 #[derive(Deserialize)]
 struct LdapPutBody {
-    token: String,
     #[serde(flatten)]
     cfg: LdapCfg,
 }
 
 async fn ldap_cfg_get(
     State(state): State<AppState>,
-    Query(q): Query<AdminTokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, Response> {
-    verify_admin(&state, &q.token)
+    verify_admin(&state, &tok.0)
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     let cfg = load_ldap_cfg(&state).await;
@@ -345,9 +339,10 @@ async fn ldap_cfg_get(
 
 async fn ldap_cfg_put(
     State(state): State<AppState>,
+    tok: Bearer,
     Json(body): Json<LdapPutBody>,
 ) -> Result<Json<Value>, Response> {
-    verify_admin(&state, &body.token)
+    verify_admin(&state, &tok.0)
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     body.cfg
@@ -360,16 +355,15 @@ async fn ldap_cfg_put(
 
 #[derive(Deserialize)]
 struct OidcPutBody {
-    token: String,
     #[serde(flatten)]
     cfg: OidcCfg,
 }
 
 async fn oidc_cfg_get(
     State(state): State<AppState>,
-    Query(q): Query<AdminTokenQuery>,
+    tok: Bearer,
 ) -> Result<Json<Value>, Response> {
-    verify_admin(&state, &q.token)
+    verify_admin(&state, &tok.0)
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     let cfg = load_oidc_cfg(&state).await;
@@ -378,9 +372,10 @@ async fn oidc_cfg_get(
 
 async fn oidc_cfg_put(
     State(state): State<AppState>,
+    tok: Bearer,
     Json(body): Json<OidcPutBody>,
 ) -> Result<Json<Value>, Response> {
-    verify_admin(&state, &body.token)
+    verify_admin(&state, &tok.0)
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     body.cfg
@@ -393,7 +388,6 @@ async fn oidc_cfg_put(
 
 #[derive(Deserialize)]
 struct LdapTestBody {
-    token: String,
     /// 可选：用来验证 user_filter 与用户绑定
     #[serde(default)]
     username: String,
@@ -404,9 +398,10 @@ struct LdapTestBody {
 
 async fn ldap_test(
     State(state): State<AppState>,
+    tok: Bearer,
     Json(body): Json<LdapTestBody>,
 ) -> Result<Json<Value>, Response> {
-    verify_admin(&state, &body.token)
+    verify_admin(&state, &tok.0)
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     let cfg = load_ldap_cfg(&state).await;
