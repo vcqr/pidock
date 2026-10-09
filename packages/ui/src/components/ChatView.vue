@@ -1117,7 +1117,8 @@ export default { components: { ToolCard, MessageItem } };
 .preview-overlay {
   position: absolute;
   inset: 0;
-  z-index: 30;
+  /* 高于窄屏的文件树/审查/进度浮层（z 45）：从浮层点文件打开的预览要盖住来源 */
+  z-index: 50;
   border-left: 1px solid var(--pd-border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
 }
