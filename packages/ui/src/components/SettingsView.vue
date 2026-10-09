@@ -1665,4 +1665,34 @@ code {
   border-radius: 5px;
   padding: 1px 5px;
 }
+/* 窄屏（手机/极窄窗口）：左侧导航变顶部横向滚动条，内容区铺满 */
+@media (max-width: 768px) {
+  .body { flex-direction: column; }
+  .nav {
+    width: 100%;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 8px 10px;
+    border-right: none;
+    border-bottom: 1px solid var(--pd-border-soft);
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav-sec {
+    display: flex;
+    gap: 2px;
+    margin: 0;
+    flex: none;
+  }
+  .nav-sec-title { display: none; }
+  .nav-item {
+    width: auto;
+    flex: none;
+    white-space: nowrap;
+  }
+  .content { padding: 18px 16px 44px; }
+}
 </style>

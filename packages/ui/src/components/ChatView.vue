@@ -1079,6 +1079,8 @@ export default { components: { ToolCard, MessageItem } };
   flex: 1;
   position: relative;
   display: grid;
+  /* minmax(0,1fr)：轨道不被 composer 工具行的 min-content 撑破窄容器 */
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   padding: 24px 40px 60px;
   overflow: hidden;
@@ -1111,6 +1113,11 @@ export default { components: { ToolCard, MessageItem } };
   color: var(--pd-text);
   margin: 0 0 34px;
   letter-spacing: 0.02em;
+}
+/* 手机：收窄留白与问候字号，避免换行后观感松散 */
+@media (max-width: 480px) {
+  .home-wrap { padding: 20px 16px 48px; }
+  .greeting { font-size: calc(21px * var(--pd-font-scale)); margin-bottom: 26px; }
 }
 .errbar {
   display: flex;

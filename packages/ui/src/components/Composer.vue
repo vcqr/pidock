@@ -1036,6 +1036,13 @@ function onKeydown(e: KeyboardEvent): void {
 .composer.centered { box-shadow: var(--pd-shadow); }
 .flex-sp { flex: 1; }
 
+/* 手机：工具行只留图标（权限/模型/思考的下拉仍可点开），防止 min-content 撑破窄屏 */
+@media (max-width: 480px) {
+  .composer { padding: 12px 12px 10px; }
+  .bar { gap: 8px; }
+  .dd-btn > span:not(.ring):not(.c-chev) { display: none; }
+}
+
 /* ---- @ 文件提及弹层 ---- */
 .mention-menu {
   position: absolute;

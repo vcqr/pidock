@@ -113,6 +113,8 @@ function goAdmin(pane: "invites" | "users" | "auth"): void {
   view.value = "admin";
 }
 const showMachineInfo = ref(false);
+/** 手机端（≤768px）会话侧栏变抽屉，此为开关；桌面端样式不渲染遮罩与偏移 */
+const wsSideOpen = ref(false);
 
 async function refreshMachines(): Promise<void> {
   if (!auth.value || !bus.value) return;
@@ -175,6 +177,7 @@ async function enterMachine(machineId: string): Promise<void> {
 /** 返回机器卡片墙 */
 function goHome(): void {
   showMachineInfo.value = false;
+  wsSideOpen.value = false;
   view.value = "home";
   void refreshMachines();
   void refreshSessionCounts();
@@ -228,11 +231,14 @@ async function testExpert(e: { id: string; name: string }): Promise<void> {
 }
 
 // 新建会话（首条消息创建）后退出新建任务模式；侧栏点选在 @select 里直接退出
-// ——重选同一会话时 activeId 不变，watch 不会触发
+// ——重选同一会话时 activeId 不变，watch 不会触发；手机端同时收起抽屉
 watch(
   () => store.value?.activeId,
   (v) => {
-    if (v) newTaskMode.value = false;
+    if (v) {
+      newTaskMode.value = false;
+      wsSideOpen.value = false;
+    }
   },
 );
 
@@ -568,7 +574,7 @@ const sessionsEmpty = computed(() => {
   </div>
 
   <!-- workspace -->
-  <div v-else-if="store" class="layout">
+  <div v-else-if="store" class="layout" :class="{ 'ws-side-open': wsSideOpen }">
     <div class="col">
       <div class="side-head sessions-head">
         <b>会话</b>
@@ -581,21 +587,25 @@ const sessionsEmpty = computed(() => {
         :show-automation="true"
         :show-experts="true"
         :active-tool="showAutomation ? 'automation' : showExperts ? 'experts' : undefined"
-        @select="(id) => { showAutomation = false; showExperts = false; newTaskMode = false; store?.openSession(id); }"
-        @new-task="() => { showAutomation = false; showExperts = false; startNewTask(); }"
-        @open-project="(cwd) => { showAutomation = false; showExperts = false; startNewTask(cwd); }"
-        @browse-project="(cwd) => { browseCwd = { cwd, seq: (browseCwd?.seq ?? 0) + 1 }; }"
+        @select="(id) => { showAutomation = false; showExperts = false; newTaskMode = false; wsSideOpen = false; store?.openSession(id); }"
+        @new-task="() => { showAutomation = false; showExperts = false; wsSideOpen = false; startNewTask(); }"
+        @open-project="(cwd) => { showAutomation = false; showExperts = false; wsSideOpen = false; startNewTask(cwd); }"
+        @browse-project="(cwd) => { wsSideOpen = false; browseCwd = { cwd, seq: (browseCwd?.seq ?? 0) + 1 }; }"
         @remove-project="removeProject"
         @remove-session="(id) => store?.removeSessions([id])"
         @rename="(id, name) => store?.renameSession(id, name)"
-        @open-settings="(tab) => openSettings(tab)"
-        @open-automation="() => { showAutomation = !showAutomation; if (showAutomation) showExperts = false; }"
-        @open-experts="() => { showExperts = !showExperts; if (showExperts) showAutomation = false; }"
+        @open-settings="(tab) => { wsSideOpen = false; openSettings(tab); }"
+        @open-automation="() => { wsSideOpen = false; showAutomation = !showAutomation; if (showAutomation) showExperts = false; }"
+        @open-experts="() => { wsSideOpen = false; showExperts = !showExperts; if (showExperts) showAutomation = false; }"
       />
     </div>
+    <div v-if="wsSideOpen" class="side-scrim" @click="wsSideOpen = false" />
 
     <main class="main">
       <header class="topbar">
+        <button class="tb-btn tb-menu" title="会话列表" @click="wsSideOpen = !wsSideOpen">
+          <Icon name="menu-line" :size="16" />
+        </button>
         <button class="tb-btn" title="返回节点列表" @click="goHome">
           <Icon name="arrow-left-line" :size="15" />
         </button>

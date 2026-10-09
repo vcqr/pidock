@@ -202,10 +202,12 @@ function fmtDate(s: string): string {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .pat-titlerow b {
   color: var(--pd-text);
   font-size: calc(15px * var(--pd-font-scale));
+  flex: none;
 }
 .pat-titlerow .sub {
   color: var(--pd-text-4);
