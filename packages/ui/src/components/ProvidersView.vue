@@ -1286,4 +1286,22 @@ async function reloadRuntime(): Promise<void> {
   border-radius: 8px;
 }
 .me-cancel:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+/* 窄屏：左右双栏改上下堆叠（列表限高可滚，详情在下），否则详情被挤成一字一行 */
+@media (max-width: 640px) {
+  .prov-page {
+    flex-direction: column;
+    overflow-y: auto;
+    gap: 12px;
+    padding: 14px 12px 18px;
+  }
+  .list-pane {
+    width: auto;
+    flex: none;
+    max-height: 220px;
+  }
+  .detail-pane {
+    flex: none;
+    padding: 16px 14px 18px;
+  }
+}
 </style>
