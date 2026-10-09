@@ -6,8 +6,10 @@ import {
   bracketMatching,
   defaultHighlightStyle,
   syntaxHighlighting,
+  HighlightStyle,
   LanguageDescription,
 } from "@codemirror/language";
+import { tags as t } from "@lezer/highlight";
 import { unifiedMergeView } from "@codemirror/merge";
 import { languages } from "@codemirror/language-data";
 import FileIcon from "./FileIcon.vue";
@@ -52,6 +54,22 @@ function dirName(p: string): string {
 }
 
 /** 主题随 themeMode 实时构建（旧实现模块加载时一次性求值，深→浅切换后面板残留深色样式） */
+// 暗色语法高亮：defaultHighlightStyle 是为浅背景设计的深色 token，暗色背景下几乎不可读
+const darkHighlight = HighlightStyle.define([
+  { tag: t.comment, color: "#7f848e", fontStyle: "italic" },
+  { tag: [t.keyword, t.moduleKeyword, t.controlKeyword], color: "#c678dd" },
+  { tag: [t.string, t.special(t.string), t.character], color: "#98c379" },
+  { tag: [t.number, t.bool, t.null, t.atom], color: "#d19a66" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.macroName], color: "#61afef" },
+  { tag: [t.typeName, t.className, t.namespace], color: "#e5c07b" },
+  { tag: [t.variableName, t.propertyName, t.definition(t.variableName)], color: "#e06c75" },
+  { tag: [t.operator, t.punctuation, t.separator, t.bracket], color: "#abb2bf" },
+  { tag: [t.meta, t.processingInstruction], color: "#56b6c2" },
+  { tag: [t.heading, t.strong], color: "#e06c75", fontWeight: "bold" },
+  { tag: [t.link, t.url], color: "#98c379", textDecoration: "underline" },
+  { tag: t.invalid, color: "#f44747" },
+]);
+
 function makeReviewTheme() {
   return EditorView.theme(
     {
@@ -115,7 +133,7 @@ async function buildEditor(): Promise<void> {
         highlightSpecialChars(),
         EditorView.lineWrapping,
         bracketMatching(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(themeMode.value === "dark" ? darkHighlight : defaultHighlightStyle, { fallback: true }),
         EditorState.readOnly.of(true),
         EditorView.editable.of(false),
         makeReviewTheme(),
