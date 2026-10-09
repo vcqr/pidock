@@ -1199,16 +1199,28 @@ export function createAgentStore(bus: DataBus) {
   }
 
   /** 回合结束后拉取各回合文件变更（按轮分组） */
+  let fileChangesRetrying = false;
   async function fetchFileChanges(): Promise<void> {
-    if (!activeId.value) return;
+    const sessionId = activeId.value;
+    if (!sessionId) return;
     try {
-      const r = await bus.request("session.file_changes", { session_id: activeId.value });
+      const r = await bus.request("session.file_changes", { session_id: sessionId });
+      // 会话可能已切换，丢弃过期响应
+      if (activeId.value !== sessionId) return;
       turnFileChanges.value = (r.turns ?? []).map((t: any) => ({
         turnId: t.turn_id ?? "",
         files: t.files ?? [],
       }));
+      fileChangesRetrying = false;
     } catch {
-      turnFileChanges.value = [];
+      // 瞬态失败（桌面忙/离线、命令超时）不清空已有卡片，短延迟补拉一次；
+      // 之前是静默清空且无重试，打开会话赶上一次超时文件卡片就永久缺失
+      if (fileChangesRetrying) return;
+      fileChangesRetrying = true;
+      setTimeout(() => {
+        fileChangesRetrying = false;
+        void fetchFileChanges();
+      }, 5000);
     }
   }
 

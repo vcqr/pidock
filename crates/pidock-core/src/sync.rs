@@ -781,11 +781,21 @@ async fn sync_loop(
         let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut closed = false;
+        // 命令回包队列：命令在独立任务并发执行（SplitSink 不可 clone），
+        // 回包经此通道由主循环统一发送
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<String>();
         loop {
             tokio::select! {
                 _ = heartbeat.tick() => {
                     if ws_sink.send(WsMessage::Text(json!({"ctrl":"heartbeat"}).to_string().into())).await.is_err() {
                         closed = true;
+                    }
+                }
+                reply = cmd_rx.recv() => {
+                    if let Some(frame) = reply {
+                        if ws_sink.send(WsMessage::Text(frame.into())).await.is_err() {
+                            closed = true;
+                        }
                     }
                 }
                 ev = event_rx.recv() => {
@@ -815,8 +825,17 @@ async fn sync_loop(
                                     let command = frame.get("command").cloned().unwrap_or(json!({}));
                                     let session_id = command.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                     let cmd_type = command.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                    let result = execute_command(&supervisor, &scheduler, &session_id, &cmd_type, command.get("payload").unwrap_or(&json!({}))).await;                                    let reply = command_result_envelope(&session_id, &command_id, &result);
-                                    let _ = ws_sink.send(WsMessage::Text(reply.to_string().into())).await;
+                                    // 命令并发执行：host 端 dispatch 本就是异步并发派发，
+                                    // 这里若串行 await，单条慢命令会堵死命令通道与心跳，
+                                    // web 端表现为成片「命令超时」（file_changes 等快照拉取也全部失败）
+                                    let supervisor = supervisor.clone();
+                                    let scheduler = scheduler.clone();
+                                    let cmd_tx = cmd_tx.clone();
+                                    tokio::spawn(async move {
+                                        let result = execute_command(&supervisor, &scheduler, &session_id, &cmd_type, command.get("payload").unwrap_or(&json!({}))).await;
+                                        let reply = command_result_envelope(&session_id, &command_id, &result);
+                                        let _ = cmd_tx.send(reply.to_string());
+                                    });
                                 } else if frame.get("ctrl").and_then(|v| v.as_str()) == Some("registered") {
                                     if let Some(mid) = frame.get("machine_id").and_then(|v| v.as_str()) {
                                         let mut c = sync.cfg.lock().await;
