@@ -555,11 +555,25 @@ function readFilesWidth(): number | null {
   const v = Number(localStorage.getItem(FILES_KEY));
   return Number.isFinite(v) && v >= FILES_MIN && v <= 1200 ? Math.round(v) : null;
 }
-/** pane1（主内容）flex-basis：未开文件树时占满；打开时 = 容器 − 触发条 − 面板宽 */
+/** pane1（主内容）flex-basis：未开文件树时占满；打开时 = 容器 − 触发条 − 面板宽；窄屏恒占满（面板浮层） */
 const bodyPane1Size = computed(() =>
-  props.filesCwd ? `calc(100% - ${SPLIT_TRIGGER}px - ${filesWidth.value}px)` : "100%",
+  props.filesCwd && !isNarrow.value ? `calc(100% - ${SPLIT_TRIGGER}px - ${filesWidth.value}px)` : "100%",
 );
-const bodyPane1Max = computed(() => `${Math.max(360, chatW.value - SPLIT_TRIGGER - FILES_MIN)}px`);
+const bodyPane1Max = computed(() => (isNarrow.value ? "100%" : `${Math.max(360, chatW.value - SPLIT_TRIGGER - FILES_MIN)}px`));
+const bodyPane2Style = computed(() =>
+  isNarrow.value
+    ? {
+        position: "absolute" as const,
+        inset: "0",
+        zIndex: 45,
+        width: "100%",
+        boxShadow: "0 10px 32px rgba(0, 0, 0, 0.4)",
+        display: "flex",
+        // 未打开文件树时空浮层不得拦截对话区点击
+        pointerEvents: props.filesCwd ? ("auto" as const) : ("none" as const),
+      }
+    : { flex: "1 1 0", minWidth: "0", overflow: "hidden" },
+);
 function onBodySplitSize(s: string | number): void {
   const usable = Math.max(0, chatW.value - SPLIT_TRIGGER);
   const px = typeof s === "string" ? parseFloat(s) : s * usable;
@@ -745,12 +759,12 @@ watch(
       direction="horizontal"
       class="body-split"
       :size="bodyPane1Size"
-      min="360px"
+      :min="isNarrow ? '0px' : '360px'"
       :max="bodyPane1Max"
       :resize-trigger-size="6"
-      :disabled="!filesCwd"
+      :disabled="!filesCwd || isNarrow"
       :pane1-style="{ display: 'flex', minWidth: '0', overflow: 'hidden' }"
-      :pane2-style="{ flex: '1 1 0', minWidth: '0', overflow: 'hidden' }"
+      :pane2-style="bodyPane2Style"
       @update:size="onBodySplitSize"
       @drag-end="saveFilesWidth"
     >
@@ -1074,12 +1088,13 @@ export default { components: { ToolCard, MessageItem } };
   min-height: 0;
 }
 .chat.home { background: var(--pd-bg); }
-/* 文件树宽度可拖的分栏容器（NSplit）：#1 主内容，#2 文件树面板 */
+/* 文件树宽度可拖的分栏容器（NSplit）：#1 主内容，#2 文件树面板；窄屏 #2 为浮层 */
 .body-split {
   flex: 1;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 }
 /* 主内容区（split #1）：文件预览浮层的定位参考 */
 .main-area {
