@@ -74,13 +74,9 @@ pub mod kafka {
         }
     }
 
-    pub struct KafkaSource {
-        consumer: StreamConsumer,
-    }
-
     /// 预建 topic（单分区：ingest 单 worker 保序）。broker 侧自动建 topic 是
     /// 惰性的，消费端在 topic 缺位时会持续报 UnknownTopicOrPartition，
-    /// 启动时显式建掉，失败不阻塞（消费端每秒重试）。
+    /// 启动/重建时显式建掉，失败不阻塞（消费端重试）。
     pub async fn ensure_topic(brokers: &str, topic: &str) {
         let admin: AdminClient<DefaultClientContext> = ClientConfig::new()
             .set("bootstrap.servers", brokers)
@@ -108,10 +104,22 @@ pub mod kafka {
         }
     }
 
+    pub struct KafkaSource {
+        brokers: String,
+        topic: String,
+    }
+
     impl KafkaSource {
         pub fn connect(brokers: &str, topic: &str) -> anyhow::Result<Self> {
+            Ok(Self {
+                brokers: brokers.into(),
+                topic: topic.into(),
+            })
+        }
+
+        fn build_consumer(&self) -> anyhow::Result<StreamConsumer> {
             let consumer: StreamConsumer = ClientConfig::new()
-                .set("bootstrap.servers", brokers)
+                .set("bootstrap.servers", &self.brokers)
                 .set("group.id", "pidock-ingest")
                 .set("enable.auto.commit", "true")
                 .set("auto.offset.reset", "earliest")
@@ -119,24 +127,50 @@ pub mod kafka {
                 .set("session.timeout.ms", "10000")
                 .set("heartbeat.interval.ms", "3000")
                 .create()?;
-            consumer.subscribe(&[topic])?;
-            Ok(Self { consumer })
+            consumer.subscribe(&[&self.topic])?;
+            Ok(consumer)
         }
     }
 
     #[async_trait]
     impl EventSource for KafkaSource {
+        /// 自愈式消费：consumer 在 broker 不可用时创建会永久卡死（组协调可连、
+        /// fetch 永远失败，rdkafka 不会自愈），因此连续传输失败达到阈值即丢弃
+        /// 实例重建（offset 由 group commits / auto.offset.reset 保证不丢不重）。
         async fn run(&self, mut handler: Box<dyn FnMut(String) + Send>) {
+            // ensure_topic 在每次重建时都尝试：compose 同起时 topic 可能尚未建出
+            kafka::ensure_topic(&self.brokers, &self.topic).await;
             loop {
-                match self.consumer.recv().await {
-                    Ok(msg) => {
-                        if let Some(Ok(payload)) = msg.payload_view::<str>() {
-                            handler(payload.to_string());
-                        }
-                    }
+                let consumer = match self.build_consumer() {
+                    Ok(c) => c,
                     Err(e) => {
-                        tracing::warn!("kafka recv error: {e}");
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        tracing::warn!("kafka consumer build failed: {e}; retrying in 3s");
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        continue;
+                    }
+                };
+                let mut transport_failures = 0u32;
+                loop {
+                    match consumer.recv().await {
+                        Ok(msg) => {
+                            transport_failures = 0;
+                            if let Some(Ok(payload)) = msg.payload_view::<str>() {
+                                handler(payload.to_string());
+                            }
+                        }
+                        Err(e) => {
+                            transport_failures += 1;
+                            tracing::warn!(
+                                "kafka recv error ({transport_failures}): {e}"
+                            );
+                            if transport_failures >= 10 {
+                                tracing::error!(
+                                    "kafka consumer 连续 10 次传输失败，重建 consumer 实例自愈"
+                                );
+                                break; // 丢弃卡死的实例，外层重建
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
                     }
                 }
             }
