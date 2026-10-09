@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { TodoItem } from "@pidock/protocol";
 import type { AgentStore, ExpertInfo } from "../store.js";
 import Icon from "./Icon.vue";
@@ -71,18 +71,36 @@ const expanded = computed(
   () =>
     !!props.store.activeId &&
     !chips.value.has(props.store.activeId) &&
-    (todos.value.length > 0 || !!props.expert),
+    (todos.value.length > 0 || !!props.expert) &&
+    // 窄屏：停靠第三栏会挤没聊天区，默认收起为小圆标，点圆标以浮层展开
+    (!isNarrow.value || userExpanded.value),
 );
 function collapse(): void {
   if (!props.store.activeId) return;
   chips.value = new Set(chips.value).add(props.store.activeId);
+  userExpanded.value = false;
 }
 function expand(): void {
   if (!props.store.activeId) return;
   const next = new Set(chips.value);
   next.delete(props.store.activeId);
   chips.value = next;
+  userExpanded.value = true;
 }
+
+/** 窄屏断点与 ProgressCard 样式的浮层断点保持一致 */
+const isNarrow = ref(typeof matchMedia === "function" && matchMedia("(max-width: 768px)").matches);
+if (typeof matchMedia === "function") {
+  const mq = matchMedia("(max-width: 768px)");
+  const onChange = (e: MediaQueryListEvent): void => {
+    isNarrow.value = e.matches;
+    if (e.matches) userExpanded.value = false;
+  };
+  mq.addEventListener("change", onChange);
+  onBeforeUnmount(() => mq.removeEventListener("change", onChange));
+}
+/** 窄屏下用户点小圆标的主动展开（宽屏恒为停靠态，不参与判断） */
+const userExpanded = ref(false);
 
 function copyPath(): void {
   const cwd = summary.value?.cwd;
@@ -91,7 +109,8 @@ function copyPath(): void {
 </script>
 
 <template>
-  <!-- 停靠态：第三栏，占布局不遮挡内容 -->
+  <!-- 停靠态：第三栏，占布局不遮挡内容（窄屏为右侧浮层，遮罩点击收起） -->
+  <div v-if="expanded && isNarrow" class="pcol-scrim" @click="collapse" />
   <aside v-if="expanded" class="pcol">
     <header class="head">
       <template v-if="expert">
@@ -196,6 +215,27 @@ function copyPath(): void {
   background: var(--pd-bg-panel);
   border-left: 1px solid var(--pd-border);
   padding: 12px 14px 16px;
+}
+/* 窄屏：第三栏改浮层（.conv-row 为定位上下文），不挤占聊天区宽度；
+ * 点头部按钮或遮罩收起为悬浮小圆标 */
+.pcol-scrim { display: none; }
+@media (max-width: 768px) {
+  .pcol-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 44;
+    background: rgba(0, 0, 0, 0.45);
+  }
+  .pcol {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 45;
+    width: min(84vw, 300px);
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.4);
+  }
 }
 .head {
   display: flex;
