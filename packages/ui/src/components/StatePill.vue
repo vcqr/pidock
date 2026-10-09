@@ -42,6 +42,8 @@ const colors: Record<string, string> = {
   gap: 6px;
   font-size: calc(12px * var(--pd-font-scale));
   color: var(--pd-text-2);
+  flex: none;
+  white-space: nowrap;
 }
 .dot {
   width: 8px;

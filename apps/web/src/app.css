@@ -632,10 +632,13 @@ button.primary:disabled {
     z-index: 50;
     background: rgba(0, 0, 0, 0.45);
   }
-  .topbar { gap: 8px; padding: 8px 10px; }
-  .mchip { max-width: 42vw; }
+  .topbar { gap: 6px; padding: 8px 10px; }
+  /* 各元素不收缩（状态胶囊曾文字竖排），靠限宽分配空间 */
+  .topbar > * { flex: none; }
+  .topbar > .mchip-wrap { flex: 0 1 auto; min-width: 0; }
+  .mchip { max-width: 34vw; }
   .transport, .who { display: none; }
-  .err { max-width: 32vw; }
+  .err { max-width: 26vw; min-width: 0; }
   .main :deep(.chat-main) { min-width: 0; }
   .hint { padding: 24px 16px; }
 }
