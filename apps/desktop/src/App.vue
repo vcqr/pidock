@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, provide, ref, watch } from "vue";
 import { darkTheme, NConfigProvider, NSplit } from "naive-ui";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, currentMonitor, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import {
   AutomationView,
   ChatView,
@@ -18,6 +18,9 @@ import {
   GIT_API,
   FS_LIST,
   WINDOW_CONTROLS,
+  IS_MAC,
+  installTauriDblclickGuard,
+  onTitlebarDblclick,
   createAgentStore,
   initTheme,
   themeMode,
@@ -182,10 +185,12 @@ const appWin = (() => {
   }
 })();
 const isMax = ref(false);
-async function refreshMax(): Promise<void> {
+const isFull = ref(false);
+async function refreshWinState(): Promise<void> {
   if (!appWin) return;
   try {
     isMax.value = await appWin.isMaximized();
+    isFull.value = await appWin.isFullscreen();
   } catch {
     /* not in tauri */
   }
@@ -196,6 +201,25 @@ function minimize(): void {
 function toggleMaximize(): void {
   void appWin?.toggleMaximize();
 }
+function toggleFullscreen(): void {
+  void appWin?.setFullscreen(!isFull.value);
+}
+/** 绿灯菜单「移到半屏」：按显示器工作区（去掉 Dock/菜单栏）平铺到左/右一半 */
+async function tileWindow(side: "left" | "right"): Promise<void> {
+  if (!appWin) return;
+  try {
+    if (isFull.value) await appWin.setFullscreen(false);
+    const mon = await currentMonitor();
+    if (!mon) return;
+    const wa = mon.workArea;
+    const half = Math.floor(wa.size.width / 2);
+    const x = side === "left" ? wa.position.x : wa.position.x + half;
+    await appWin.setPosition(new PhysicalPosition(x, wa.position.y));
+    await appWin.setSize(new PhysicalSize(half, wa.size.height));
+  } catch {
+    /* 显示器信息拿不到等瞬态，忽略 */
+  }
+}
 function closeWindow(): void {
   void appWin?.close();
 }
@@ -205,13 +229,17 @@ if (appWin) {
   provide(WINDOW_CONTROLS, {
     minimize,
     toggleMaximize,
+    toggleFullscreen,
+    tile: (side) => void tileWindow(side),
     close: closeWindow,
     isMax,
+    isFullscreen: isFull,
   });
 }
 
 onMounted(async () => {
   window.addEventListener("keydown", onGlobalKey);
+  installTauriDblclickGuard();
   // 新建会话（首条消息创建）后退出新建任务模式；侧栏点选在 @select 里直接退出
   // ——重选同一会话时 activeId 不变，watch 不会触发
   watch(
@@ -221,10 +249,10 @@ onMounted(async () => {
     },
   );
 
-  void refreshMax();
+  void refreshWinState();
   if (appWin) {
     try {
-      await appWin.onResized(() => void refreshMax());
+      await appWin.onResized(() => void refreshWinState());
     } catch {
       /* not in tauri */
     }
@@ -300,7 +328,8 @@ onMounted(async () => {
         <template #resize-trigger><div class="rz-line" /></template>
         <template #2>
       <main class="main">
-        <header class="titlebar" data-tauri-drag-region>
+        <!-- deep：整条子树可拖拽；双击最大化走 onTitlebarDblclick（内建脚本被守卫拦截） -->
+        <header class="titlebar" data-tauri-drag-region="deep" @dblclick="onTitlebarDblclick($event, toggleMaximize)">
           <StatePill :state="store.agentState" />
           <span class="transport">{{ bus.transport }}</span>
           <span v-if="store.lastError" class="err" :title="store.lastError">{{ store.lastError }}</span>
@@ -312,8 +341,8 @@ onMounted(async () => {
           >
             <Icon :name="themeMode === 'dark' ? 'sun-line' : 'moon-line'" :size="15" />
           </button>
-          <!-- 窗口控制按钮只在 Tauri 壳里渲染；浏览器里不显示 -->
-          <template v-if="appWin">
+          <!-- Windows/Linux 方块窗口按钮：只在 Tauri 壳里渲染；浏览器里不显示 -->
+          <template v-if="appWin && !IS_MAC">
             <span class="win-sep"></span>
             <button class="tbtn" title="最小化" @click="minimize">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14" /></svg>
@@ -432,6 +461,7 @@ onMounted(async () => {
   background: var(--pd-bg-panel);
   border-bottom: 1px solid var(--pd-border-soft);
   user-select: none;
+  -webkit-user-select: none; /* 旧 WKWebView 只认前缀写法，缺失时双击标题栏会选中文字 */
   flex: none;
 }
 .transport { font-size: calc(12px * var(--pd-font-scale)); color: var(--pd-text-4); }

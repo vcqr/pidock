@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref, watch } from "vue";
 import type { DataBus } from "../databus.js";
-import { REVEAL_PATH, WINDOW_CONTROLS } from "../databus.js";
+import { REVEAL_PATH, WINDOW_CONTROLS, IS_MAC, onTitlebarDblclick } from "../databus.js";
 import Icon from "./Icon.vue";
+import TrafficLights from "./TrafficLights.vue";
 import ProvidersView from "./ProvidersView.vue";
 import ToolsView from "./ToolsView.vue";
 import { applyTheme, themePref, applyFontSettings, fontSettings, type ThemePref } from "../theme.js";
@@ -541,17 +542,21 @@ function openFolder(): void {
 
 <template>
   <div class="settings">
-    <header class="head" data-tauri-drag-region>
+    <!-- deep：整条头部子树可拖拽；双击最大化走 onTitlebarDblclick（内建脚本被守卫拦截） -->
+    <header class="head" data-tauri-drag-region="deep" @dblclick="onTitlebarDblclick($event, () => win?.toggleMaximize())">
+      <!-- macOS 红绿灯在最左（系统位置）；Windows/Linux 方块按钮仍置于最右 -->
+      <TrafficLights />
       <button class="back-btn" title="返回工作区" @click="emit('close')">
         <Icon name="arrow-left-line" :size="16" />
         <span>返回工作区</span>
       </button>
       <h1>设置</h1>
       <span class="flex-sp"></span>
-      <span v-if="agentDir" class="agent-dir" :title="agentDir + '（点击打开）'" @click="openFolder">
+      <!-- 可点击元素（span 非 button 不会自动排除拖拽区），显式禁用拖拽保证点击 -->
+      <span v-if="agentDir" class="agent-dir" data-tauri-drag-region="false" :title="agentDir + '（点击打开）'" @click="openFolder">
         {{ agentDir }}
       </span>
-      <template v-if="win">
+      <template v-if="win && !IS_MAC">
         <span class="win-sep"></span>
         <button class="wbtn" title="最小化" @click="win.minimize()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14" /></svg>
@@ -1102,6 +1107,7 @@ function openFolder(): void {
   background: var(--pd-bg-panel);
   flex: none;
   user-select: none;
+  -webkit-user-select: none;
 }
 .back-btn {
   display: inline-flex;

@@ -58,11 +58,60 @@ export const FS_LIST: InjectionKey<(path?: string) => Promise<FsListing>> = Symb
 export interface WindowControls {
   minimize(): void;
   toggleMaximize(): void;
+  /** 进入/退出全屏（macOS 绿灯默认行为；Windows 无调用方） */
+  toggleFullscreen(): void;
+  /** 平铺到屏幕工作区左/右半边（macOS 绿灯悬停菜单的 Move & Resize） */
+  tile(side: "left" | "right"): void;
   close(): void;
   /** 当前是否最大化（最大化/还原图标切换） */
   isMax: Ref<boolean>;
+  /** 当前是否全屏（macOS 绿灯标题提示） */
+  isFullscreen: Ref<boolean>;
 }
 export const WINDOW_CONTROLS: InjectionKey<WindowControls> = Symbol("pidock.windowControls");
+
+let dblclickGuardInstalled = false;
+/**
+ * 安装全局守卫：标题栏（data-tauri-drag-region="deep"）上的原生多次点击（双击/三击）
+ * 不再交给 tauri 内建脚本处理（内建路径在 macOS 依赖 mouseup 像素级同位、且首次按下
+ * 已进入原生拖拽会话，触控板轻点也不产生 detail=2，双击经常不触发），统一由标题栏的
+ * @dblclick → onTitlebarDblclick 处理；拦截时同时阻止默认行为——tauri 内建脚本只在
+ * 非 macOS 路径做 preventDefault，macOS 的第二次按下没有拦截，WKWebView 会从那里
+ * 启动双击选词/拖选，把标题栏下方的主界面内容选亮。桌面端 App.vue 挂载时调用一次。
+ */
+export function installTauriDblclickGuard(): void {
+  if (dblclickGuardInstalled || typeof document === "undefined") return;
+  dblclickGuardInstalled = true;
+  document.addEventListener(
+    "mousedown",
+    (e) => {
+      if (e.detail >= 2 && (e.target as HTMLElement | null)?.closest?.('[data-tauri-drag-region="deep"]')) {
+        e.preventDefault(); // 阻止双击选词/三击选段等默认行为
+        e.stopPropagation(); // capture 阶段拦下，tauri 的 document 冒泡监听不再收到
+      }
+    },
+    true,
+  );
+}
+
+/**
+ * 标题栏 @dblclick 处理：点在可交互元素（按钮/链接/输入类，或显式 data-tauri-drag-region="false"）
+ * 上不触发最大化，其余区域（含状态胶囊、空白）等同原生标题栏双击缩放；
+ * 并清掉可能已产生的选区（按下位置漂移落进内容区时浏览器已开始选择）。
+ */
+export function onTitlebarDblclick(e: MouseEvent, toggle: () => void): void {
+  const el = e.target as HTMLElement | null;
+  if (el?.closest("button, a, input, select, textarea, [data-tauri-drag-region='false']")) return;
+  e.preventDefault();
+  window.getSelection()?.removeAllRanges();
+  toggle();
+}
+
+/**
+ * 运行平台是否 macOS。用于窗口控制按钮按平台切换风格（macOS 红绿灯 / Windows 方块按钮），
+ * 只在 Tauri 壳里生效；WKWebView 的 navigator.platform 为 "MacIntel"（iPad 无桌面壳，不涉及）。
+ */
+export const IS_MAC = typeof navigator !== "undefined" && /^Mac/i.test(navigator.platform || navigator.userAgent);
 
 export interface ReplayEvent {
   seq: number;

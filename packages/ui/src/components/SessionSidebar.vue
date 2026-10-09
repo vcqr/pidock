@@ -2,8 +2,9 @@
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { SessionSummaryUi } from "../store.js";
 import { basename, relTime } from "../utils/time.js";
-import { REVEAL_PATH } from "../databus.js";
+import { REVEAL_PATH, WINDOW_CONTROLS, IS_MAC, onTitlebarDblclick } from "../databus.js";
 import Icon from "./Icon.vue";
+import TrafficLights from "./TrafficLights.vue";
 import { appConfirm } from "../confirm.js";
 
 const props = defineProps<{
@@ -56,6 +57,10 @@ const PREVIEW = 5;
 
 // ---- 右键菜单（会话行 / 项目行共用关闭机制与样式） ----
 const revealPath = inject(REVEAL_PATH, null);
+// macOS 桌面壳：窗口左上角（侧栏头部）渲染系统风格红绿灯，替代 π logo；
+// web/Windows 下红绿灯不渲染，logo 照常显示
+const winControls = inject(WINDOW_CONTROLS, null);
+const showMacLights = IS_MAC && winControls != null;
 const ctxMenu = ref<{ x: number; y: number; s: SessionSummaryUi } | null>(null);
 function openCtxMenu(e: MouseEvent, s: SessionSummaryUi): void {
   // 菜单尺寸约 224×370，贴边时向内收
@@ -302,8 +307,9 @@ onBeforeUnmount(() => {
 
 <template>
   <aside class="sidebar" :style="width ? { width: width + 'px', minWidth: width + 'px' } : undefined">
-    <div class="sb-head">
-      <div class="logo">π</div>
+    <div class="sb-head" data-tauri-drag-region="deep" @dblclick="onTitlebarDblclick($event, () => winControls?.toggleMaximize())">
+      <TrafficLights v-if="showMacLights" />
+      <div v-else class="logo">π</div>
       <span class="flex-sp"></span>
       <slot name="actions" />
     </div>
@@ -613,6 +619,8 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   padding: 14px 12px 10px;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .logo {
   width: 28px;
