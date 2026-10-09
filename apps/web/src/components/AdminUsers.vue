@@ -377,6 +377,9 @@ function fmtDate(s: string): string {
 .dname {
   color: var(--pd-text-4);
   font-size: calc(10.5px * var(--pd-font-scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chip {
   flex: none;
@@ -412,6 +415,7 @@ function fmtDate(s: string): string {
   font-size: calc(11px * var(--pd-font-scale));
   padding: 2px 8px;
   cursor: pointer;
+  white-space: nowrap;
 }
 .op:hover {
   border-color: var(--pd-accent);
@@ -424,5 +428,45 @@ function fmtDate(s: string): string {
 .op:disabled {
   color: var(--pd-text-4);
   cursor: not-allowed;
+}
+/* 窄屏：单行 flex 装不下（邮箱被压成一字一行、操作按钮溢出），改为两行布局 */
+@media (max-width: 640px) {
+  .policy-row {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .policy-row .op {
+    margin-left: auto;
+  }
+  .policy-hint {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+  .add-form {
+    flex-wrap: wrap;
+  }
+  .add-form input {
+    flex: 1 1 100%;
+  }
+  .add-form select {
+    flex: 1;
+  }
+  .usr-row {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .who {
+    flex: 1 1 100%;
+  }
+  .dates {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ops {
+    margin-left: auto;
+  }
 }
 </style>

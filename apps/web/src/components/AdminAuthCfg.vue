@@ -396,4 +396,23 @@ const activeTab = ref<"ldap" | "oidc">("ldap");
   color: var(--pd-text-2);
   word-break: break-all;
 }
+/* 窄屏：双列 grid 挤成窄条、测试行放不下，改单列 */
+@media (max-width: 640px) {
+  .card-head {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .grid {
+    grid-template-columns: 1fr;
+  }
+  .grid .span2 {
+    grid-column: auto;
+  }
+  .test {
+    flex-wrap: wrap;
+  }
+  .test input {
+    flex: 1 1 100%;
+  }
+}
 </style>
