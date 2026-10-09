@@ -63,21 +63,58 @@ const winControls = inject(WINDOW_CONTROLS, null);
 const showMacLights = IS_MAC && winControls != null;
 const ctxMenu = ref<{ x: number; y: number; s: SessionSummaryUi } | null>(null);
 function openCtxMenu(e: MouseEvent, s: SessionSummaryUi): void {
+  openCtxAt(e.clientX, e.clientY, s);
+}
+function openCtxAt(x: number, y: number, s: SessionSummaryUi): void {
   // 菜单尺寸约 224×370，贴边时向内收
   ctxMenu.value = {
-    x: Math.min(e.clientX, window.innerWidth - 232),
-    y: Math.min(e.clientY, window.innerHeight - 378),
+    x: Math.min(x, window.innerWidth - 232),
+    y: Math.min(y, window.innerHeight - 378),
     s,
   };
 }
 const projMenu = ref<{ x: number; y: number; g: Group } | null>(null);
 function openProjMenu(e: MouseEvent, g: Group): void {
+  openProjAt(e.clientX, e.clientY, g);
+}
+function openProjAt(x: number, y: number, g: Group): void {
   // 菜单尺寸约 208×240，贴边时向内收
   projMenu.value = {
-    x: Math.min(e.clientX, window.innerWidth - 216),
-    y: Math.min(e.clientY, window.innerHeight - 250),
+    x: Math.min(x, window.innerWidth - 216),
+    y: Math.min(y, window.innerHeight - 250),
     g,
   };
+}
+
+// ---- 移动端长按 = 右键（iOS Safari 长按不触发 contextmenu）----
+// 压住 500ms 且位移 <10px 视为长按；滚动/抬手即取消
+let pressTimer: ReturnType<typeof setTimeout> | undefined;
+function longPress(e: TouchEvent, open: (x: number, y: number) => void): void {
+  const start = e.touches[0];
+  if (!start) return;
+  const startX = start.clientX;
+  const startY = start.clientY;
+  const el = e.currentTarget as HTMLElement | null;
+  const cancel = () => {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = undefined;
+    }
+    el?.removeEventListener("touchmove", onCancelMove);
+    el?.removeEventListener("touchend", cancel);
+    el?.removeEventListener("touchcancel", cancel);
+  };
+  const onCancelMove = (ev: TouchEvent) => {
+    const cur = ev.touches[0];
+    if (cur && (Math.abs(cur.clientX - startX) > 10 || Math.abs(cur.clientY - startY) > 10)) cancel();
+  };
+  pressTimer = setTimeout(() => {
+    pressTimer = undefined;
+    open(startX, startY);
+  }, 500);
+  el?.addEventListener("touchmove", onCancelMove, { passive: true });
+  el?.addEventListener("touchend", cancel);
+  el?.addEventListener("touchcancel", cancel);
 }
 function closeCtxMenu(): void {
   ctxMenu.value = null;
@@ -302,6 +339,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKey);
   document.removeEventListener("click", onDocClick);
+  if (pressTimer) clearTimeout(pressTimer);
 });
 </script>
 
@@ -386,6 +424,7 @@ onBeforeUnmount(() => {
                 :title="g.cwd"
                 @click="emit('open-project', g.cwd)"
                 @contextmenu.prevent="openProjMenu($event, g)"
+                @touchstart.passive="longPress($event, (x, y) => openProjAt(x, y, g))"
               >
                 <span
                   class="chev"
@@ -408,6 +447,7 @@ onBeforeUnmount(() => {
                 :title="rowTitle(s)"
                 @click="emit('select', s.session_id)"
                 @contextmenu.prevent="openCtxMenu($event, s)"
+                @touchstart.passive="longPress($event, (x, y) => openCtxAt(x, y, s))"
               >
                 <span class="dot" :class="dotClass(s)"></span>
                 <input
@@ -459,6 +499,7 @@ onBeforeUnmount(() => {
               :title="rowTitle(s)"
               @click="emit('select', s.session_id)"
               @contextmenu.prevent="openCtxMenu($event, s)"
+                @touchstart.passive="longPress($event, (x, y) => openCtxAt(x, y, s))"
             >
               <span class="dot" :class="dotClass(s)"></span>
               <input
@@ -504,6 +545,7 @@ onBeforeUnmount(() => {
           :title="rowTitle(s)"
           @click="emit('select', s.session_id)"
           @contextmenu.prevent="openCtxMenu($event, s)"
+                @touchstart.passive="longPress($event, (x, y) => openCtxAt(x, y, s))"
         >
           <span class="dot" :class="dotClass(s)"></span>
           <input
@@ -798,6 +840,9 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   font-size: calc(13px * var(--pd-font-scale));
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none; /* 长按唤起菜单，不触发 iOS 文本选择 */
 }
 .task-row.flat { padding-left: 10px; }
 .task-row:hover { background: var(--pd-bg-hover); }
