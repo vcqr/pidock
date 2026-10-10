@@ -22,6 +22,7 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.0.4",
     "@pidock/protocol": "workspace:*",
+    "quickjs-wasi": "3.6.2",
     "typebox": "1.1.38",
     "unpdf": "^1.8.1"
   },

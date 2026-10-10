@@ -1,4 +1,6 @@
+import "./runtime-setup.js";
 import { createInterface } from "node:readline";
+import { prepareEnv } from "./env.js";
 import { ConfigService } from "./config.js";
 import { emitError, emitResponse } from "./emit.js";
 import { ExpertsService, readAvatarFile } from "./experts.js";
@@ -92,6 +94,9 @@ const handlers: Record<string, Handler> = {
   [Method.EXPERTS_READ_AVATAR_FILE]: (p) => readAvatarFile(String(p?.srcPath ?? "")),
 };
 
+// 启动即开始修整 PATH（登录 shell 探测与等待首请求并行），请求处理前统一等待
+const envReady = prepareEnv();
+
 async function dispatch(line: string): Promise<void> {
   let request: { id?: string; method?: string; params?: unknown };
   try {
@@ -105,6 +110,7 @@ async function dispatch(line: string): Promise<void> {
     if (id) emitError(id, "bad_request", "missing method");
     return;
   }
+  await envReady;
   const handler = handlers[method];
   if (!handler) {
     emitError(id, "unknown_method", `no handler for "${method}"`);

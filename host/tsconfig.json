@@ -13,7 +13,12 @@
     "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@earendil-works/pi-coding-agent/dist/config.js": [
+        "./node_modules/@earendil-works/pi-coding-agent/dist/config.js"
+      ]
+    }
   },
   "include": [
     "src",
