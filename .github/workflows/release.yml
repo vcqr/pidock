@@ -91,9 +91,12 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      # host sidecar 用 bun 编译成单文件可执行
+      # host sidecar 用 bun 编译成单文件可执行；固定版本：codemode 修复依赖
+      # compile 对动态 import .wasm 的内嵌行为（host/src/runtime-setup.ts，在 1.4.2 验证）
       - name: 安装 Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
 
       - name: 安装 Rust stable
         uses: dtolnay/rust-toolchain@stable
