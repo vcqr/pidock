@@ -370,7 +370,7 @@ fn command_result_envelope(
 
 /// translate a server command into a host request
 async fn execute_command(
-    supervisor: &Supervisor,
+    supervisor: &Arc<Supervisor>,
     scheduler: &Arc<SchedulerManager>,
     session_id: &str,
     cmd_type: &str,
@@ -553,6 +553,20 @@ async fn execute_command(
             ));
         }
     };
+    // agent.prompt/steer/follow_up 的宿主请求要等整个 agent turn 结束才返回
+    //（数秒到数分钟），若作为命令回执等待，web 端 30s 必然超时、消息气泡停在
+    // 「发送中」。这类命令的输出本就走事件流实时下发，这里立即回执「已受理」，
+    // turn 结果由事件流承载，宿主请求转为后台执行（失败仅记日志）。
+    if matches!(cmd_type, "agent.prompt" | "agent.steer" | "agent.follow_up") {
+        let supervisor = supervisor.clone();
+        let cmd_type = cmd_type.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = supervisor.request(cmd_type.clone(), params).await {
+                tracing::warn!("sync: agent command {cmd_type} failed: {e}");
+            }
+        });
+        return Ok(Some(json!({"accepted": true})));
+    }
     supervisor
         .request(method.to_string(), params)
         .await
