@@ -1,7 +1,7 @@
 {
   "name": "@pidock/web",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "PiDock web client (same UI as desktop, remote transport)",
   "type": "module",
   "scripts": {
