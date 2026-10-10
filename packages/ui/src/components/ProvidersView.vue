@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { NModal } from "naive-ui";
 import type { DataBus } from "../databus.js";
+import type { AgentStore } from "../store.js";
 import Icon from "./Icon.vue";
 import { appConfirm } from "../confirm.js";
 
@@ -12,7 +13,15 @@ import { appConfirm } from "../confirm.js";
  *         自定义供应商 = 图 2 表单（名称/API 类型/Base URL/API Key/获取模型列表/候选模型 ID），
  *         保存写入 ~/.pi/agent/models.json。
  */
-const props = defineProps<{ bus: DataBus }>();
+const props = defineProps<{ bus: DataBus; store?: AgentStore }>();
+
+/**
+ * 模型目录变更后同步全局 store：host 侧保存时已重建 ModelRuntime，
+ * 但聊天输入卡的模型下拉读的是 store.allModels 缓存，不刷新则要重启才可见。
+ */
+function syncGlobalModels(): void {
+  void props.store?.refreshModels();
+}
 
 
 const API_TYPES = [
@@ -173,6 +182,7 @@ async function saveModelEditor(): Promise<void> {
         },
       });
       await load();
+      syncGlobalModels();
       flash(`已保存「${e.origId}」的模型配置`);
       editingModel.value = null;
     } catch (err) {
@@ -392,6 +402,7 @@ async function saveCustom(): Promise<void> {
     adding.value = false;
     selected.value = null;
     await load();
+    syncGlobalModels();
     selected.value = id;
     loadForm();
   } catch (err) {
@@ -410,6 +421,7 @@ async function removeCustom(): Promise<void> {
     flash(`已删除「${id}」`);
     selected.value = null;
     await load();
+    syncGlobalModels();
   } catch (err) {
     flash(String(err));
   }
@@ -445,6 +457,7 @@ async function saveKey(): Promise<void> {
     keyDraft.value = "";
     keyEditing.value = false;
     await load();
+    syncGlobalModels();
   } catch (err) {
     flash(String(err));
   }
@@ -458,6 +471,7 @@ async function removeKey(): Promise<void> {
     await props.bus.request("config.providers.remove_key", { provider: id });
     flash(`「${id}」密钥已删除`);
     await load();
+    syncGlobalModels();
   } catch (err) {
     flash(String(err));
   }
@@ -487,6 +501,7 @@ async function reloadRuntime(): Promise<void> {
       flash(`模型目录已重载：${r?.providers ?? "?"} 个供应商 / ${r?.models ?? "?"} 个模型${aligned ? `，${aligned} 个已开会话已对齐` : ""}`);
     }
     await load();
+    syncGlobalModels();
   } catch (err) {
     flash(String(err));
   } finally {
@@ -903,19 +918,24 @@ async function reloadRuntime(): Promise<void> {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  margin-top: 8px;
   background: var(--pd-bg);
   border: 1px solid var(--pd-border);
   border-radius: 9px;
-  padding: 8px;
+  padding: 8px 8px;
   color: var(--pd-text-2);
   font-size: calc(12.5px * var(--pd-font-scale));
   cursor: pointer;
+  white-space: nowrap;
 }
 .add-btn:hover { color: var(--pd-text); border-color: var(--pd-accent); }
 .add-btn:disabled { opacity: 0.6; cursor: default; }
-.add-row { display: flex; gap: 8px; }
-.add-row .add-btn { flex: 1; }
+/* 纵向堆叠且间距收紧：240px 左栏横排塞不下「重载模型目录」，文字会折成两行 */
+.add-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
 
 /* 右栏 */
 .detail-pane {

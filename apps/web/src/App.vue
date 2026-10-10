@@ -933,6 +933,7 @@ onBeforeUnmount(() => {
       <SettingsView
         v-if="showSettings"
         :bus="bus!"
+        :store="store"
         :initial-pane="settingsPane"
         @close="showSettings = false"
         @reset-layout="() => {}"

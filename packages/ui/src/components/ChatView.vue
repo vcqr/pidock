@@ -634,7 +634,8 @@ onBeforeUnmount(() => {
   chatRO?.disconnect();
   chatRO = undefined;
 });
-// 每次进入对话页刷新一次全量模型（从供应商页改完配置返回后立即可见）
+// 启动时拉一次全量模型填充下拉缓存；后续变更由供应商页保存后调 store.refreshModels() 同步
+// （ChatView 经 v-show 保活，onMounted 只在应用启动时执行一次）
 onMounted(() => {
   void props.store.refreshModels();
   // 跟踪对话区宽度：NSplit 的 min/max 与面板宽度换算依赖它

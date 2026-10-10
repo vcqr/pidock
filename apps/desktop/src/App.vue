@@ -386,6 +386,7 @@ onMounted(async () => {
         <SettingsView
           v-if="showSettings"
           :bus="bus"
+          :store="store"
           :initial-pane="settingsPane"
           :extra-panes="[{ id: 'desktop', label: '桌面', icon: 'computer-line' }]"
           @close="showSettings = false"

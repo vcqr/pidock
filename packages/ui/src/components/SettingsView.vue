@@ -2,6 +2,7 @@
 import { computed, inject, onMounted, ref, watch } from "vue";
 import type { DataBus } from "../databus.js";
 import { REVEAL_PATH, WINDOW_CONTROLS, IS_MAC, onTitlebarDblclick } from "../databus.js";
+import type { AgentStore } from "../store.js";
 import Icon from "./Icon.vue";
 import TrafficLights from "./TrafficLights.vue";
 import ProvidersView from "./ProvidersView.vue";
@@ -18,6 +19,8 @@ import { applyTheme, themePref, applyFontSettings, fontSettings, type ThemePref 
 const props = withDefaults(
   defineProps<{
     bus: DataBus;
+    /** 全局 store：传给供应商页，模型目录变更后同步聊天输入卡的下拉缓存 */
+    store?: AgentStore;
     initialPane?: string;
     /** 宿主注入的额外页面（如桌面端的「桌面」）：内容经 `pane-<id>` 具名插槽提供 */
     extraPanes?: Array<{ id: string; label: string; icon: string }>;
@@ -316,10 +319,8 @@ const defaultModelKey = computed(
 
 const filteredModels = computed(() => {
   const q = modelQuery.value.trim().toLowerCase();
-  const list = q
-    ? models.value.filter((m) => `${m.provider}/${m.id}`.toLowerCase().includes(q))
-    : models.value.slice();
-  return list.slice(0, 200);
+  if (!q) return models.value.slice();
+  return models.value.filter((m) => `${m.provider}/${m.id}`.toLowerCase().includes(q));
 });
 
 async function ensureModels(force = false): Promise<void> {
@@ -500,7 +501,9 @@ const guideSteps = computed<Array<{ id: PaneId; title: string; desc: string; don
 watch(
   pane,
   (p) => {
-    if (p === "models" || p === "guide") void ensureModels();
+    // 模型页强制重拉：供应商页的保存不会通知本组件，modelsLoaded 缓存会让
+    // 新加的自定义模型在同一次设置窗口内搜不到；models.list 开销小，进页即刷
+    if (p === "models" || p === "guide") void ensureModels(true);
     else if (p === "memory") void ensureMemory();
     else if (p === "usage") void ensureUsage();
     else if (p === "general") void ensureProxy();
@@ -866,7 +869,7 @@ function openFolder(): void {
             </div>
           </div>
 
-          <h3 class="grp-title">设为默认模型（显示前 {{ filteredModels.length }} 个）</h3>
+          <h3 class="grp-title">设为默认模型（共 {{ filteredModels.length }} 个）</h3>
           <div class="search-row">
             <Icon name="search-line" :size="14" />
             <input v-model="modelQuery" placeholder="搜索模型，如 minimax / claude / kimi" />
@@ -893,7 +896,7 @@ function openFolder(): void {
 
         <!-- ============ 供应商与密钥（内嵌完整管理页） ============ -->
         <template v-else-if="pane === 'providers'">
-          <ProvidersView :bus="bus" />
+          <ProvidersView :bus="bus" :store="store" />
         </template>
 
         <!-- ============ 键盘快捷键 ============ -->
