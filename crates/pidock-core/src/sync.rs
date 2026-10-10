@@ -547,11 +547,11 @@ async fn execute_command(
             };
             return result.map(Some);
         }
-        other => {
-            return Err(format!(
-                "command type \"{other}\" not supported by this desktop"
-            ));
-        }
+        // 其余命令类型原样透传给宿主 ipc：web 与桌面共用同一套 store 命令面
+        // （config.* / session.* / experts.* / automation.* 等 ~80 种），逐一在
+        // sync 协议里实现不可维护，宿主本身认识全部命令；宿主不认识的类型
+        // 会以宿主自己的错误回 ok:false
+        other => (other, payload.clone()),
     };
     // agent.prompt/steer/follow_up 的宿主请求要等整个 agent turn 结束才返回
     //（数秒到数分钟），若作为命令回执等待，web 端 30s 必然超时、消息气泡停在
