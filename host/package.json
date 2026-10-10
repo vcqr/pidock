@@ -1,7 +1,7 @@
 {
   "name": "@pidock/host",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "PiDock pi-host: stdio daemon embedding the pi coding agent SDK (multi-session)",
   "type": "module",
   "engines": {

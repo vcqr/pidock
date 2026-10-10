@@ -1,6 +1,6 @@
 [package]
 name = "pidock-webhost"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT"
 description = "PiDock headless web shell: serve the desktop UI over HTTP + WS IPC bridge"
