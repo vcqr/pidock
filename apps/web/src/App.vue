@@ -608,11 +608,6 @@ onBeforeUnmount(() => {
   if (turnstileWidget) window.turnstile?.remove(turnstileWidget);
   window.clearInterval(otpTimerId);
 });
-
-const sessionsEmpty = computed(() => {
-  const items = store.value?.sessions ?? [];
-  return items.length === 0 && activeMachineId.value !== null;
-});
 </script>
 
 <template>
@@ -905,11 +900,9 @@ const sessionsEmpty = computed(() => {
         <span v-if="store.lastError" class="err" :title="store.lastError">{{ store.lastError }}</span>
         <span class="who">{{ auth?.userId.slice(0, 8) }}…</span>
       </header>
-      <div v-if="sessionsEmpty && !showAutomation && !showExperts" class="hint">
-        该节点还没有同步的会话，或在桌面端新建后开启同步。
-      </div>
+      <!-- 空节点也常驻 ChatView：无会话时落在首页输入卡，首条消息自动建会话（与桌面同构） -->
       <ChatView
-        v-show="!sessionsEmpty && !showAutomation && !showExperts"
+        v-show="!showAutomation && !showExperts"
         :store="store"
         :disabled="!activeMachine?.online"
         :disabled-hint="'节点离线，无法远程控制'"
