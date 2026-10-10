@@ -85,7 +85,8 @@ export function createWebBus(auth: AuthClient): DataBus & {
     // 长期 token 不再出现在 URL / 反代访问日志里；取票失败按断线节奏重试
     void (async () => {
       try {
-        const r = await auth.request("/auth/ws-ticket");
+        // 必须 POST：GET 会 405（fetch 默认 GET），WS 从此连不上且静默重试
+        const r = await auth.request("/auth/ws-ticket", { method: "POST" });
         const url = `${auth.serverUrl.replace(/^http/, "ws")}/ws/web?ticket=${r.ticket}`;
         const socket = new WebSocket(url);
         ws = socket;
