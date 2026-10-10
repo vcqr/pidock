@@ -300,6 +300,7 @@ export class SessionPool {
 
   private setState(tracked: TrackedSession, sessionId: string, state: AgentState): void {
     emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state });
+    if (state === "idle") this.emitFileChanges(sessionId);
   }
 
   // ------------------------------------------------------------- creation
@@ -1644,6 +1645,27 @@ export class SessionPool {
     return { turns: out };
   }
 
+  /**
+   * 推送回合文件变更汇总（回合结束/撤销后调用）。persist:false 事件：
+   * 桌面 UI 直接刷新卡片；上云后由 ingest 镜像为会话行状态，节点离线时
+   * web 端兜底展示。载荷超预算时从最旧回合开始裁剪。
+   */
+  private emitFileChanges(sessionId: string): void {
+    const { turns } = this.fileChanges({ session_id: sessionId });
+    let list = turns;
+    let truncated = false;
+    while (JSON.stringify({ turns: list }).length > 64 * 1024 && list.length > 1) {
+      list = list.slice(1);
+      truncated = true;
+    }
+    emitEvent(
+      sessionId,
+      Event.FILE_CHANGES,
+      { turns: list, ...(truncated ? { truncated } : {}) },
+      { persist: false },
+    );
+  }
+
   /** 单个文件的快照与当前内容（供 UI 渲染 diff）；turn_id 缺省取最近回合 */
   fileDiff(params: { session_id: string; path: string; turn_id?: string }): {
     oldText: string;
@@ -1681,6 +1703,7 @@ export class SessionPool {
     }
     turns.delete(turnId!);
     this.persistSnapshots(params.session_id);
+    this.emitFileChanges(params.session_id);
     return { reverted };
   }
 

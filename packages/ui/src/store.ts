@@ -557,6 +557,14 @@ export function createAgentStore(bus: DataBus) {
         }
         break;
       }
+      case "file_changes": {
+        // 回合结束/撤销后 host 推送的变更快照（web 经云端中继），替代拉取；
+        // 空快照同样落地（撤销后清空卡片是正确语义）
+        if (e.session_id && e.session_id === activeId.value) {
+          turnFileChanges.value = normalizeTurnFileChanges(e.payload?.turns);
+        }
+        break;
+      }
       case "agent_state_changed":
         agentState.value = e.payload?.state ?? "idle";
         break;
@@ -1198,6 +1206,17 @@ export function createAgentStore(bus: DataBus) {
     }
   }
 
+  /** 回合文件变更载荷归一（RPC 结果与 file_changes 事件共用） */
+  function normalizeTurnFileChanges(turns: unknown): Array<{
+    turnId: string;
+    files: Array<{ path: string; added: number; removed: number; isNew: boolean }>;
+  }> {
+    return (Array.isArray(turns) ? turns : []).map((t: any) => ({
+      turnId: t.turn_id ?? "",
+      files: t.files ?? [],
+    }));
+  }
+
   /** 回合结束后拉取各回合文件变更（按轮分组） */
   let fileChangesRetrying = false;
   async function fetchFileChanges(): Promise<void> {
@@ -1207,10 +1226,7 @@ export function createAgentStore(bus: DataBus) {
       const r = await bus.request("session.file_changes", { session_id: sessionId });
       // 会话可能已切换，丢弃过期响应
       if (activeId.value !== sessionId) return;
-      turnFileChanges.value = (r.turns ?? []).map((t: any) => ({
-        turnId: t.turn_id ?? "",
-        files: t.files ?? [],
-      }));
+      turnFileChanges.value = normalizeTurnFileChanges(r?.turns);
       fileChangesRetrying = false;
     } catch {
       // 瞬态失败（桌面忙/离线、命令超时）不清空已有卡片，短延迟补拉一次；

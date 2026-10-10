@@ -320,6 +320,9 @@ export const Event = {
   TOOL_EXECUTION_START: "tool_execution_start",
   TOOL_EXECUTION_UPDATE: "tool_execution_update",
   TOOL_EXECUTION_END: "tool_execution_end",
+  /** 回合文件变更汇总（回合结束/撤销后由 host 发；云端 ingest 镜像为会话行
+   *  状态，节点离线时 web 兜底展示） */
+  FILE_CHANGES: "file_changes",
   AGENT_STATE_CHANGED: "agent_state_changed",
   QUEUE_CHANGED: "queue_changed",
   /** 上下文用量推送（agent_settled/compaction_end 后由 host 主动发） */

@@ -229,6 +229,7 @@ fn cloud_worthy(kind: &str) -> bool {
             | "agent_state_changed"
             | "tool_execution_start"
             | "tool_execution_end"
+            | "file_changes"
             | "tool_approval"
             | "ask_user_question"
             | "auto_retry"
@@ -769,6 +770,31 @@ async fn sync_loop(
                                     .await;
                                     let _ =
                                         ws_sink.send(WsMessage::Text(env.to_string().into())).await;
+                                }
+                            }
+                        }
+                        // 回合文件变更快照：状态镜像随重连补发（ingest upsert 到会话行），
+                        // 节点离线时 web 端兜底展示。空快照不发——交互路径的 live/revert
+                        // 事件已保证镜像新鲜，绝大多数会话没有文件变更，省一次写放大。
+                        // 载荷已由 host 侧裁剪（64KB 内），无需附件化检查
+                        if let Ok(fc) = supervisor
+                            .request("session.file_changes".into(), json!({"session_id": sid}))
+                            .await
+                        {
+                            let turns = fc.get("turns").cloned().unwrap_or(json!([]));
+                            if let Some(list) = turns.as_array() {
+                                if !list.is_empty() {
+                                    let env = json!({
+                                        "event_id": Uuid::now_v7().to_string(),
+                                        "session_id": sid,
+                                        "persist": false,
+                                        "ts": chrono::Utc::now().to_rfc3339(),
+                                        "kind": "file_changes",
+                                        "payload": { "turns": turns },
+                                    });
+                                    let _ = ws_sink
+                                        .send(WsMessage::Text(env.to_string().into()))
+                                        .await;
                                 }
                             }
                         }

@@ -208,6 +208,17 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
             }
         }
     }
+    // 回合文件变更快照：镜像为会话行状态（最新胜出），节点离线时 web 兜底
+    // 展示。存 JSON 字符串与 session_events.payload 同风格；host 侧已裁剪，
+    // 这里再设防御上限避免异常大载荷进 Mongo
+    if kind == "file_changes" {
+        let empty_payload = json!({});
+        let payload = envelope.get("payload").unwrap_or(&empty_payload);
+        let raw = serde_json::to_string(payload).unwrap_or_default();
+        if raw.len() <= 128 * 1024 {
+            set.insert("file_changes", raw);
+        }
+    }
     if let Err(e) = sessions
         .update_one(
             doc! {"_id": session_id},

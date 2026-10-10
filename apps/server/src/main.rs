@@ -408,6 +408,31 @@ async fn session_events(
     Ok(Json(json!({"events": events})))
 }
 
+/// 云端镜像的回合文件变更快照（host 推送的 file_changes 事件由 ingest
+/// upsert 到会话行；节点离线时 web 端兜底展示）
+async fn session_file_changes(
+    State(state): State<AppState>,
+    Path((machine_id, session_id)): Path<(String, String)>,
+    tok: Bearer,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let user_id = auth::verify_token(&state, &tok.0, "access")
+        .await
+        .map(|c| c.sub)
+        .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    let row = state
+        .mongo
+        .collection::<BsonDoc>("sessions")
+        .find_one(doc! {"_id": &session_id, "user_id": &user_id, "machine_id": &machine_id})
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let turns = row
+        .and_then(|d| d.get_str("file_changes").ok().map(str::to_string))
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.get("turns").cloned())
+        .unwrap_or_else(|| json!([]));
+    Ok(Json(json!({ "turns": turns })))
+}
+
 /// web -> desktop command (prompt / steer / abort / approve), online-only
 #[derive(Deserialize)]
 struct CommandBody {
@@ -649,6 +674,10 @@ async fn main() {
         .route(
             "/machines/{machine_id}/sessions/{session_id}/events",
             get(session_events),
+        )
+        .route(
+            "/machines/{machine_id}/sessions/{session_id}/file_changes",
+            get(session_file_changes),
         )
         .route("/commands", post(post_command))
         .route("/attachments/presign", post(attachments_presign))

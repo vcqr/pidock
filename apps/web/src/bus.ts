@@ -299,6 +299,21 @@ export function createWebBus(auth: AuthClient): DataBus & {
         case "agent.abort":
           await command(params.session_id, "agent.abort", {});
           return { aborted: true };
+        case "session.file_changes": {
+          // 会话级命令：节点在线走命令中继；离线/超时退回云端镜像快照
+          // （host 推送的 file_changes 事件由 ingest upsert 到会话行）
+          const { session_id, ...payload } = params ?? {};
+          try {
+            const result = await command(session_id ?? "", method, payload);
+            return result ?? {};
+          } catch (e) {
+            if (!activeMachine) throw e;
+            const r = await auth.request(
+              `/machines/${activeMachine}/sessions/${session_id}/file_changes`,
+            );
+            return { turns: r.turns ?? [] };
+          }
+        }
         case "agent.context_usage":
         case "agent.compact":
         case "agent.clear_queue":
@@ -318,7 +333,6 @@ export function createWebBus(auth: AuthClient): DataBus & {
         case "session.set_permission_mode":
         case "session.set_thinking_level":
         case "session.set_model":
-        case "session.file_changes":
         case "session.file_diff":
         case "session.revert_files":
         case "session.pending": {

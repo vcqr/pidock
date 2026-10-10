@@ -112,6 +112,8 @@ pub mod ephemeral {
     pub const TOOL_EXECUTION_START: &str = "tool_execution_start";
     pub const TOOL_EXECUTION_UPDATE: &str = "tool_execution_update";
     pub const TOOL_EXECUTION_END: &str = "tool_execution_end";
+    /// 回合文件变更汇总（回合结束/撤销后由 host 发；云端 ingest 镜像为会话行状态）
+    pub const FILE_CHANGES: &str = "file_changes";
     pub const AGENT_STATE_CHANGED: &str = "agent_state_changed";
     pub const QUEUE_CHANGED: &str = "queue_changed";
     pub const AUTO_RETRY: &str = "auto_retry";
