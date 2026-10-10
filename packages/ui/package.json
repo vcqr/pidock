@@ -1,7 +1,7 @@
 {
   "name": "@pidock/ui",
   "private": true,
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "PiDock shared Vue components + DataBus (used by desktop and web with different transports)",
   "type": "module",
   "main": "src/index.ts",
