@@ -15,7 +15,9 @@ use crate::pipeline::EventSink;
 pub struct AppState {
     pub cfg: Arc<Config>,
     pub mongo: Database,
-    pub redis: redis::aio::MultiplexedConnection,
+    /// 自动重连的共享连接：MultiplexedConnection 不会自愈，redis 重启后
+    /// publish/限流/验证码会一直失败到进程重启，ConnectionManager 按需重连
+    pub redis: redis::aio::ConnectionManager,
     pub redis_client: redis::Client,
     pub sink: Arc<dyn EventSink>,
     pub s3: crate::s3::S3Client,
@@ -36,7 +38,7 @@ impl AppState {
             .await?
             .database("pidock");
         let redis_client = redis::Client::open(cfg.redis_url.as_str())?;
-        let redis = redis_client.get_multiplexed_tokio_connection().await?;
+        let redis = redis::aio::ConnectionManager::new(redis_client.clone()).await?;
         let s3 = crate::s3::S3Client::new(
             cfg.rustfs.endpoint.clone(),
             cfg.rustfs.bucket.clone(),

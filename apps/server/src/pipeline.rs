@@ -306,12 +306,25 @@ pub mod redis_stream {
                     match result {
                         Ok(streams) => {
                             for (_, entries) in streams.into_iter().flatten() {
-                                for (_id, fields) in entries {
+                                // 交付即 ACK：管道本就是 at-most-once（Mongo 为事实源，
+                                // 桌面端重连时全量回灌补偿），不 ACK 会让 PEL 随进程
+                                // 生命周期无限堆积；ACK 后语义不变、内存可控
+                                let mut ids: Vec<&str> = Vec::with_capacity(entries.len());
+                                for (id, fields) in &entries {
+                                    ids.push(id);
                                     for (_, payload) in fields {
                                         if let redis::Value::BulkString(bytes) = payload {
                                             handler(String::from_utf8_lossy(&bytes).into_owned());
                                         }
                                     }
+                                }
+                                if !ids.is_empty() {
+                                    let _: Result<(), _> = redis::cmd("XACK")
+                                        .arg(STREAM_KEY)
+                                        .arg(GROUP)
+                                        .arg(&ids)
+                                        .query_async(&mut conn)
+                                        .await;
                                 }
                             }
                         }
@@ -333,9 +346,17 @@ pub async fn make_sink(
 ) -> anyhow::Result<std::sync::Arc<dyn EventSink>> {
     if cfg.pipeline == "redis" {
         tracing::info!("event pipeline: redis-streams");
-        Ok(std::sync::Arc::new(
-            redis_stream::RedisSink::connect(&cfg.redis_url).await?,
-        ))
+        // redis 未就绪时等待而非退出：compose 同起时 server 可能先于 redis 就绪
+        let sink = loop {
+            match redis_stream::RedisSink::connect(&cfg.redis_url).await {
+                Ok(s) => break s,
+                Err(e) => {
+                    tracing::warn!("redis sink connect failed ({e}); retrying in 3s");
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                }
+            }
+        };
+        Ok(std::sync::Arc::new(sink))
     } else {
         #[cfg(feature = "kafka")]
         {

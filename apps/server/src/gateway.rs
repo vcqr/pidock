@@ -206,33 +206,50 @@ pub async fn ws_web(
 async fn web_socket(state: AppState, user_id: String, socket: WebSocket) {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    // subscribe to the user's realtime channel
-    let mut pubsub = match state.redis_client.get_async_pubsub().await {
-        Ok(ps) => ps,
-        Err(e) => {
-            tracing::error!("pubsub connect failed: {e}");
-            return;
-        }
-    };
-    if pubsub
-        .subscribe(AppState::user_events_channel(&user_id))
-        .await
-        .is_err()
-    {
-        return;
-    }
-    let mut stream = pubsub.into_on_message();
-    let push = tokio::spawn(async move {
-        while let Some(msg) = stream.next().await {
-            let payload: String = match msg.get_payload() {
-                Ok(p) => p,
-                Err(_) => break,
-            };
-            if ws_tx.send(Message::Text(payload.into())).await.is_err() {
-                break;
+    // 订阅用户实时频道；redis 重启会断开 pubsub 连接，若不重建订阅，
+    // 客户端会毫无感知地失去全部实时推送（会话更新/命令回执），故断线自愈重连
+    let push = {
+        let redis_client = state.redis_client.clone();
+        let channel = AppState::user_events_channel(&user_id);
+        tokio::spawn(async move {
+            let mut backoff = 1u64;
+            loop {
+                let mut pubsub = match redis_client.get_async_pubsub().await {
+                    Ok(ps) => ps,
+                    Err(e) => {
+                        tracing::warn!("web pubsub connect failed: {e}; retrying");
+                        tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                        backoff = (backoff * 2).min(10);
+                        continue;
+                    }
+                };
+                if pubsub.subscribe(&channel).await.is_err() {
+                    tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                    backoff = (backoff * 2).min(10);
+                    continue;
+                }
+                backoff = 1;
+                let mut stream = pubsub.into_on_message();
+                loop {
+                    let msg = match stream.next().await {
+                        Some(m) => m,
+                        None => break, // pubsub 连接断开（redis 重启/网络抖动），走重连
+                    };
+                    match msg.get_payload::<String>() {
+                        Ok(payload) => {
+                            if ws_tx.send(Message::Text(payload.into())).await.is_err() {
+                                return; // web socket 已关闭，任务退出
+                            }
+                        }
+                        Err(_) => continue, // 坏消息跳过
+                    }
+                }
+                // 走到这里 = 连接断开（ws 已关闭的情形已在上面 return）
+                tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                backoff = (backoff * 2).min(10);
             }
-        }
-    });
+        })
+    };
 
     // web upstream is reserved for future control frames; drain to detect close
     while let Some(Ok(msg)) = ws_rx.next().await {
