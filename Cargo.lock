@@ -3717,7 +3717,7 @@ dependencies = [
 
 [[package]]
 name = "pidock-core"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "chrono",
  "croner",
@@ -3736,7 +3736,7 @@ dependencies = [
 
 [[package]]
 name = "pidock-desktop"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "pidock-core",
  "pidock-protocol",
@@ -3752,7 +3752,7 @@ dependencies = [
 
 [[package]]
 name = "pidock-protocol"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "chrono",
  "serde",
@@ -3763,7 +3763,7 @@ dependencies = [
 
 [[package]]
 name = "pidock-server"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3798,7 +3798,7 @@ dependencies = [
 
 [[package]]
 name = "pidock-webhost"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "axum",
  "futures-util",
