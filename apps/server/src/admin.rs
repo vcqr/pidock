@@ -17,7 +17,7 @@ use mongodb::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::auth::{api_err, hash_password, verify_admin, Bearer};
+use crate::auth::{api_err, hash_password, valid_email, valid_password, verify_admin, Bearer};
 use crate::ldap::LdapCfg;
 use crate::sso::OidcCfg;
 use crate::state::AppState;
@@ -164,12 +164,14 @@ async fn users_create(
         .await
         .map_err(|(s, e)| api_err(s, e))?;
     let email = body.email.trim().to_lowercase();
-    if !email.contains('@') {
+    if !valid_email(&body.email) {
         return Err(api_err(StatusCode::BAD_REQUEST, "邮箱格式不正确"));
     }
-    let pwd_len = body.password.chars().count();
-    if !(8..=128).contains(&pwd_len) {
-        return Err(api_err(StatusCode::BAD_REQUEST, "密码长度需在 8~128 位之间"));
+    if !valid_password(&body.password) {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "密码需 8~128 位，且同时包含字母和数字",
+        ));
     }
     let role = if body.role.is_empty() { "user" } else { body.role.as_str() };
     if role != "user" && role != "admin" {

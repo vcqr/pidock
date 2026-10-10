@@ -38,6 +38,15 @@ export function clearAuth(): void {
   localStorage.removeItem(KEY);
 }
 
+/**
+ * 邮箱格式校验，与服务端 apps/server/src/auth.rs 的 valid_email 同规则：
+ * 无空白、恰好一个 @、local 非空、域名非空且不含 @、必须含点、
+ * 不以点开头/结尾、无连续点。（`[^\s@.]+` 分段匹配同时排除连续点）
+ */
+export function validEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(email.trim());
+}
+
 /** /auth/methods 响应：登录页据此渲染可用登录方式（拉取失败按仅密码处理） */
 export interface AuthMethods {
   password: boolean;

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { appConfirm, Icon } from "@pidock/ui";
-import { ApiError, type ApiClient } from "../auth.js";
+import { ApiError, validEmail, type ApiClient } from "../auth.js";
 
 interface AdminUser {
   user_id: string;
@@ -197,14 +197,26 @@ function fmtDate(s: string): string {
         <input
           v-model="newPassword"
           type="password"
-          placeholder="初始密码（≥8 位）"
+          placeholder="初始密码（8~128 位，含字母和数字）"
           autocomplete="new-password"
         />
         <select v-model="newRole">
           <option value="user">用户</option>
           <option value="admin">管理员</option>
         </select>
-        <button class="op" :disabled="creating || !newEmail || newPassword.length < 8" @click="create">
+        <button
+          class="op"
+          :disabled="
+            creating ||
+            !newEmail.trim() ||
+            !validEmail(newEmail) ||
+            newPassword.length < 8 ||
+            newPassword.length > 128 ||
+            !/[a-zA-Z]/.test(newPassword) ||
+            !/\d/.test(newPassword)
+          "
+          @click="create"
+        >
           {{ creating ? "创建中…" : "创建" }}
         </button>
         <button class="op" @click="showAdd = false">取消</button>

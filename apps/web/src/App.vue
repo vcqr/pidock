@@ -29,6 +29,7 @@ import {
   exchangeSsoCode,
   fetchAuthMethods,
   loadAuth,
+  validEmail,
   type AuthMethods,
   type LoginPending,
 } from "./auth.js";
@@ -57,16 +58,35 @@ const serverUrl =
   (import.meta.env.DEV ? "http://localhost:8080" : window.location.origin);
 const email = ref("");
 const password = ref("");
+const passwordConfirm = ref("");
 const inviteCode = ref("");
 const loginBusy = ref(false);
 const loginError = ref<string | null>(null);
 const registerMode = ref(false);
+/** 注册模式两次密码输入不一致（禁用提交 + 行内提示） */
+const passwordMismatch = computed(() => registerMode.value && password.value !== passwordConfirm.value);
+/** 注册模式密码策略：8~128 位且同时包含字母和数字（与服务端 valid_password 一致） */
+const passwordPolicyOk = computed(() => {
+  if (!registerMode.value) return true;
+  const p = password.value;
+  return p.length >= 8 && p.length <= 128 && /[a-zA-Z]/.test(p) && /\d/.test(p);
+});
+/** 注册模式邮箱格式（登录沿用 type=email 浏览器原生校验，不走这里） */
+const emailInvalid = computed(
+  () => registerMode.value && email.value.trim().length > 0 && !validEmail(email.value),
+);
 /** 登录方式分段：标准（本地账号）/ LDAP（启用后显示） */
 const loginMode = ref<"standard" | "ldap">("standard");
 
 function switchLoginMode(mode: "standard" | "ldap"): void {
   loginMode.value = mode;
   if (mode === "ldap") registerMode.value = false;
+}
+
+/** 注册/登录切换：清掉确认密码，避免残留导致按钮一直禁用 */
+function toggleRegisterMode(): void {
+  registerMode.value = !registerMode.value;
+  passwordConfirm.value = "";
 }
 /** 服务端可用的登录方式（/auth/methods；拉取失败 = 仅密码登录） */
 const authMethods = ref<AuthMethods | null>(null);
@@ -661,7 +681,25 @@ onBeforeUnmount(() => {
               :placeholder="loginMode === 'ldap' ? 'LDAP 目录中的用户名' : 'you@example.com'"
               autocomplete="username"
           /></label>
-          <label>密码<input v-model="password" type="password" autocomplete="current-password" /></label>
+          <p v-if="emailInvalid" class="auth-error">邮箱格式不正确</p>
+          <label>密码<input
+              v-model="password"
+              type="password"
+              :autocomplete="registerMode ? 'new-password' : 'current-password'"
+          /></label>
+          <p v-if="registerMode && password && !passwordPolicyOk" class="auth-error">
+            密码需 8~128 位，且同时包含字母和数字
+          </p>
+          <template v-if="registerMode">
+            <label
+              >确认密码<input
+                v-model="passwordConfirm"
+                type="password"
+                autocomplete="new-password"
+                placeholder="再输入一次"
+            /></label>
+            <p v-if="passwordMismatch && passwordConfirm" class="auth-error">两次输入的密码不一致</p>
+          </template>
           <label v-if="registerMode"
             >邀请码<input
               v-model="inviteCode"
@@ -700,7 +738,8 @@ onBeforeUnmount(() => {
             loginBusy ||
             (otpStep
               ? otpCode.length !== 6
-              : !email || !password || (registerMode && !inviteCode.trim()) || (turnstileEnabled && !turnstileToken))
+              : !email || !password || passwordMismatch || !passwordPolicyOk || emailInvalid
+              || (registerMode && !inviteCode.trim()) || (turnstileEnabled && !turnstileToken))
           "
         >
           {{ loginBusy ? "提交中…" : otpStep ? (otpPurpose === "register" ? "验证并创建账号" : "验证并登录") : loginMode === "ldap" ? "LDAP 登录" : registerMode ? "注册并登录" : "登录" }}
@@ -715,7 +754,7 @@ onBeforeUnmount(() => {
           v-if="!otpStep && loginMode === 'standard' && authMethods?.register?.allowed !== false"
           class="auth-switch"
           type="button"
-          @click="registerMode = !registerMode"
+          @click="toggleRegisterMode"
         >
           {{ registerMode ? "已有账号？去登录" : "没有账号？注册一个" }}
         </button>

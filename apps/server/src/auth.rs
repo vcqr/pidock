@@ -217,6 +217,32 @@ async fn register(
     Ok(Json(serde_json::json!({"user_id": user_id, "role": role})))
 }
 
+/// 邮箱格式：无空白、恰一个 @、域名至少含一个点且不以点开头/结尾、无连续点。
+/// 注册与管理员建号共用；登录不校验（老账号邮箱可能不满足新规则）。
+pub(crate) fn valid_email(email: &str) -> bool {
+    let e = email.trim();
+    if e.is_empty() || e.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let Some((local, domain)) = e.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.is_empty()
+        && !domain.contains('@')
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && !domain.contains("..")
+}
+
+/// 密码策略：8~128 位，同时包含字母和数字（不强制大小写/特殊符号）
+pub(crate) fn valid_password(password: &str) -> bool {
+    (8..=128).contains(&password.chars().count())
+        && password.chars().any(|c| c.is_alphabetic())
+        && password.chars().any(|c| c.is_ascii_digit())
+}
+
 /// 注册前置校验（一段式与发码两段式共用）：邮箱/密码格式、邀请码非空、注册开关。
 /// 返回 (小写邮箱, 密码哈希, 规范化邀请码, 是否引导码)
 async fn validate_registration(
@@ -224,11 +250,14 @@ async fn validate_registration(
     body: &RegisterBody,
     ip: &str,
 ) -> Result<(String, String, String, bool), Response> {
-    if !body.email.contains('@') {
+    if !valid_email(&body.email) {
         return Err(api_err(StatusCode::BAD_REQUEST, "邮箱格式不正确"));
     }
-    if body.password.chars().count() < 8 {
-        return Err(api_err(StatusCode::BAD_REQUEST, "密码至少需要 8 个字符"));
+    if !valid_password(&body.password) {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "密码需 8~128 位，且同时包含字母和数字",
+        ));
     }
     let code = norm_code(&body.invite_code);
     if code.is_empty() {
