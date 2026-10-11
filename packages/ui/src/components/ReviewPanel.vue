@@ -27,6 +27,8 @@ export interface ReviewTab {
   newText: string;
   added: number;
   removed: number;
+  /** 二进制文件（快照/当前内容含 NUL）：文本 diff 只会出乱码，显示提示 */
+  binary?: boolean;
 }
 
 const props = defineProps<{ tabs: ReviewTab[]; active: string }>();
@@ -115,10 +117,16 @@ async function loadLanguage(filename: string) {
   }
 }
 
-/** 按「路径+内容长度+主题」签名重建编辑器；标签切换/内容更新/主题切换时才重建 */
+/** 按「路径+内容长度+主题」签名重建编辑器；标签切换/内容更新/主题切换时才重建。
+ *  二进制标签不建编辑器（v-show 保住 host 挂载），切回文本标签时按签名重建。 */
 async function buildEditor(): Promise<void> {
   const t = activeTab.value;
-  if (!t || !host.value) return;
+  if (!t || t.binary || !host.value) {
+    view?.destroy();
+    view = null;
+    builtSig = "";
+    return;
+  }
   const sig = `${t.path}#${t.oldText.length}#${t.newText.length}#${themeMode.value}`;
   if (sig === builtSig) return;
   builtSig = sig;
@@ -195,7 +203,9 @@ onBeforeUnmount(() => {
       <span v-if="activeTab.added" class="rv-add">+{{ activeTab.added }}</span>
       <span v-if="activeTab.removed" class="rv-del">−{{ activeTab.removed }}</span>
     </header>
-    <div ref="host" class="rv-editor"></div>
+    <!-- 二进制文件：提示占位（host 保持挂载，切回文本标签无需重挂载） -->
+    <div v-if="activeTab?.binary" class="rv-note">二进制文件，无法以文本方式对比</div>
+    <div ref="host" v-show="!activeTab?.binary" class="rv-editor"></div>
   </aside>
 </template>
 
@@ -294,4 +304,12 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 .rv-editor :deep(.cm-editor) { height: 100%; }
+.rv-note {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--pd-text-4);
+  font-size: calc(12.5px * var(--pd-font-scale));
+  user-select: none;
+}
 </style>

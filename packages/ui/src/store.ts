@@ -1,4 +1,4 @@
-import { reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import type { DataBus } from "./databus.js";
 import type { AskQuestion, TodoItem, PendingApprovalInfo, PendingAskInfo } from "@pidock/protocol";
 import { appConfirm } from "./confirm.js";
@@ -218,6 +218,167 @@ export function createAgentStore(bus: DataBus) {
   const turnEndedAt = ref<number | null>(null);
   /** 各回合的文件变更（按轮累积，turnId = 回合官方 id），回合结束后拉取 */
   const turnFileChanges = ref<Array<{ turnId: string; files: Array<{ path: string; added: number; removed: number; isNew: boolean }> }>>([]);
+
+  // ---- 产出物卡：从助手回复与工具输出提取「落盘的文件」按回合聚合 ----
+  // edit/write 之外的产出（bash / 浏览器自动化 / codemode 写的文件）不产生文件
+  // 变更快照，这里从文本里抓绝对路径兜底。提取后逐个 fs.stat 验证：未落盘的
+  // 提及（正文举例、计划中的路径）不算产出物；回合开始前 mtime 就更旧的文件
+  // 只是「被读过/被提到」，同样排除。stat 失败（机器离线等）降级为仅展示路径。
+
+  /** 每回合产出物（turnId 同回合分组键）；verified=false 表示 stat 不可达，仅有路径 */
+  type ArtifactFile = { path: string; size: number | null; verified: boolean };
+
+  /** 系统目录与依赖目录里的路径一律视为噪声。
+   *  注意 /tmp 不在此列：浏览器自动化等工具的截图/下载正落在 /tmp，
+   *  靠「回合内 mtime + 扩展名 + 去重」兜噪声比一刀切排除更合理 */
+  const ARTIFACT_NOISE_PREFIXES = [
+    "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/opt", "/etc", "/var",
+    "/private", "/system", "/library", "/applications", "/dev", "/proc", "/sys",
+    "/snap", "/boot", "/run", "/srv", "/media", "/mnt",
+    "c:/windows", "c:/program files", "c:/programdata",
+  ];
+  const ARTIFACT_NOISE_SEGS = new Set([
+    "node_modules", ".git", "__pycache__", ".venv", "venv", "site-packages",
+    "dist-info", ".cache", ".pi",
+  ]);
+  const POSIX_PATH_RE = /\/[^\s'"`<>|]+/g;
+  const WIN_PATH_RE = /[A-Za-z]:[\\/][^\s'"`<>|]+/g;
+  /** 尾随标点（中英文句读/引号/括号）不属于路径 */
+  const ARTIFACT_TRAILING = /[.,;:!?。，；：！？）】》）)\]}>'"`”’]+$/;
+
+  function extractArtifactPaths(text: string, home: string): string[] {
+    if (!text) return [];
+    // 先剥掉 scheme:// URL（否则 POSIX/WIN 正则会从 "//host/x" 或 "s://..." 咬进链接里）
+    const cleaned = text.replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s'"`<>|]+/g, " ");
+    const out: string[] = [];
+    const push = (raw: string, fromHome: boolean): void => {
+      const p0 = raw.replace(ARTIFACT_TRAILING, "");
+      if (!p0 || p0.length > 512) return;
+      let p = p0.replace(/\\/g, "/");
+      if (fromHome) {
+        // "~" 不在路径字符类里，正则只会咬到 "/x/y"——靠前缀还原 ~ 展开
+        if (!home) return;
+        p = home.replace(/\/+$/, "") + "/" + p.replace(/^~?\/+/, "");
+      }
+      // JSON 转义的收尾引号（\" → \）会留在匹配尾部，规范化后是尾斜杠
+      p = p.replace(/\/+$/, "");
+      if (!p || p.startsWith("//")) return;
+      const low = p.toLowerCase();
+      if (ARTIFACT_NOISE_PREFIXES.some((n) => low.startsWith(n + "/"))) return;
+      const segs = p.split("/");
+      // 至少一段目录 + 文件名（根目录下的单段文件不算）
+      if (segs.length < 3) return;
+      if (segs.some((s) => ARTIFACT_NOISE_SEGS.has(s.toLowerCase()))) return;
+      const name = segs[segs.length - 1] ?? "";
+      if (!/^[^.\s/][^/]*\.[A-Za-z0-9]{1,8}$/.test(name)) return;
+      out.push(p);
+    };
+    for (const re of [POSIX_PATH_RE, WIN_PATH_RE]) {
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(cleaned)) !== null) {
+        const prev = m.index > 0 ? cleaned[m.index - 1] : "";
+        if (prev === ":") continue; // 盘符后界（scheme:// 已剥除，此处兜底）
+        push(m[0], prev === "~");
+      }
+    }
+    return out;
+  }
+
+  /** 按回合分组的候选路径（与 ChatView 回合分组同规则：每条用户消息起回合） */
+  const artifactCandidates = computed(() => {
+    const home = homeDir.value ?? "";
+    const groups: Array<{ turnId: string; startedAtMs: number | null; paths: string[] }> = [];
+    let cur: { turnId: string; startedAtMs: number | null; set: Set<string> } | null = null;
+    const flush = (): void => {
+      if (cur && cur.set.size) groups.push({ turnId: cur.turnId, startedAtMs: cur.startedAtMs, paths: [...cur.set].slice(0, 40) });
+    };
+    for (const it of items.value) {
+      if (it.kind === "message" && it.role === "user") {
+        flush();
+        const ms = it.ts ? new Date(it.ts).getTime() : NaN;
+        cur = { turnId: it.turnId ?? it.key, startedAtMs: Number.isFinite(ms) ? ms : null, set: new Set<string>() };
+        continue;
+      }
+      if (!cur) continue;
+      if (it.kind === "message") {
+        if (it.role === "assistant") {
+          for (const p of extractArtifactPaths(it.text, home)) cur.set.add(p);
+        } else if (it.role === "toolResult") {
+          for (const p of extractArtifactPaths(it.text, home)) cur.set.add(p);
+          for (const b of it.blocks ?? []) {
+            for (const p of extractArtifactPaths(b.output ?? "", home)) cur.set.add(p);
+            for (const p of extractArtifactPaths(b.args ?? "", home)) cur.set.add(p);
+          }
+        }
+      } else {
+        // 工具入参也纳入：browser 截图 / 命令重定向的目标路径常只在 args 里
+        for (const p of extractArtifactPaths(it.args, home)) cur.set.add(p);
+        for (const p of extractArtifactPaths(it.output, home)) cur.set.add(p);
+      }
+    }
+    flush();
+    return groups;
+  });
+
+  /** stat 结果缓存（路径 → 元信息；"error" = 通道不可达）；exists:false 不永久缓存，
+   * 下一轮候选变化时重验（流式中路径先于文件出现是常态） */
+  const artifactStats = reactive(new Map<string, { exists: boolean; is_file: boolean; size: number; mtime_ms: number } | "error">());
+  let artifactStatSeq = 0;
+  watch(
+    () => JSON.stringify(artifactCandidates.value),
+    () => {
+      void verifyArtifacts();
+    },
+    { immediate: true },
+  );
+  async function verifyArtifacts(): Promise<void> {
+    const seq = ++artifactStatSeq;
+    for (const g of artifactCandidates.value) {
+      for (const p of g.paths) {
+        const cached = artifactStats.get(p);
+        if (cached && cached !== "error" && cached.exists) continue;
+        try {
+          const r = (await bus.request("fs.stat", { path: p })) as
+            | { exists: boolean; is_file: boolean; size: number; mtime_ms: number }
+            | undefined;
+          if (seq !== artifactStatSeq) return; // 候选集已变化，让位新一轮验证
+          artifactStats.set(p, r && typeof r.exists === "boolean" ? r : "error");
+        } catch {
+          if (seq !== artifactStatSeq) return;
+          artifactStats.set(p, "error");
+        }
+      }
+    }
+  }
+
+  /** 每回合产出物（turnId 同回合分组键）；verified=false 表示 stat 不可达，仅有路径 */
+  const turnArtifacts = computed<Array<{ turnId: string; files: ArtifactFile[] }>>(() => {
+    const out: Array<{ turnId: string; files: ArtifactFile[] }> = [];
+    for (const g of artifactCandidates.value) {
+      // 已进本回合文件变更卡（edit/write 快照，有 diff/审查/撤销）的文件不再重复列出：
+      // 一张卡一个职责，产出物卡只收留快照机制覆盖不到的产出
+      const changed = new Set(
+        (turnFileChanges.value.find((t) => t.turnId === g.turnId)?.files ?? []).map((f) => f.path.replace(/\\/g, "/")),
+      );
+      const files: ArtifactFile[] = [];
+      for (const p of g.paths) {
+        if (changed.has(p)) continue;
+        const st = artifactStats.get(p);
+        if (st === undefined) continue; // stat 还在路上，结果到了 computed 自动刷新
+        if (st === "error") {
+          files.push({ path: p, size: null, verified: false });
+          continue;
+        }
+        if (!st.exists || !st.is_file) continue; // 正文提到但未落盘
+        if (g.startedAtMs != null && st.mtime_ms > 0 && st.mtime_ms < g.startedAtMs) continue; // 回合前已存在（只是被提到）
+        files.push({ path: p, size: st.size, verified: true });
+      }
+      if (files.length) out.push({ turnId: g.turnId, files });
+    }
+    return out;
+  });
+
   /** 全量可用模型（已配置供应商，config.models.list），供模型下拉选择 */
   const allModels = ref<ModelInfo[]>([]);
   /**
@@ -1244,7 +1405,7 @@ export function createAgentStore(bus: DataBus) {
   async function fileDiff(
     path: string,
     turnId?: string,
-  ): Promise<{ oldText: string; newText: string }> {
+  ): Promise<{ oldText: string; newText: string; binary?: boolean }> {
     return bus.request("session.file_diff", {
       session_id: activeId.value,
       path,
@@ -1426,6 +1587,7 @@ export function createAgentStore(bus: DataBus) {
     turnStartedAt,
     turnEndedAt,
     turnFileChanges,
+    turnArtifacts,
     allModels,
     todosBySession,
     contextBySession,

@@ -1,7 +1,7 @@
 export { createAgentStore } from "./store.js";
 export type { AgentStore, UiItem, UiMessageItem, UiToolItem, SessionSummaryUi, UiBlock, ExpertInfo } from "./store.js";
 export type { DataBus, ReplayEvent, FsListing } from "./databus.js";
-export { ATTACHMENT_LOADER, FOLDER_PICKER, FILE_PICKER, REVEAL_PATH, GIT_API, FS_LIST, WINDOW_CONTROLS, IS_MAC, installTauriDblclickGuard, onTitlebarDblclick, type WindowControls, type GitApi } from "./databus.js";
+export { ATTACHMENT_LOADER, FOLDER_PICKER, FILE_PICKER, REVEAL_PATH, OPEN_EXTERNAL, GIT_API, FS_LIST, WINDOW_CONTROLS, IS_MAC, installTauriDblclickGuard, onTitlebarDblclick, type WindowControls, type GitApi } from "./databus.js";
 export { initTheme, toggleTheme, applyTheme, themeMode, themePref, applyFontSettings, fontSettings, type ThemeMode, type ThemePref, type FontSettings } from "./theme.js";
 export { appConfirm, type ConfirmOptions } from "./confirm.js";
 export { default as ChatView } from "./components/ChatView.vue";

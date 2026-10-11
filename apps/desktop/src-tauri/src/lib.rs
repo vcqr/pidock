@@ -8,27 +8,84 @@ use serde_json::Value;
 use tauri::{Emitter, Manager, WindowEvent};
 use tokio::sync::{broadcast, mpsc};
 
-/// 在系统文件管理器中打开目录（Windows: explorer，macOS: Finder，Linux: xdg-open）。
+/// 用系统默认浏览器打开外部链接（markdown 输出里的 <a> 点击在 MdContent 拦截后走这里）。
+/// 只放行 http/https/mailto：webview 内导航会把整个应用替换成外站页面，
+/// 而 file:// 等自定义 scheme 交给系统处理器有安全风险。
 #[tauri::command]
-fn reveal_path(path: String) -> Result<(), String> {
+fn open_external(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://")
+        || url.starts_with("https://")
+        || url.starts_with("mailto:"))
+    {
+        return Err(format!("unsupported url scheme: {url}"));
+    }
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer")
-            .arg(&path)
+            .arg(&url)
             .spawn()
-            .map_err(|e| format!("failed to open explorer: {e}"))?;
+            .map_err(|e| format!("failed to open url: {e}"))?;
     }
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
-            .arg(&path)
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("failed to open url: {e}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("failed to open url: {e}"))?;
+    }
+    Ok(())
+}
+
+/// 在系统文件管理器中打开路径：目录直接打开（Windows: explorer，macOS: Finder，
+/// Linux: xdg-open）；文件则在所在目录中定位（Finder 高亮 / 资源管理器选中，
+/// Linux 打开其父目录）——供审查卡与产出物卡的「在目录中打开」按钮使用。
+#[tauri::command]
+fn reveal_path(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        if std::path::Path::new(&path).is_dir() {
+            std::process::Command::new("explorer")
+                .arg(&path)
+                .spawn()
+                .map_err(|e| format!("failed to open explorer: {e}"))?;
+        } else {
+            // /select 需逗号连写且路径单独带引号，std 的自动引参做不到，用 raw_arg
+            std::process::Command::new("explorer")
+                .raw_arg(format!("/select,\"{}\"", path))
+                .spawn()
+                .map_err(|e| format!("failed to open explorer: {e}"))?;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = std::process::Command::new("open");
+        if !std::path::Path::new(&path).is_dir() {
+            cmd.arg("-R"); // 文件：Finder 中定位（无 -R 会用默认应用打开文件本身）
+        }
+        cmd.arg(&path)
             .spawn()
             .map_err(|e| format!("failed to open finder: {e}"))?;
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
+        let p = std::path::Path::new(&path);
+        let target = if p.is_dir() {
+            path.clone()
+        } else {
+            p.parent()
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or(path.clone())
+        };
         std::process::Command::new("xdg-open")
-            .arg(&path)
+            .arg(&target)
             .spawn()
             .map_err(|e| format!("failed to open file manager: {e}"))?;
     }
@@ -133,7 +190,8 @@ pub fn run() {
             fs_list,
             tray::desktop_config_get,
             tray::desktop_config_set,
-            reveal_path
+            reveal_path,
+            open_external
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

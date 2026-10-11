@@ -3,8 +3,9 @@
  * Markdown content with streaming throttle, code-block copy buttons
  * (event delegation) and safe external links.
  */
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, ref, watch } from "vue";
 import { renderMarkdown } from "../markdown.js";
+import { OPEN_EXTERNAL } from "../databus.js";
 
 const props = withDefaults(
   defineProps<{ source: string; live?: boolean }>(),
@@ -36,15 +37,37 @@ onBeforeUnmount(() => {
 const html = computed(() => renderMarkdown(displayed.value));
 const host = ref<HTMLElement | null>(null);
 
+/** 桌面壳注入系统浏览器打开；未注入（纯浏览器）回落新标签页 */
+const openExternal = inject(OPEN_EXTERNAL, null);
+
 function onClick(ev: MouseEvent): void {
   const target = ev.target as HTMLElement;
   const btn = target.closest("[data-copy]") as HTMLElement | null;
-  if (!btn) return;
-  const code = btn.closest(".md-code")?.querySelector("code")?.textContent ?? "";
-  void navigator.clipboard.writeText(code).then(() => {
-    btn.textContent = "已复制";
-    setTimeout(() => (btn.textContent = "复制"), 1500);
-  });
+  if (btn) {
+    const code = btn.closest(".md-code")?.querySelector("code")?.textContent ?? "";
+    void navigator.clipboard.writeText(code).then(() => {
+      btn.textContent = "已复制";
+      setTimeout(() => (btn.textContent = "复制"), 1500);
+    });
+    return;
+  }
+  // 外链一律拦下：webview 内导航会把整个应用替换成外站页面（Tauri 壳无法返回）
+  const anchor = target.closest("a[href]") as HTMLAnchorElement | null;
+  if (!anchor) return;
+  ev.preventDefault();
+  const href = anchor.getAttribute("href") ?? "";
+  if (!href) return;
+  // 文内锚点：markdown-it 默认不生成标题 id，仅对显式 [text](#x) 尽力滚动
+  if (href.startsWith("#")) {
+    try {
+      host.value?.querySelector(href)?.scrollIntoView({ behavior: "smooth" });
+    } catch {
+      // 非法选择器（如 "#1a b"）忽略
+    }
+    return;
+  }
+  if (openExternal) void openExternal(href).catch(() => {});
+  else window.open(href, "_blank", "noopener,noreferrer");
 }
 </script>
 

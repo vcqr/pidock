@@ -15,6 +15,7 @@ import {
   FOLDER_PICKER,
   FILE_PICKER,
   REVEAL_PATH,
+  OPEN_EXTERNAL,
   GIT_API,
   FS_LIST,
   WINDOW_CONTROLS,
@@ -28,7 +29,7 @@ import {
   type AgentStore,
 } from "@pidock/ui";
 import { createBus } from "./bus";
-import { ipc } from "./ipc";
+import { ipc, isTauri } from "./ipc";
 import SyncSettings from "./SyncSettings.vue";
 import DesktopSettings from "./DesktopSettings.vue";
 
@@ -173,6 +174,16 @@ provide(REVEAL_PATH, async (path: string) => {
     await ipc("reveal_path", { path });
   } catch {
     // 打开失败时静默（如路径已不存在 / webhost 模式不支持）
+  }
+});
+
+// 外部链接走系统默认浏览器：Tauri 壳经 open_external 命令（Rust 侧只放行 http/https/mailto）；
+// 浏览器模式（webhost / vite dev）新标签页打开
+provide(OPEN_EXTERNAL, async (url: string) => {
+  if (isTauri) {
+    await ipc("open_external", { url });
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 });
 

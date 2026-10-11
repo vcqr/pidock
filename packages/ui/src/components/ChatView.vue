@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { NSplit } from "naive-ui";
 import type { AgentStore, ExpertInfo, UiItem } from "../store.js";
+import { REVEAL_PATH } from "../databus.js";
 import { formatSpan, greeting } from "../utils/time.js";
 import FileIcon from "./FileIcon.vue";
 import FilePreview from "./FilePreview.vue";
@@ -405,8 +406,61 @@ function turnFilesAt(
   if (!g || index !== g.endIndex) return null;
   return props.store.turnFileChanges.find((t) => t.turnId === g.key) ?? null;
 }
-/** 右侧审查面板：多标签，每项为该文件在该回合的快照 diff（ReviewPanel 用 CodeMirror 渲染） */
-const reviewTabs = ref<Array<{ path: string; oldText: string; newText: string; added: number; removed: number }>>([]);
+
+// ---- 产出物卡：bash/浏览器自动化等工具写出的文件不进文件变更卡，这里按回合展示 ----
+interface ArtifactRow {
+  path: string;
+  size: number | null;
+  verified: boolean;
+}
+const artifactsCollapsed = ref(new Set<string>());
+function toggleArtifactsCard(key: string): void {
+  const next = new Set(artifactsCollapsed.value);
+  next.has(key) ? next.delete(key) : next.add(key);
+  artifactsCollapsed.value = next;
+}
+function turnArtifactsAt(index: number): { turnId: string; files: ArtifactRow[] } | null {
+  const g = groupAt(index);
+  if (!g || index !== g.endIndex) return null;
+  return props.store.turnArtifacts.find((t) => t.turnId === g.key) ?? null;
+}
+/** 在系统文件管理器/默认应用中打开（桌面壳提供；web 控制台无此能力则不渲染按钮） */
+const revealPath = inject(REVEAL_PATH, null);
+function dirnameOf(p: string): string {
+  const norm = p.replace(/\\/g, "/");
+  const i = norm.lastIndexOf("/");
+  return i > 0 ? norm.slice(0, i) : norm;
+}
+function fmtSize(n: number | null): string {
+  if (n == null) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+/** 卡片头部的总大小徽标（个别 stat 不可达的行不计入）；全不可达时为空不渲染 */
+function artifactsTotalSize(files: Array<{ size: number | null }>): string {
+  let total = 0;
+  for (const f of files) {
+    if (typeof f.size === "number") total += f.size;
+  }
+  return total > 0 ? fmtSize(total) : "";
+}
+/** 产出物预览：路径可不在项目 cwd 内，read_file 以父目录为根读文件名即可 */
+async function openArtifactPreview(path: string): Promise<void> {
+  if (!previewTabs.value.some((t) => t.path === path)) {
+    try {
+      const r = await props.store.readWorkspaceFile(dirnameOf(path), baseOf(path));
+      previewTabs.value.push({ ...r, path });
+      if (previewTabs.value.length > PREVIEW_MAX_TABS) previewTabs.value.shift();
+    } catch (err) {
+      previewTabs.value.push({ path, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  activePreviewPath.value = path;
+}
+/** 右侧审查面板：多标签，每项为该文件在该回合的快照 diff（ReviewPanel 用 CodeMirror 渲染）；binary=二进制文件不渲染 diff */
+const reviewTabs = ref<Array<{ path: string; oldText: string; newText: string; added: number; removed: number; binary?: boolean }>>([]);
 const reviewActive = ref<string | null>(null);
 async function toggleReview(path: string, turnId: string): Promise<void> {
   if (reviewActive.value === path) {
@@ -426,7 +480,7 @@ async function toggleReview(path: string, turnId: string): Promise<void> {
   }
   try {
     const r = await props.store.fileDiff(path, turnId);
-    const data = { path, oldText: r.oldText, newText: r.newText, added, removed };
+    const data = { path, oldText: r.oldText, newText: r.newText, added, removed, binary: r.binary === true };
     const i = reviewTabs.value.findIndex((t) => t.path === path);
     if (i >= 0) reviewTabs.value[i] = data;
     else reviewTabs.value.push(data);
@@ -508,9 +562,16 @@ function saveReview(): void {
 // ---- 主区文件预览（临时浮层，覆盖在对话上方）：文件树点击 → 打开/激活标签 ----
 const previewTabs = ref<Array<{ path: string; text?: string; truncated?: boolean; binary?: boolean; size?: number; error?: string }>>([]);
 const activePreviewPath = ref<string | null>(null);
-const previewProjectName = computed(
-  () => props.filesCwd?.cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "",
-);
+const previewProjectName = computed(() => {
+  // 产出物预览的路径可能不在浏览的项目 cwd 内：面包屑根段显示其父目录名
+  const p = activePreviewPath.value;
+  const root = props.filesCwd?.cwd.replace(/[\\/]+$/, "");
+  if (p && (!root || !p.replace(/\\/g, "/").startsWith(root))) {
+    const segs = dirnameOf(p).split("/").filter(Boolean);
+    if (segs.length) return segs[segs.length - 1] ?? "";
+  }
+  return root?.split(/[\\/]/).pop() ?? "";
+});
 // 切换浏览的项目时清空预览标签（标签内容属于该项目）
 watch(
   () => props.filesCwd?.cwd,
@@ -891,7 +952,7 @@ watch(
             <div v-if="!filesCollapsed.has(groupAt(index)!.key)" class="files-list">
               <template v-for="f in turnFilesAt(index)!.files" :key="f.path">
                 <div class="file-row">
-                  <span class="tile"><FileIcon :path="f.path" :size="15" /></span>
+                  <span class="tile"><FileIcon :path="f.path" :size="17" /></span>
                   <span class="f-name" :title="f.path">{{ baseOf(f.path) }}</span>
                   <span class="f-dir">{{ dirOfPath(f.path) }}</span>
                   <span class="t-add">+{{ f.added }}</span>
@@ -902,6 +963,44 @@ watch(
                     @click="toggleReview(f.path, groupAt(index)!.key)"
                   >
                     {{ reviewActive === f.path ? "收起" : "审查" }}
+                  </button>
+                  <button
+                    v-if="revealPath"
+                    class="review-btn icon-btn"
+                    title="在目录中打开"
+                    @click.stop="revealPath(f.path)"
+                  >
+                    <Icon name="folder-open-line" :size="14" />
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+          <!-- 该回合的产出物卡：bash / 浏览器自动化 / codemode 等写出的文件
+               （edit/write 的编辑走上面的文件变更卡，此处已去重），
+               预览按钮在主区浮层打开，文件夹按钮在系统文件管理器中定位 -->
+          <div v-if="turnArtifactsAt(index)" class="files-card artifacts-card">
+            <button class="files-head" @click="toggleArtifactsCard(groupAt(index)!.key)">
+              <Icon name="arrow-down-s-line" :size="13" :class="{ fold: artifactsCollapsed.has(groupAt(index)!.key) }" />
+              <span>{{ turnArtifactsAt(index)!.files.length }} 个产出物</span>
+              <span class="f-size">{{ artifactsTotalSize(turnArtifactsAt(index)!.files) }}</span>
+              <span class="flex-sp"></span>
+            </button>
+            <div v-if="!artifactsCollapsed.has(groupAt(index)!.key)" class="files-list">
+              <template v-for="f in turnArtifactsAt(index)!.files" :key="f.path">
+                <div class="file-row clickable" @click="openArtifactPreview(f.path)">
+                  <span class="tile"><FileIcon :path="f.path" :size="17" /></span>
+                  <span class="f-name" :title="f.path">{{ baseOf(f.path) }}</span>
+                  <span class="f-dir">{{ dirOfPath(f.path) }}</span>
+                  <span class="f-size">{{ fmtSize(f.size) }}</span>
+                  <button class="review-btn" @click.stop="openArtifactPreview(f.path)">预览</button>
+                  <button
+                    v-if="revealPath"
+                    class="review-btn icon-btn"
+                    title="在目录中打开"
+                    @click.stop="revealPath(f.path)"
+                  >
+                    <Icon name="folder-open-line" :size="14" />
                   </button>
                 </div>
               </template>
@@ -1445,9 +1544,26 @@ export default { components: { ToolCard, MessageItem } };
   font-size: calc(13px * var(--pd-font-scale));
 }
 .file-row:last-child { border-bottom: none; }
+/* 产出物行：尺寸徽标（行内与头部共用），风格对齐变更卡的 +/- 计数 */
+.f-size {
+  flex: none;
+  font-size: calc(11.5px * var(--pd-font-scale));
+  color: var(--pd-text-4);
+  font-family: var(--pd-mono);
+}
+.artifacts-card .file-row.clickable { cursor: pointer; border-radius: 7px; }
+.artifacts-card .file-row.clickable:hover { background: var(--pd-bg-hover); }
+/* 图标型行内按钮（在目录中打开）：变更卡与产出物卡共用 */
+.review-btn.icon-btn {
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
 .tile {
-  width: 20px;
-  height: 20px;
+  width: calc(20px * var(--pd-font-scale, 1));
+  height: calc(20px * var(--pd-font-scale, 1));
   flex: none;
   display: grid;
   place-items: center;

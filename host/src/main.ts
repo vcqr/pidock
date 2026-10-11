@@ -27,6 +27,7 @@ const handlers: Record<string, Handler> = {
   [Method.SESSION_FORK]: (p) => pool.forkSession(p),
   [Method.SESSION_REMOVE]: (p) => pool.removeSessions(p),
   [Method.WORKSPACE_FILES]: (p) => pool.listWorkspaceFiles(p),  [Method.WORKSPACE_READ_FILE]: (p) => pool.readWorkspaceFile(p),
+  [Method.FS_STAT]: (p) => pool.statFile(p),
   [Method.SESSION_EVENTS]: (p) => pool.replayEvents(p),
   [Method.SESSION_SET_PERMISSION_MODE]: (p) => pool.setPermissionMode(p),
   [Method.SESSION_RESOLVE_APPROVAL]: (p) => pool.resolveApproval(p),

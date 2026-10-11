@@ -67,6 +67,20 @@ export const md = new MarkdownIt({
   },
 });
 
+// 链接默认新开（noopener）：桌面壳在 MdContent 拦截点击后交系统浏览器，
+// 浏览器端（webhost/web 控制台）由 target=_blank 直接新标签页
+const defaultLinkOpen =
+  md.renderer.rules.link_open ??
+  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  if (token) {
+    token.attrSet("target", "_blank");
+    token.attrSet("rel", "noopener noreferrer");
+  }
+  return defaultLinkOpen(tokens, idx, options, env, self);
+};
+
 export function renderMarkdown(source: string): string {
   const raw = md.render(source ?? "");
   return DOMPurify.sanitize(raw, {

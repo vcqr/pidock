@@ -29,8 +29,10 @@ export const ATTACHMENT_LOADER: InjectionKey<(id: string) => Promise<string>> = 
 export const FOLDER_PICKER: InjectionKey<() => Promise<string | null>> = Symbol("pidock.folderPicker");
 /** optional provide/inject handle for the native single-file picker (desktop only); resolves null on cancel */
 export const FILE_PICKER: InjectionKey<(kind?: "install" | "image") => Promise<string | null>> = Symbol("pidock.filePicker");
-/** optional provide/inject handle for revealing a path in the OS file manager (desktop only) */
+/** optional provide/inject handle for revealing a path in the OS file manager (desktop only); 目录打开、文件定位到所在目录 */
 export const REVEAL_PATH: InjectionKey<(path: string) => Promise<void>> = Symbol("pidock.revealPath");
+/** 用系统默认浏览器打开外部链接（桌面=Tauri 命令；未注入时调用方回落 window.open） */
+export const OPEN_EXTERNAL: InjectionKey<(url: string) => Promise<void>> = Symbol("pidock.openExternal");
 
 /** git 分支信息与切换（CoreCtx 命令面，桌面与 webhost 都提供）；项目 chip 的分支选择器用 */
 export interface GitApi {

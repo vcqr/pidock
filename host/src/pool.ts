@@ -1205,6 +1205,33 @@ export class SessionPool {
   }
 
   /**
+   * 单文件元信息（产出物卡验证用）：接收绝对路径，不存在时返回 exists:false
+   * 而非抛错——调用方（UI 端产出物提取）靠它过滤正文里提及但未真正落盘的路径。
+   * 与 readWorkspaceFile 不同不做 cwd 约束：本机 agent 对文件本就有完整访问权，
+   * 这里只是把 stat 暴露给 UI。
+   */
+  statFile(params: { path: string }): {
+    exists: boolean;
+    is_file: boolean;
+    size: number;
+    mtime_ms: number;
+  } {
+    const p = String(params?.path ?? "").trim();
+    if (!p || p.includes("\0")) return { exists: false, is_file: false, size: 0, mtime_ms: 0 };
+    try {
+      const st = statSync(p);
+      return {
+        exists: true,
+        is_file: st.isFile(),
+        size: st.size,
+        mtime_ms: st.mtimeMs,
+      };
+    } catch {
+      return { exists: false, is_file: false, size: 0, mtime_ms: 0 };
+    }
+  }
+
+  /**
    * 会话当前挂起的审批/提问（session.pending）：UI 重开或 web 端刷新后，
    * ephemeral 的 tool_approval/ask_user_question 事件不会重放，用这个查询
    * 恢复卡片。timeout_sec 返回剩余秒数（不限时缺省）。
@@ -1666,23 +1693,34 @@ export class SessionPool {
     );
   }
 
-  /** 单个文件的快照与当前内容（供 UI 渲染 diff）；turn_id 缺省取最近回合 */
+  /**
+   * 单个文件的快照与当前内容（供 UI 渲染 diff）；turn_id 缺省取最近回合。
+   * binary：快照或当前内容前 8KB 含 NUL——二进制内容走文本 diff 只会出乱码，
+   * UI 据此显示提示而不是编辑器。
+   */
   fileDiff(params: { session_id: string; path: string; turn_id?: string }): {
     oldText: string;
     newText: string;
+    binary: boolean;
   } {
     const turns = this.loadSnapshots(params.session_id);
     const files = params.turn_id ? turns.get(params.turn_id) : [...turns.values()].at(-1);
     const abs = resolve(params.path ?? "");
     const snapFile = files?.get(abs);
     if (!snapFile) throw new RpcError("not_found", "no snapshot for this path");
-    let newText = "";
+    const looksBinary = (buf: Buffer): boolean => buf.subarray(0, 8192).includes(0);
+    const oldBuf = snapFile.existed ? snapFile.content : Buffer.alloc(0);
+    let newBuf: Buffer | null = null;
     try {
-      if (existsSync(abs) && statSync(abs).isFile()) newText = readFileSync(abs, "utf8");
+      if (existsSync(abs) && statSync(abs).isFile()) newBuf = readFileSync(abs);
     } catch {
-      newText = "";
+      newBuf = null;
     }
-    return { oldText: snapFile.existed ? snapFile.content.toString("utf8") : "", newText };
+    return {
+      oldText: oldBuf.toString("utf8"),
+      newText: newBuf ? newBuf.toString("utf8") : "",
+      binary: looksBinary(oldBuf) || (newBuf !== null && looksBinary(newBuf)),
+    };
   }
 
   /** 撤销指定回合（缺省最近回合）的快照文件（新建的删除），返回恢复数量 */

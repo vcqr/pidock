@@ -361,6 +361,8 @@ export const Method = {
   WORKSPACE_FILES: "workspace.files",
   /** 读取工作区内文本文件（路径安全校验 + 大小上限 + 二进制检测），文件浏览预览用 */
   WORKSPACE_READ_FILE: "workspace.read_file",
+  /** 单文件元信息（存在性/类型/大小/mtime；不存在返回 exists:false 不抛错），产出物卡验证用 */
+  FS_STAT: "fs.stat",
   SESSION_SET_PERMISSION_MODE: "session.set_permission_mode",
   SESSION_RESOLVE_APPROVAL: "session.resolve_approval",
   SESSION_RESOLVE_ASK: "session.resolve_ask",
