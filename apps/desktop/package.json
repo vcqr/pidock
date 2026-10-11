@@ -1,7 +1,7 @@
 {
   "name": "@pidock/desktop",
   "private": true,
-  "version": "0.2.7",
+  "version": "0.3.0",
   "description": "PiDock desktop app (Tauri 2)",
   "type": "module",
   "scripts": {
