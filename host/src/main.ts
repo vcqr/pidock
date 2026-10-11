@@ -1,5 +1,6 @@
 import "./runtime-setup.js";
 import { createInterface } from "node:readline";
+import { takeOverStdout } from "@earendil-works/pi-coding-agent/dist/core/output-guard.js";
 import { prepareEnv } from "./env.js";
 import { ConfigService } from "./config.js";
 import { emitError, emitResponse } from "./emit.js";
@@ -133,6 +134,11 @@ function emitFatalOut(code: string, message: string): void {
 }
 
 function main(): void {
+  // stdout 是协议通道。takeOverStdout 让 SDK 内部所有 process.stdout.write 与
+  // spawn 出来的包管理器（扩展依赖安装，stdio: "inherit"）改道 stderr/丢弃——
+  // pi 1.x 起 npm 输出（"added N packages..."）会打穿 JSONL（pi 自家 rpc-mode
+  // 同款做法）。协议帧改经 emit.ts 的 writeRawStdout 写真实 stdout。
+  takeOverStdout();
   // Extensions may console.log — stdout is the protocol channel, so divert all
   // console output to stderr before the SDK (and any extension) loads.
   for (const level of ["log", "info", "warn", "error", "debug"] as const) {

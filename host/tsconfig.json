@@ -17,7 +17,10 @@
     "paths": {
       "@earendil-works/pi-coding-agent/dist/config.js": [
         "./node_modules/@earendil-works/pi-coding-agent/dist/config.js"
-      ]
+      ],
+      "@earendil-works/pi-coding-agent/dist/core/output-guard.js": [
+        "./node_modules/@earendil-works/pi-coding-agent/dist/core/output-guard.js"
+      ],
     }
   },
   "include": [

@@ -112,16 +112,23 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # 编译 host sidecar 到 tauri externalBin 约定路径（binaries/ 已被 gitignore，需先建目录）
+      # 必须以 host/ 为 cwd，并同时满足编译版 codemode worker 的两个条件：
+      # 1. 传入 worker 入口点（SDK 的 getCodemodeWorkerSpecifier() 固定返回
+      #    "./src/extensions/codemode/worker.ts"，缺入口点 codemode 报 Cannot find module）；
+      # 2. --root .（bun 按入口点公共祖先目录生成内嵌清单键，两个入口同在 src/ 下
+      #    时键丢 src/ 前缀，worker 匹配失败报 Cannot find package 'quickjs-wasi'）。
+      # 见 host/src/extensions/codemode/worker.ts 与 host/package.json build。
       - name: 编译 pidock-host sidecar（${{ matrix.target }}）
         shell: bash
         run: |
           EXE=""
           case "${{ matrix.target }}" in *windows*) EXE=".exe" ;; esac
           mkdir -p apps/desktop/src-tauri/binaries
-          bun build host/src/main.ts --compile \
+          cd host
+          bun build ./src/main.ts ./src/extensions/codemode/worker.ts --compile --root . \
             --target=${{ matrix.bun_target }} \
-            --outfile "apps/desktop/src-tauri/binaries/pidock-host-${{ matrix.target }}$EXE"
-          ls -la apps/desktop/src-tauri/binaries/
+            --outfile "../apps/desktop/src-tauri/binaries/pidock-host-${{ matrix.target }}$EXE"
+          ls -la ../apps/desktop/src-tauri/binaries/
 
       - name: 生成 release notes
         id: release_notes

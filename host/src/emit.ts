@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { writeRawStdout } from "@earendil-works/pi-coding-agent/dist/core/output-guard.js";
 import type { Envelope } from "@pidock/protocol";
 
 /** Single writer for stdout JSONL frames; keeps ordering intact. */
@@ -41,7 +42,9 @@ export function emitFatal(message: string, sessionId?: string): void {
 
 function writeFrame(frame: unknown): void {
   try {
-    process.stdout.write(JSON.stringify(frame) + "\n");
+    // stdout 被 takeOverStdout 接管（main.ts），协议帧必须走 writeRawStdout 才到真实 stdout；
+    // 写失败时 writeRawStdout 内部直接 exit(1)（父进程已死，无需善后）
+    writeRawStdout(JSON.stringify(frame) + "\n");
   } catch {
     // stdout closed (parent died); main loop exits via stdin 'close'
   }

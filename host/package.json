@@ -9,18 +9,21 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "bun build ./src/main.ts --compile --outfile ../target/pidock-host.exe",
+    "build": "bun build ./src/main.ts ./src/extensions/codemode/worker.ts --compile --root . --outfile ../target/pidock-host.exe",
     "smoke": "bun run scripts/smoke.ts",
     "smoke:features": "bun run scripts/features-smoke.ts",
     "smoke:node": "node --experimental-strip-types scripts/smoke.ts",
+    "e2e:codemode": "bun run scripts/codemode-e2e.ts",
     "smoke:extension": "bun run scripts/extension-smoke.ts",
+    "smoke:codemode": "bun build ./scripts/codemode-binary-smoke.ts ./src/extensions/codemode/worker.ts --compile --root . --outfile ../target/codemode-smoke && ../target/codemode-smoke",
     "smoke:config": "bun run scripts/config-smoke.ts",
     "smoke:experts": "bun run scripts/experts-smoke.ts",
     "verify:experts-config": "bun run scripts/experts-config-verify.ts",
     "e2e:server": "bun run ../server/scripts/fake-desktop.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.0.4",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-codemode": "1.1.0",
     "@pidock/protocol": "workspace:*",
     "quickjs-wasi": "3.6.2",
     "typebox": "1.1.38",
