@@ -34,10 +34,17 @@ fn valid_branch(name: &str) -> bool {
 
 /// 运行 git 子命令，成功返回 trim 后的 stdout，失败带 stderr
 fn run(cwd: &str, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C").arg(cwd).args(args);
+    // 主程序是 GUI 子系统（无控制台），console 子进程会被 Windows 分配新终端
+    // 窗口（默认终端为 Windows Terminal 时弹 WT 窗口）一闪而过；CREATE_NO_WINDOW
+    // 使其无窗运行（piped IO 不受影响）
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd
         .output()
         .map_err(|e| format!("无法启动 git（请确认已安装）: {e}"))?;
     if out.status.success() {
