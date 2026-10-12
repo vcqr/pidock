@@ -8,7 +8,9 @@ import Icon from "./Icon.vue";
  * 自绘文件/文件夹选择弹层：服务端目录浏览（fs_list 命令），替代系统原生对话框。
  * 桌面与 webhost 共用——web 模式下系统对话框不可用，改由前端浏览服务端目录。
  * - mode="dir"（默认）：点目录行进入，路径栏可跳转，「选择当前目录」确认；
- * - mode="file"：目录行进入，文件行选中（accept 可按扩展名过滤），「选择此文件」确认。
+ * - mode="file"：目录行进入，文件行选中（accept 可按扩展名过滤），「选择此文件」确认；
+ * - 多磁盘/挂载卷：fs_list 随响应返回 drives（Windows 盘符、macOS /Volumes、
+ *   Linux 挂载点），「此电脑」视图列出全部；磁盘根目录（无 parent）再点 .. 也回到该视图。
  */
 const props = withDefaults(
   defineProps<{
@@ -35,6 +37,68 @@ const selectedFile = ref("");
 const specials = ref<Partial<Record<"desktop" | "downloads" | "pictures" | "documents", string | null>>>({});
 /** 默认不显示点开头的隐藏文件，避免家目录被系统目录刷屏 */
 const showHidden = ref(false);
+/** 各平台的磁盘/挂载卷（随 fs_list 返回），「此电脑」视图用 */
+const drives = ref<Array<{ name: string; path: string }>>([]);
+/** 「此电脑」盘符视图：非真实目录，纯前端用 drives 渲染，无确认按钮 */
+const atDrives = ref(false);
+const hasDrives = computed(() => drives.value.length > 0);
+
+// ---- 弹层尺寸：右缘调宽 / 底缘调高 / 右下角斜拉，记忆在 localStorage ----
+const FB_SIZE_KEY = "pidock.folderBrowserSize";
+const FB_DEFAULT_SIZE = { w: 640, h: 620 };
+const size = ref(readSize());
+const boxStyle = computed(() => ({ width: `${size.value.w}px`, height: `${size.value.h}px` }));
+
+function clampSize(w: number, h: number): { w: number; h: number } {
+  return {
+    w: Math.round(Math.min(Math.max(w, 460), window.innerWidth * 0.92)),
+    h: Math.round(Math.min(Math.max(h, 420), window.innerHeight * 0.92)),
+  };
+}
+function readSize(): { w: number; h: number } {
+  let { w, h } = FB_DEFAULT_SIZE;
+  try {
+    const raw = JSON.parse(localStorage.getItem(FB_SIZE_KEY) ?? "");
+    if (Number.isFinite(raw?.w)) w = raw.w;
+    if (Number.isFinite(raw?.h)) h = raw.h;
+  } catch {
+    // 无记忆或已损坏时用默认尺寸
+  }
+  return clampSize(w, h);
+}
+function saveSize(): void {
+  try {
+    localStorage.setItem(FB_SIZE_KEY, JSON.stringify(size.value));
+  } catch {
+    // localStorage 不可用时只当次生效
+  }
+}
+/** 拖拽改尺寸：dir 区分只调宽（x）、只调高（y）、双向（xy）；pointer capture 后
+ *  move/up 都落在手柄上，preventDefault 顺带禁掉拖动过程中的文本选择 */
+function onResizeStart(e: PointerEvent, dir: "x" | "y" | "xy"): void {
+  e.preventDefault();
+  const el = e.currentTarget as HTMLElement;
+  el.setPointerCapture(e.pointerId);
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const startW = size.value.w;
+  const startH = size.value.h;
+  const maxW = window.innerWidth * 0.92;
+  const maxH = window.innerHeight * 0.92;
+  const onMove = (ev: PointerEvent): void => {
+    if (dir !== "y") size.value.w = Math.round(Math.min(Math.max(startW + ev.clientX - startX, 460), maxW));
+    if (dir !== "x") size.value.h = Math.round(Math.min(Math.max(startH + ev.clientY - startY, 420), maxH));
+  };
+  const onUp = (): void => {
+    el.removeEventListener("pointermove", onMove);
+    el.removeEventListener("pointerup", onUp);
+    el.removeEventListener("pointercancel", onUp);
+    saveSize();
+  };
+  el.addEventListener("pointermove", onMove);
+  el.addEventListener("pointerup", onUp);
+  el.addEventListener("pointercancel", onUp);
+}
 
 const SPECIAL_ITEMS = [
   { key: "desktop", label: "桌面", icon: "computer-line" },
@@ -57,6 +121,12 @@ const visibleEntries = computed(() => {
   );
 });
 
+type Entry = { name: string; path: string; dir: boolean; drive?: boolean };
+/** 列表实际渲染条目：「此电脑」视图时是盘符，否则是当前目录条目 */
+const listEntries = computed<Entry[]>(() =>
+  atDrives.value ? drives.value.map((d) => ({ ...d, dir: true, drive: true })) : visibleEntries.value,
+);
+
 async function load(target?: string): Promise<void> {
   if (!fsList) {
     err.value = "当前环境不支持目录浏览";
@@ -77,6 +147,8 @@ async function load(target?: string): Promise<void> {
     pathInput.value = res.path;
     parent.value = res.parent;
     entries.value = res.entries;
+    drives.value = res.drives ?? [];
+    atDrives.value = false;
     if (res.specials) specials.value = res.specials;
   } catch (e) {
     err.value = e instanceof Error ? e.message : String(e);
@@ -87,6 +159,23 @@ async function load(target?: string): Promise<void> {
 
 function go(p: string): void {
   void load(p);
+}
+
+/** 「此电脑」盘符视图：无服务端往返，直接用已缓存的 drives 渲染 */
+function goDrives(): void {
+  atDrives.value = true;
+  path.value = "";
+  pathInput.value = "";
+  parent.value = null;
+  entries.value = [];
+  selectedFile.value = "";
+  err.value = "";
+}
+
+/** 向上一级：普通目录回 parent；已在盘符根（无 parent）则回到「此电脑」 */
+function goUp(): void {
+  if (parent.value) go(parent.value);
+  else if (hasDrives.value) goDrives();
 }
 
 function jump(): void {
@@ -125,8 +214,8 @@ function onKey(e: KeyboardEvent): void {
 </script>
 
 <template>
-  <div class="fb-mask" @click.self="emit('close')">
-    <div class="fb-box" role="dialog" aria-modal="true">
+  <div class="fb-mask">
+    <div class="fb-box" role="dialog" aria-modal="true" :style="boxStyle">
       <header class="fb-head">
         <span>{{ mode === "file" ? "选择文件" : "选择项目文件夹" }}</span>
         <button class="fb-x" title="关闭" @click="emit('close')">
@@ -167,12 +256,12 @@ function onKey(e: KeyboardEvent): void {
         </button>
       </div>
       <div class="fb-list">
-        <button v-if="parent" class="fb-item fb-up" @click="go(parent)">
+        <button v-if="!atDrives && (parent || hasDrives)" class="fb-item fb-up" @click="goUp">
           <Icon name="arrow-up-line" :size="14" />
           <span class="fb-name">..</span>
         </button>
         <button
-          v-for="e in visibleEntries"
+          v-for="e in listEntries"
           :key="e.path"
           class="fb-item"
           :class="{ on: e.path === selectedFile }"
@@ -180,14 +269,15 @@ function onKey(e: KeyboardEvent): void {
           @click="onEntryClick(e)"
         >
           <FileIcon v-if="!e.dir" :path="e.name" :dir="false" :size="14" />
+          <Icon v-else-if="e.drive" name="hard-drive-2-line" :size="14" />
           <Icon v-else name="folder-line" :size="14" />
           <span class="fb-name">{{ e.name }}</span>
         </button>
-        <div v-if="!loading && !visibleEntries.length" class="fb-empty">
+        <div v-if="!loading && !listEntries.length" class="fb-empty">
           {{
             !entries.length
               ? "此目录为空"
-              : visibleEntries.length === 0 && !showHidden && entries.length
+              : listEntries.length === 0 && !showHidden && entries.length
                 ? "没有可见条目（可点右上角显示隐藏文件）"
                 : "没有匹配的文件"
           }}
@@ -196,6 +286,7 @@ function onKey(e: KeyboardEvent): void {
       </div>
       <div v-if="err" class="fb-err">{{ err }}</div>
       <footer class="fb-foot">
+        <button v-if="hasDrives" class="fb-btn ghost" @click="goDrives">此电脑</button>
         <button class="fb-btn ghost" @click="go('')">主目录</button>
         <span class="fb-sp"></span>
         <button class="fb-btn ghost" @click="emit('close')">取消</button>
@@ -211,6 +302,9 @@ function onKey(e: KeyboardEvent): void {
           选择当前目录
         </button>
       </footer>
+      <span class="fb-rs fb-rs-r" @pointerdown="onResizeStart($event, 'x')" />
+      <span class="fb-rs fb-rs-b" @pointerdown="onResizeStart($event, 'y')" />
+      <span class="fb-rs fb-rs-c" @pointerdown="onResizeStart($event, 'xy')" />
     </div>
   </div>
 </template>
@@ -223,10 +317,14 @@ function onKey(e: KeyboardEvent): void {
   background: rgba(0, 0, 0, 0.5);
   display: grid;
   place-items: center;
+  /* 蒙版点击不关闭（误触率过高），关闭只走 ✕ / 取消 / Esc */
+  cursor: default;
 }
 .fb-box {
-  width: 460px;
+  position: relative;
+  width: 640px;
   max-width: 92vw;
+  max-height: 92vh;
   display: flex;
   flex-direction: column;
   background: var(--pd-bg-raised);
@@ -307,7 +405,8 @@ function onKey(e: KeyboardEvent): void {
 .fb-quick-btn:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
 .fb-quick-btn.on { background: var(--pd-bg-hover); color: var(--pd-accent); }
 .fb-list {
-  height: 300px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   border: 1px solid var(--pd-border-soft);
   border-radius: 8px;
@@ -372,4 +471,44 @@ function onKey(e: KeyboardEvent): void {
 }
 .fb-btn.ok:hover:not(:disabled) { background: var(--pd-accent-hover); }
 .fb-btn.ok:disabled { opacity: 0.5; cursor: default; }
+/* 拖拽改尺寸手柄：右缘调宽 / 底缘调高 / 右下角斜拉（带视觉提示） */
+.fb-rs {
+  position: absolute;
+  z-index: 6;
+  touch-action: none;
+}
+.fb-rs-r {
+  top: 12px;
+  right: 0;
+  bottom: 12px;
+  width: 5px;
+  cursor: ew-resize;
+}
+.fb-rs-b {
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  height: 5px;
+  cursor: ns-resize;
+}
+.fb-rs-c {
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+.fb-rs-c::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--pd-border);
+  border-bottom: 2px solid var(--pd-border);
+  border-bottom-right-radius: 3px;
+}
+.fb-rs-r:hover, .fb-rs-b:hover { background: var(--pd-bg-hover); }
+.fb-rs-c:hover::after { border-color: var(--pd-text-4); }
 </style>

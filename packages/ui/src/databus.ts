@@ -53,6 +53,8 @@ export interface FsListing {
   entries: Array<{ name: string; path: string; dir: boolean }>;
   /** 常用目录快捷入口（桌面/下载/图片/文档），不存在时为 null */
   specials?: Partial<Record<"desktop" | "downloads" | "pictures" | "documents", string | null>>;
+  /** 系统磁盘与已挂载卷（Windows 盘符 / macOS /Volumes / Linux 挂载点），「此电脑」入口用 */
+  drives?: Array<{ name: string; path: string }>;
 }
 export const FS_LIST: InjectionKey<(path?: string) => Promise<FsListing>> = Symbol("pidock.fsList");
 

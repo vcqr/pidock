@@ -20,3 +20,7 @@ tokio-cron-scheduler = "0.15"
 croner = "3"
 # GUI 进程（尤其 macOS）环境里没有 HOSTNAME/COMPUTERNAME，取主机名要走系统调用
 hostname = "0.4"
+
+# fs_list 的盘符枚举走 GetLogicalDrives：即时返回，避免逐字母探测在断连网络盘上卡死
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }

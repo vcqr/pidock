@@ -51,6 +51,8 @@ fn reveal_path(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
+        // fs_list 返回的路径分隔符归一为 /，explorer（尤其 /select 语法）只认 \
+        let path = path.replace('/', "\\");
         if std::path::Path::new(&path).is_dir() {
             std::process::Command::new("explorer")
                 .arg(&path)
