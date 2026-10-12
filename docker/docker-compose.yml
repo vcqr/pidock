@@ -28,6 +28,9 @@ services:
       - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
       - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0
       - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      # topic 未显式覆盖 max.message.bytes 时动态继承 broker 默认值；默认 1MB
+      # 会拒收大镜像事件与命令回执（gateway 只记日志，web 端表现为命令超时）
+      - KAFKA_MESSAGE_MAX_BYTES=20971520
       - KAFKA_LOG_RETENTION_HOURS=168
     volumes:
       - kafka_data:/var/lib/kafka/data

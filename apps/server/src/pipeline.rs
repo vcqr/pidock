@@ -46,11 +46,17 @@ pub mod kafka {
         topic: String,
     }
 
+    /// 单条消息上限。默认 1MB：镜像事件（长消息、file_changes 快照）与命令回执
+    /// （专家档案带头像）都可能超限，超限即静默丢帧（produce 被拒仅记日志）。
+    /// 20MB 与 axum WS 默认帧上限同量级，单分区单用户实例完全无压力。
+    const KAFKA_MAX_MESSAGE_BYTES: &str = "20971520";
+
     impl KafkaSink {
         pub fn connect(brokers: &str, topic: &str) -> anyhow::Result<Self> {
             let producer: FutureProducer = ClientConfig::new()
                 .set("bootstrap.servers", brokers)
                 .set("message.timeout.ms", "10000")
+                .set("message.max.bytes", KAFKA_MAX_MESSAGE_BYTES)
                 .create()?;
             Ok(Self {
                 producer,
@@ -123,6 +129,10 @@ pub mod kafka {
                 .set("group.id", "pidock-ingest")
                 .set("enable.auto.commit", "true")
                 .set("auto.offset.reset", "earliest")
+                // 与 producer 的 message.max.bytes 同步放大：单分区抓取上限低于
+                // 消息大小时 consumer 永远取不下来，反复报 MSG_SIZE_TOO_LARGE
+                .set("max.partition.fetch.bytes", KAFKA_MAX_MESSAGE_BYTES)
+                .set("fetch.max.bytes", "52428800")
                 // fast rebalance: a killed instance frees its partition quickly
                 .set("session.timeout.ms", "10000")
                 .set("heartbeat.interval.ms", "3000")

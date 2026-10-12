@@ -169,7 +169,13 @@ async fn desktop_socket(state: AppState, user_id: String, socket: WebSocket) {
                 // envelope: stamp user_id + machine_id, push into pipeline
                 let mid = machine_id.clone().unwrap_or_default();
                 let wrapped = crate::pipeline::wrap(&user_id, &mid, &frame);
-                if let Err(e) = state.sink.publish(&mid, &wrapped.to_string()).await {
+                // command_result 是纯请求-回执（ingest 对它不落库不推送），直转用户
+                // 实时频道：大回执（专家档案带头像可超 kafka 默认 1MB 消息上限被
+                // broker 拒收 → web 端 30s「命令超时」）不再受管道消息上限约束，命令
+                // 回执也少一跳管道时延
+                if frame.get("kind").and_then(|v| v.as_str()) == Some("command_result") {
+                    state.publish_to_user(&user_id, &wrapped.to_string()).await;
+                } else if let Err(e) = state.sink.publish(&mid, &wrapped.to_string()).await {
                     tracing::error!("pipeline publish failed: {e}");
                 }
             }
