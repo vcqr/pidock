@@ -40,7 +40,7 @@
   place-items: center;
   background: var(--pd-accent);
   border-radius: 14px;
-  color: white;
+  color: var(--pd-on-accent);
   font-size: calc(30px * var(--pd-font-scale));
   font-weight: 700;
   box-shadow: 0 6px 22px rgba(232, 163, 61, 0.28);
@@ -144,7 +144,7 @@
 .auth-primary {
   margin-top: 4px;
   background: var(--pd-accent);
-  color: white;
+  color: var(--pd-on-accent);
   border: none;
   border-radius: 9px;
   padding: 11px;
@@ -219,11 +219,11 @@
   place-items: center;
   background: var(--pd-accent);
   border-radius: 7px;
-  color: white;
+  color: var(--pd-on-accent);
 }
 button.primary {
   background: var(--pd-accent);
-  color: white;
+  color: var(--pd-on-accent);
   border: none;
   border-radius: 8px;
   padding: 10px;

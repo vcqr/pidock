@@ -867,9 +867,9 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 .btn.primary {
   background: var(--pd-accent);
   border-color: var(--pd-accent);
-  color: #fff;
+  color: var(--pd-on-accent);
 }
-.btn.primary:hover { opacity: 0.92; }
+.btn.primary:hover { background: var(--pd-accent-hover); }
 .btn.sm { padding: 5px 10px; font-size: calc(12px * var(--pd-font-scale)); border-radius: 8px; }
 .icon-btn {
   width: 30px;
@@ -1080,7 +1080,7 @@ label.opt:hover { background: var(--pd-bg-hover); }
   color: var(--pd-text-3);
   cursor: pointer;
 }
-.seg-btn.active { background: var(--pd-accent); color: #fff; }
+.seg-btn.active { background: var(--pd-accent); color: var(--pd-on-accent); }
 .pick-row { display: flex; gap: 8px; }
 .pick-row input { flex: 1; }
 </style>

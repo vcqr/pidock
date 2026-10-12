@@ -1368,8 +1368,8 @@ export default { components: { ToolCard, MessageItem } };
   background: var(--pd-accent);
   transition: width 0.4s ease;
 }
-.ctx-meter.warm .fill { background: var(--pd-amber, #e6a23c); }
-.ctx-meter.warm { color: var(--pd-amber, #e6a23c); }
+.ctx-meter.warm .fill { background: var(--pd-yellow, #e8a33d); }
+.ctx-meter.warm { color: var(--pd-yellow, #e8a33d); }
 .ctx-meter.hot .fill { background: var(--pd-red, #e5484d); }
 .ctx-meter.hot { color: var(--pd-red, #e5484d); }
 .ctx-text { white-space: nowrap; }
@@ -1379,9 +1379,9 @@ export default { components: { ToolCard, MessageItem } };
   gap: 5px;
   padding: 2px 9px;
   border-radius: 999px;
-  border: 1px solid var(--pd-amber, #e6a23c);
+  border: 1px solid var(--pd-yellow, #e8a33d);
   background: none;
-  color: var(--pd-amber, #e6a23c);
+  color: var(--pd-yellow, #e8a33d);
   font-size: calc(11px * var(--pd-font-scale, 1));
   cursor: pointer;
   white-space: nowrap;
@@ -1393,8 +1393,8 @@ export default { components: { ToolCard, MessageItem } };
   gap: 5px;
   padding: 2px 9px;
   border-radius: 999px;
-  border: 1px solid var(--pd-amber, #e6a23c);
-  color: var(--pd-amber, #e6a23c);
+  border: 1px solid var(--pd-yellow, #e8a33d);
+  color: var(--pd-yellow, #e8a33d);
   font-size: calc(11px * var(--pd-font-scale, 1));
   white-space: nowrap;
 }
@@ -1633,7 +1633,7 @@ export default { components: { ToolCard, MessageItem } };
   font-weight: 600;
   cursor: pointer;
 }
-.approval-btn.ok { background: var(--pd-accent); color: #1a1a1a; }
+.approval-btn.ok { background: var(--pd-accent); color: var(--pd-on-accent); }
 .approval-btn.ok:hover { background: var(--pd-accent-hover); }
 .approval-btn.no { background: var(--pd-bg-hover); color: var(--pd-text-2); }
 .approval-btn.no:hover { background: var(--pd-bg-active); color: var(--pd-text); }

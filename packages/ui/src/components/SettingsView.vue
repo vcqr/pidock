@@ -1378,7 +1378,7 @@ function openFolder(): void {
   cursor: pointer;
   flex: none;
 }
-.dark-btn:hover { background: var(--pd-accent); color: #1a1a1a; }
+.dark-btn:hover { background: var(--pd-accent); color: var(--pd-on-accent); }
 .dark-btn:disabled { opacity: 0.6; cursor: default; }
 
 .badge {

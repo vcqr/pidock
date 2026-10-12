@@ -175,7 +175,7 @@ function submit(): void {
   transition: color 0.15s, background-color 0.15s, border-color 0.15s;
 }
 .ask-opt:hover .opt-num { border-color: var(--pd-accent); color: var(--pd-accent); }
-.ask-opt.on .opt-num { background: var(--pd-accent); border-color: var(--pd-accent); color: #1a1a1a; }
+.ask-opt.on .opt-num { background: var(--pd-accent); border-color: var(--pd-accent); color: var(--pd-on-accent); }
 .opt-label { font-weight: 600; flex: none; }
 .opt-rec {
   flex: none;
@@ -215,7 +215,7 @@ function submit(): void {
   font-weight: 600;
   cursor: pointer;
 }
-.ask-btn.ok { background: var(--pd-accent); color: #1a1a1a; }
+.ask-btn.ok { background: var(--pd-accent); color: var(--pd-on-accent); }
 .ask-btn.ok:hover:not(:disabled) { background: var(--pd-accent-hover); }
 .ask-btn.ok:disabled { opacity: 0.45; cursor: not-allowed; }
 .ask-btn.no { background: var(--pd-bg-hover); color: var(--pd-text-2); }

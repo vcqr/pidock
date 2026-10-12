@@ -93,7 +93,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 .c-btn.ok {
   background: var(--pd-accent);
   border-color: var(--pd-accent);
-  color: #1a1a1a;
+  color: var(--pd-on-accent);
   font-weight: 600;
 }
 .c-btn.ok:hover { background: var(--pd-accent-hover); }

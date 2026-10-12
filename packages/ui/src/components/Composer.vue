@@ -1397,7 +1397,7 @@ function onKeydown(e: KeyboardEvent): void {
 .c-addrow input:focus { outline: none; border-color: var(--pd-accent); }
 .c-addbtn {
   background: var(--pd-accent);
-  color: #1a1a1a;
+  color: var(--pd-on-accent);
   border: none;
   border-radius: 8px;
   padding: 6px 12px;

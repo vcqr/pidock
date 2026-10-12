@@ -29,6 +29,8 @@
   --pd-accent-hover: #f2b254;
   --pd-accent-soft: #3a2d16;
   --pd-accent-text: #f3c887;
+  /* 琥珀实心底上的文字/图标色：琥珀偏亮，两主题统一用深色字保证对比度 */
+  --pd-on-accent: #1a1a1a;
   --pd-green: #34c184;
   --pd-green-soft: #17301f;
   --pd-green-text: #8fe0b4;
@@ -71,6 +73,7 @@
   --pd-accent-hover: #9c6512;
   --pd-accent-soft: #fdf1dc;
   --pd-accent-text: #8a5a10;
+  --pd-on-accent: #1a1a1a;
   --pd-green: #1e9e63;
   --pd-green-soft: #ddf3e7;
   --pd-green-text: #167a4b;

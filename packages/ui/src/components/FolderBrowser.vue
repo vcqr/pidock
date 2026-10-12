@@ -466,7 +466,7 @@ function onKey(e: KeyboardEvent): void {
 .fb-btn.ok {
   background: var(--pd-accent);
   border-color: var(--pd-accent);
-  color: #1a1a1a;
+  color: var(--pd-on-accent);
   font-weight: 600;
 }
 .fb-btn.ok:hover:not(:disabled) { background: var(--pd-accent-hover); }

@@ -1131,7 +1131,7 @@ async function reloadRuntime(): Promise<void> {
 .form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .primary {
   background: var(--pd-accent);
-  color: #1a1a1a;
+  color: var(--pd-on-accent);
   border: none;
   border-radius: 9px;
   padding: 8px 18px;

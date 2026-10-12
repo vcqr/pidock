@@ -230,7 +230,7 @@ const stateLabel = (s: any): string =>
   font-weight: 600;
   cursor: pointer;
 }
-.primary-btn:hover { background: var(--pd-accent); color: #1a1a1a; }
+.primary-btn:hover { background: var(--pd-accent); color: var(--pd-on-accent); }
 .primary-btn:disabled { opacity: 0.6; cursor: default; }
 .notice {
   margin-top: 12px;

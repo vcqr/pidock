@@ -732,7 +732,7 @@ h2 {
   font-weight: 600;
   cursor: pointer;
 }
-.dark-btn:hover { background: var(--pd-accent); color: #1a1a1a; }
+.dark-btn:hover { background: var(--pd-accent); color: var(--pd-on-accent); }
 
 .list { margin-top: 14px; }
 .row {
