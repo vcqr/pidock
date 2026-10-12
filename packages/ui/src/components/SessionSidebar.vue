@@ -125,7 +125,7 @@ function closeCtxMenu(): void {
 async function confirmRemoveProject(g: Group): Promise<void> {
   projMenu.value = null;
   const ok = await appConfirm({
-    title: `移除项目「${g.project}」？`,
+    title: `移除项目「${g.label}」？`,
     message: `将把它的 ${g.sessions.length} 个会话从列表移除（不删除项目目录；磁盘上的会话记录文件保留，但界面中将无法再打开）。`,
     danger: true,
   });
@@ -244,17 +244,50 @@ const tasksCollapsed = ref(false);
 const projectsCollapsed = ref(false);
 
 interface Group {
-  project: string;
   cwd: string;
+  /** 显示名 = 目录名；与其他同名项目冲突时追加父路径段（如 x/a/foo） */
+  label: string;
   sessions: SessionSummaryUi[];
+}
+/** 路径 → 父目录段（兼容 / 与 \）；/x/a/foo → ["x","a"] */
+function parentSegs(p: string): string[] {
+  return p.replace(/\\/g, "/").split("/").filter(Boolean).slice(0, -1);
+}
+/** 一组同目录名的路径 → 各自最短可区分的显示名，父路径段拼在目录名前（x/a/foo） */
+function distinctLabels(cwds: string[]): Map<string, string> {
+  const segs = new Map(cwds.map((c) => [c, parentSegs(c).map((x) => x.toLowerCase())]));
+  const out = new Map<string, string>();
+  for (const cwd of cwds) {
+    const own = segs.get(cwd)!;
+    let n = 0;
+    while (n < own.length) {
+      n++;
+      const tail = own.slice(own.length - n).join("/");
+      if (cwds.every((o) => o === cwd || segs.get(o)!.slice(segs.get(o)!.length - n).join("/") !== tail)) break;
+    }
+    out.set(cwd, n ? [...own.slice(own.length - n), basename(cwd) || cwd].join("/") : basename(cwd) || cwd);
+  }
+  return out;
 }
 const groups = computed<Group[]>(() => {
   const map = new Map<string, Group>();
   for (const s of filtered.value) {
     if (isLooseTask(s)) continue; // 不在项目中的会话挂到「任务」分组
-    const project = basename(s.cwd) || "未分类";
-    if (!map.has(project)) map.set(project, { project, cwd: s.cwd, sessions: [] });
-    map.get(project)!.sessions.push(s);
+    const cwd = s.cwd.replace(/[\\/]+$/, "") || s.cwd; // 尾部分隔符归一，同目录不拆组
+    if (!map.has(cwd)) map.set(cwd, { cwd, label: basename(cwd) || "未分类", sessions: [] });
+    map.get(cwd)!.sessions.push(s);
+  }
+  // 不同路径下的同名目录追加父路径段区分（x/a/foo 与 y/a/foo），无重名保持纯目录名
+  const buckets = new Map<string, Group[]>();
+  for (const g of map.values()) {
+    const list = buckets.get(g.label) ?? [];
+    list.push(g);
+    buckets.set(g.label, list);
+  }
+  for (const list of buckets.values()) {
+    if (list.length < 2) continue;
+    const labels = distinctLabels(list.map((g) => g.cwd));
+    for (const g of list) g.label = labels.get(g.cwd) || g.label;
   }
   return [...map.values()].sort((a, b) => {
     const la = a.sessions[0], lb = b.sessions[0];
@@ -265,24 +298,24 @@ const groups = computed<Group[]>(() => {
 const projectCount = computed(() => groups.value.reduce((n, g) => n + g.sessions.length, 0));
 
 function visibleIn(g: Group): SessionSummaryUi[] {
-  return expanded.value.has(g.project) ? g.sessions : g.sessions.slice(0, PREVIEW);
+  return expanded.value.has(g.cwd) ? g.sessions : g.sessions.slice(0, PREVIEW);
 }
-function toggleGroup(project: string): void {
+function toggleGroup(cwd: string): void {
   const next = new Set(collapsed.value);
-  next.has(project) ? next.delete(project) : next.add(project);
+  next.has(cwd) ? next.delete(cwd) : next.add(cwd);
   collapsed.value = next;
 }
 /** 是否全部项目分组都已折叠（区块头切换按钮状态） */
 const allProjectsCollapsed = computed(
-  () => groups.value.length > 0 && groups.value.every((g) => collapsed.value.has(g.project)),
+  () => groups.value.length > 0 && groups.value.every((g) => collapsed.value.has(g.cwd)),
 );
 /** 展开/收起全部项目分组 */
 function toggleAllProjectGroups(): void {
-  collapsed.value = allProjectsCollapsed.value ? new Set<string>() : new Set(groups.value.map((g) => g.project));
+  collapsed.value = allProjectsCollapsed.value ? new Set<string>() : new Set(groups.value.map((g) => g.cwd));
 }
-function toggleMore(project: string): void {
+function toggleMore(cwd: string): void {
   const next = new Set(expanded.value);
-  next.has(project) ? next.delete(project) : next.add(project);
+  next.has(cwd) ? next.delete(cwd) : next.add(cwd);
   expanded.value = next;
 }
 
@@ -418,7 +451,7 @@ onBeforeUnmount(() => {
             <Icon name="arrow-down-s-line" :size="13" :class="{ fold: projectsCollapsed }" />
           </button>
           <template v-if="!projectsCollapsed">
-            <template v-for="g in groups" :key="g.cwd + g.project">
+            <template v-for="g in groups" :key="g.cwd">
               <div
                 class="folder-row"
                 :title="g.cwd"
@@ -428,17 +461,17 @@ onBeforeUnmount(() => {
               >
                 <span
                   class="chev"
-                  :class="{ fold: collapsed.has(g.project) }"
+                  :class="{ fold: collapsed.has(g.cwd) }"
                   title="展开 / 折叠"
-                  @click.stop="toggleGroup(g.project)"
+                  @click.stop="toggleGroup(g.cwd)"
                 >
                   <Icon name="arrow-down-s-line" :size="12" />
                 </span>
-                <Icon :name="collapsed.has(g.project) ? 'folder-line' : 'folder-open-line'" :size="15" />
-                <span class="fname">{{ g.project }}</span>
+                <Icon :name="collapsed.has(g.cwd) ? 'folder-line' : 'folder-open-line'" :size="15" />
+                <span class="fname">{{ g.label }}</span>
                 <span class="g-count">{{ g.sessions.length }}</span>
               </div>
-              <template v-if="!collapsed.has(g.project)">
+              <template v-if="!collapsed.has(g.cwd)">
               <div
                 v-for="s in visibleIn(g)"
                 :key="s.session_id"
@@ -478,8 +511,8 @@ onBeforeUnmount(() => {
                 <div
                   v-if="g.sessions.length > PREVIEW"
                   class="show-more"
-                  @click="toggleMore(g.project)"
-                >{{ expanded.has(g.project) ? "收起" : "显示更多" }}</div>
+                  @click="toggleMore(g.cwd)"
+                >{{ expanded.has(g.cwd) ? "收起" : "显示更多" }}</div>
               </template>
             </template>
           </template>
