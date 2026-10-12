@@ -2,3 +2,5 @@ packages:
   - host
   - apps/*
   - packages/*
+allowBuilds:
+  esbuild: true
