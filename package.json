@@ -1,7 +1,7 @@
 {
   "name": "pidock",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "PiDock - desktop cockpit & cloud mirror for the pi coding agent",
   "packageManager": "pnpm@12.11.2",
   "engines": {
