@@ -222,12 +222,20 @@ deliver 编排、pending 登记、投递失败回群说明——平台适配器�
   群里发 `/new` 重置映射（该条不投递，回执确认），下一条消息重新开会话。
   `new`（每条新建）/ `latest`（最近活跃，会漂移）/ `fixed`（指定会话，
   保存时强制非空；会话被删则报错回群，发 /new 不适用，需改配置）
-- **飞书（HTTP 推送型）** `POST /im/feishu/event/{channel_id}`：URL 内
+- **飞书（双模式：push / stream）**：渠道 `mode` 字段选择。push 模式
+  `POST /im/feishu/event/{channel_id}`：URL 内
   渠道 id = 弱凭证 + 确定性路由。url_verification 原样回 challenge（1s
   内）；Encrypt Key 验签（`X-Lark-Signature` = sha256(ts+nonce+key+body)）
   + 解密（AES-256-CBC，key = SHA256(Encrypt Key)，base64(iv+data)，PKCS7）；
   事件 token 必须等于 verification_token；只接 text（清洗 `@_user_N`）；
-  回复走 `im/v1/messages`，tenant_access_token 换取后缓存 Redis
+  回复走 `im/v1/messages`，tenant_access_token 换取后缓存 Redis。
+  stream 模式（长连接，免公网地址，验证方式 = 连接握手鉴权，无需
+  verification_token）：`POST /callback/ws/endpoint` 换 wss 地址（带
+  device_id/service_id），帧为 pbbp2 protobuf（Frame{SeqID=1,LogID=2,
+  service=3,method=4,headers=5,payload=8}），事件 payload 与推送同构；
+  事件处理完回写 ACK 帧（payload `{"code":200}`），未 ACK 飞书重推；
+  保活每 PingInterval（服务端可下发，默认 120s）发 CONTROL/ping 帧；
+  sum>1 分包按 message_id 聚合。事件解析与推送共用 parse_event_payload
 - **钉钉（Stream 流模式）**：服务端作 WS 客户端主动连钉钉，**无需公网
   回调地址**。`POST /v1.0/gateway/connections/open`（clientId/clientSecret
   + 订阅 SYSTEM/ping、SYSTEM/disconnect、CALLBACK 机器人 topic）换

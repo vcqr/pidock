@@ -6,6 +6,8 @@ import { ApiError, type ApiClient } from "../auth.js";
 interface ChannelInfo {
   id: string;
   platform: string;
+  /** 接入方式：push（HTTP 推送）| stream（长连接）；空 = 平台默认 */
+  mode: string;
   name: string;
   app_id: string;
   app_secret: string;
@@ -66,8 +68,10 @@ const expandedId = ref("");
 // 创建/编辑表单
 const fName = ref("");
 const fPlatform = ref<"feishu" | "dingtalk">("feishu");
-/** 飞书走 HTTP 推送；钉钉走 Stream 长连接（无需 verification_token/encrypt_key） */
+/** 飞书支持两种接入方式；钉钉仅 Stream 长连接（无需 verification_token/encrypt_key） */
 const isFeishu = computed(() => fPlatform.value === "feishu");
+const isStream = computed(() => fPlatform.value === "dingtalk" || fMode.value === "stream");
+const fMode = ref<"push" | "stream">("push");
 const fAppId = ref("");
 const fAppSecret = ref("");
 const fEncryptKey = ref("");
@@ -138,6 +142,7 @@ function openAdd(): void {
   editingId.value = null;
   fName.value = "";
   fPlatform.value = "feishu";
+  fMode.value = "push";
   fAppId.value = "";
   fAppSecret.value = "";
   fEncryptKey.value = "";
@@ -158,6 +163,7 @@ function openEdit(t: ChannelInfo): void {
   editingId.value = t.id;
   fName.value = t.name;
   fPlatform.value = (["feishu", "dingtalk"].includes(t.platform) ? t.platform : "feishu") as "feishu" | "dingtalk";
+  fMode.value = (["push", "stream"].includes(t.mode) ? t.mode : "push") as "push" | "stream";
   fAppId.value = t.app_id;
   fAppSecret.value = t.app_secret;
   fEncryptKey.value = t.encrypt_key;
@@ -181,6 +187,7 @@ function openEdit(t: ChannelInfo): void {
 function formBody(): string {
   return JSON.stringify({
     platform: fPlatform.value,
+    mode: isFeishu.value ? fMode.value : "stream",
     name: fName.value,
     app_id: fAppId.value,
     app_secret: fAppSecret.value,
@@ -198,7 +205,7 @@ function formBody(): string {
 }
 
 async function save(): Promise<void> {
-  if (!fName.value.trim() || !fAppId.value.trim() || (isFeishu.value && !fVerifyToken.value.trim()) || !fMachine.value)
+  if (!fName.value.trim() || !fAppId.value.trim() || (!isStream.value && !fVerifyToken.value.trim()) || !fMachine.value)
     return;
   creating.value = true;
   error.value = null;
@@ -329,12 +336,27 @@ function fmtDate(s: string): string {
           </div>
           <template v-if="isFeishu">
             <div class="f-field">
-              <label>Verification Token</label>
-              <input v-model="fVerifyToken" placeholder="事件与回调 → 加密策略" spellcheck="false" />
+              <label>接入方式</label>
+              <select v-model="fMode">
+                <option value="push">Webhook 推送（需公网地址）</option>
+                <option value="stream">长连接（免公网地址）</option>
+              </select>
             </div>
-            <div class="f-field">
-              <label>Encrypt Key（可选）</label>
-              <input v-model="fEncryptKey" placeholder="配置后事件加密推送，服务端自动解密验签" spellcheck="false" />
+            <template v-if="fMode === 'push'">
+              <div class="f-field">
+                <label>Verification Token</label>
+                <input v-model="fVerifyToken" placeholder="事件与回调 → 加密策略" spellcheck="false" />
+              </div>
+              <div class="f-field">
+                <label>Encrypt Key（可选）</label>
+                <input v-model="fEncryptKey" placeholder="配置后事件加密推送，服务端自动解密验签" spellcheck="false" />
+              </div>
+            </template>
+            <div v-else class="f-field f-wide">
+              <span class="f-hint">
+                长连接：服务端主动连飞书网关，无需公网地址与 Verification Token。需在飞书开发者后台
+                事件订阅方式选择「使用长连接接收事件」并订阅 im.message.receive_v1。
+              </span>
             </div>
           </template>
           <div v-else class="f-field f-wide">
@@ -415,7 +437,7 @@ function fmtDate(s: string): string {
             <button class="ghost" @click="showForm = false">取消</button>
             <button
               class="primary"
-              :disabled="creating || !fName.trim() || !fAppId.trim() || (isFeishu && !fVerifyToken.trim()) || !fMachine"
+              :disabled="creating || !fName.trim() || !fAppId.trim() || (!isStream && !fVerifyToken.trim()) || !fMachine"
               @click="save"
             >
               {{ creating ? (editingId ? "保存中…" : "创建中…") : editingId ? "保存修改" : "创建渠道" }}
@@ -459,14 +481,14 @@ function fmtDate(s: string): string {
                 <button class="revoke" :disabled="busyId === t.id" @click="remove(t)">删除</button>
               </div>
               <div v-if="expandedId === t.id" class="im-detail">
-                <div v-if="t.platform === 'feishu'" class="url-row">
+                <div v-if="t.platform === 'feishu' && t.mode !== 'stream'" class="url-row">
                   <span class="d-k">事件订阅 URL</span>
                   <code class="mono url">{{ eventUrl(t) }}</code>
                   <button class="ghost" @click="copyUrl(t)">{{ copiedUrlId === t.id ? "已复制 ✓" : "复制" }}</button>
                 </div>
                 <div v-else class="url-row">
                   <span class="d-k">接入方式</span>
-                  <span class="d-v">Stream 长连接（服务端主动连钉钉，无需公网回调地址）</span>
+                  <span class="d-v">Stream 长连接（服务端主动连{{ t.platform === 'feishu' ? '飞书' : '钉钉' }}网关，无需公网回调地址）</span>
                 </div>
                 <div class="d-grid">
                   <span class="d-k">App ID</span>
@@ -494,10 +516,21 @@ function fmtDate(s: string): string {
                   <span class="d-v mono">{{ t.id }}</span>
                 </div>
                 <div class="d-steps">
-                  <span v-if="t.platform === 'feishu'" class="f-hint">
+                  <span
+                    v-if="t.platform === 'feishu' && t.mode !== 'stream'"
+                    class="f-hint"
+                  >
                     接入步骤：① 开发者后台创建企业自建应用 → ② 事件与回调 → 订阅方式选「将事件发送至开发者服务器」，
                     粘贴上方 URL → ③ 开通 im:message.receive_v1 订阅与「以应用身份发消息」权限 → ④ 发布应用版本，
                     在群里 @机器人 试试。
+                  </span>
+                  <span
+                    v-else-if="t.platform === 'feishu'"
+                    class="f-hint"
+                  >
+                    接入步骤：① 开发者后台创建企业自建应用 → ② 事件与回调 → 订阅方式选「使用长连接接收事件」
+                    并订阅 im.message.receive_v1 → ③ 开通「以应用身份发消息」权限 → ④ 发布应用版本，
+                    渠道保存后约 30 秒内服务端自动建立连接，无需公网地址。
                   </span>
                   <span v-else class="f-hint">
                     接入步骤：① 开发者后台创建企业内部应用并获取 AppKey/AppSecret → ② 应用内添加「机器人」能力 →

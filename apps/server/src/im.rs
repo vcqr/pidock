@@ -147,10 +147,14 @@ pub(crate) struct ChannelBody {
     name: String,
     app_id: String,
     app_secret: String,
-    /// 可选；飞书配置后事件加密推送
+    /// 接入方式：push（HTTP 推送，默认）| stream（长连接，免公网地址）。
+    /// 空 = 平台默认（钉钉 stream，飞书 push）
+    #[serde(default)]
+    mode: String,
+    /// 可选；飞书 push 模式配置后事件加密推送
     #[serde(default)]
     encrypt_key: String,
-    /// 飞书必填（防伪）；流模式平台无需
+    /// 飞书 push 模式必填（防伪）；长连接模式无需
     #[serde(default)]
     verification_token: String,
     machine_id: String,
@@ -186,6 +190,9 @@ async fn validate(state: &AppState, user_id: &str, body: &ChannelBody) -> Result
     if body.app_id.trim().is_empty() || body.app_secret.trim().is_empty() {
         return Err("App ID 与 App Secret 不能为空".into());
     }
+    if !["", "push", "stream"].contains(&body.mode.as_str()) {
+        return Err("无效的接入方式，可选：push / stream".into());
+    }
     platform.validate_channel(body)?;
     let owned = state
         .mongo
@@ -205,6 +212,11 @@ async fn validate(state: &AppState, user_id: &str, body: &ChannelBody) -> Result
     Ok(())
 }
 
+/// 渠道接入方式缺省值：钉钉类流平台 = stream，其余 = push
+fn default_mode(platform: &dyn ImPlatform) -> &'static str {
+    if platform.uses_stream() { "stream" } else { "push" }
+}
+
 fn default_perm(p: &str) -> &str {
     if p.trim().is_empty() {
         "edit-auto"
@@ -214,9 +226,21 @@ fn default_perm(p: &str) -> &str {
 }
 
 fn channel_json(d: &BsonDoc, hostname: &str) -> Value {
+    let mode = {
+        let m = d.get_str("mode").unwrap_or_default();
+        if m.is_empty() {
+            match platform_of(d.get_str("platform").unwrap_or_default()) {
+                Some(p) => default_mode(p),
+                None => "push",
+            }
+        } else {
+            m
+        }
+    };
     json!({
         "id": d.get_str("_id").unwrap_or_default(),
         "platform": d.get_str("platform").unwrap_or_default(),
+        "mode": mode,
         "name": d.get_str("name").unwrap_or_default(),
         "app_id": d.get_str("app_id").unwrap_or_default(),
         "app_secret": d.get_str("app_secret").unwrap_or_default(),
@@ -312,6 +336,11 @@ async fn channels_create(
         "_id": &id,
         "user_id": &user_id,
         "platform": &body.platform,
+        "mode": if body.mode.trim().is_empty() {
+            default_mode(platform_of(&body.platform).expect("validated"))
+        } else {
+            body.mode.trim()
+        },
         "name": body.name.trim(),
         "app_id": body.app_id.trim(),
         "app_secret": body.app_secret.trim(),
@@ -343,6 +372,8 @@ async fn channels_create(
 struct ChannelPatch {
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
     #[serde(default)]
     app_id: Option<String>,
     #[serde(default)]
@@ -396,6 +427,10 @@ async fn channels_update(
             .app_secret
             .clone()
             .unwrap_or_else(|| existing.get_str("app_secret").unwrap_or_default().to_string()),
+        mode: body
+            .mode
+            .clone()
+            .unwrap_or_else(|| existing.get_str("mode").unwrap_or_default().to_string()),
         encrypt_key: String::new(),
         verification_token: body
             .verification_token
@@ -432,6 +467,19 @@ async fn channels_update(
         };
     }
     put!(name);
+    if let Some(v) = &body.mode {
+        if !["", "push", "stream"].contains(&v.trim()) {
+            return Err(api_err(StatusCode::BAD_REQUEST, "无效的接入方式，可选：push / stream"));
+        }
+        set.insert(
+            "mode",
+            if v.trim().is_empty() {
+                default_mode(platform_of(existing.get_str("platform").unwrap_or("feishu")).expect("existing"))
+            } else {
+                v.trim()
+            },
+        );
+    }
     put!(app_id);
     put!(app_secret);
     put!(encrypt_key);
@@ -843,7 +891,14 @@ pub(crate) async fn run_stream_supervisor(state: AppState) {
             let Some(platform) = platform_of(ch.get_str("platform").unwrap_or_default()) else {
                 continue;
             };
-            if !platform.uses_stream() {
+            // 接入方式：渠道显式 mode 优先，缺省按平台（钉钉 stream / 飞书 push）
+            let mode = ch
+                .get_str("mode")
+                .ok()
+                .filter(|m| !m.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| default_mode(platform).to_string());
+            if mode != "stream" {
                 continue;
             }
             let id = ch.get_str("_id").unwrap_or_default().to_string();

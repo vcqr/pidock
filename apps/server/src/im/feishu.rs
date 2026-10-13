@@ -7,9 +7,13 @@
 
 use async_trait::async_trait;
 use axum::http::HeaderMap;
+use futures_util::{SinkExt, StreamExt};
 use mongodb::bson::Document as BsonDoc;
+use prost::Message as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use crate::im::{ChannelBody, InboundDecision, InboundMessage};
 use crate::state::AppState;
@@ -17,6 +21,13 @@ use crate::state::AppState;
 const FEISHU_BASE: &str = "https://open.feishu.cn";
 /// 单次调用飞书 API 的超时
 const HTTP_TIMEOUT_SECS: u64 = 10;
+/// 保活发出 ping 后等入站的判定窗口
+const PONG_WAIT_SECS: u64 = 5;
+
+/// 长连接端点发现（POST 换 wss 地址）
+const WS_ENDPOINT_URI: &str = "/callback/ws/endpoint";
+/// 默认保活间隔（服务端 ClientConfig 可下发覆盖）
+const WS_PING_INTERVAL_SECS: u64 = 120;
 
 pub(crate) struct FeishuPlatform;
 
@@ -97,8 +108,18 @@ impl crate::im::ImPlatform for FeishuPlatform {
         "feishu"
     }
 
+    fn uses_stream(&self) -> bool {
+        // 飞书同时支持推送与长连接：默认推送（渠道显式选 stream 时走长连接）
+        false
+    }
+
+    async fn stream_connection(&self, state: &AppState, channel: &BsonDoc) -> Result<(), String> {
+        run_ws_connection(state, channel).await
+    }
+
     fn validate_channel(&self, body: &ChannelBody) -> Result<(), String> {
-        if body.verification_token.trim().is_empty() {
+        // 长连接模式以 App 凭证在握手时鉴权，无需 verification_token/encrypt_key
+        if body.mode != "stream" && body.verification_token.trim().is_empty() {
             return Err("Verification Token 不能为空（飞书开发者后台「事件与回调 → 加密策略」获取）".into());
         }
         Ok(())
@@ -130,40 +151,8 @@ impl crate::im::ImPlatform for FeishuPlatform {
             return Ok(InboundDecision::Verification(json!({ "challenge": challenge })));
         }
 
-        // 3) 事件信封：token 校验 + 类型分发
-        check_token(channel, payload.pointer("/header/token").and_then(|v| v.as_str()))?;
-        let event_type = payload
-            .pointer("/header/event_type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if event_type != "im.message.receive_v1" {
-            return Ok(InboundDecision::Ignored(event_type.to_string()));
-        }
-        let message = payload.pointer("/event/message").cloned().unwrap_or(json!({}));
-        let message_id = message.get("message_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let chat_id = message.get("chat_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let message_type = message.get("message_type").and_then(|v| v.as_str()).unwrap_or("");
-        if message_id.is_empty() || chat_id.is_empty() {
-            return Ok(InboundDecision::Ignored("missing message_id/chat_id".into()));
-        }
-        if message_type != "text" {
-            tracing::info!(channel = %channel.get_str("_id").unwrap_or_default(), "feishu: 忽略非文本消息 {message_type}");
-            return Ok(InboundDecision::Ignored(message_type.to_string()));
-        }
-        // content 是 JSON 字符串需二次解析；@ 占位清洗
-        let content: Value =
-            serde_json::from_str(message.get("content").and_then(|v| v.as_str()).unwrap_or("{}"))
-                .unwrap_or(json!({}));
-        let text = clean_mention(content.get("text").and_then(|v| v.as_str()).unwrap_or(""));
-        if text.is_empty() {
-            return Ok(InboundDecision::Ignored("empty text".into()));
-        }
-        Ok(InboundDecision::Message(InboundMessage {
-            message_id,
-            text,
-            chat_key: chat_id.clone(),
-            reply_ctx: json!({ "chat_id": chat_id }),
-        }))
+        // 3) 事件解析（HTTP 推送与长连接共用）
+        Self::parse_event_payload(channel, &payload)
     }
 
     async fn reply_text(
@@ -247,6 +236,330 @@ async fn tenant_token(state: &AppState, channel: &BsonDoc) -> Result<String, Str
     Ok(token)
 }
 
+// ------------------------------------------------------------ 事件解析（推送/长连接共用）
+
+impl FeishuPlatform {
+    /// 事件信封解析：token 比对（长连接下连接已鉴权，配置了才校验）+
+    /// 类型分发 + 文本提取。HTTP 推送与长连接两条入口共用
+    fn parse_event_payload(channel: &BsonDoc, payload: &Value) -> Result<InboundDecision, String> {
+        if let Some(expect) = channel.get_str("verification_token").ok().filter(|s| !s.is_empty()) {
+            if payload.pointer("/header/token").and_then(|v| v.as_str()) != Some(expect) {
+                return Err("Verification Token 不匹配".into());
+            }
+        }
+        let event_type = payload
+            .pointer("/header/event_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if event_type != "im.message.receive_v1" {
+            return Ok(InboundDecision::Ignored(event_type.to_string()));
+        }
+        let message = payload.pointer("/event/message").cloned().unwrap_or(json!({}));
+        let message_id = message.get("message_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let chat_id = message.get("chat_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let message_type = message.get("message_type").and_then(|v| v.as_str()).unwrap_or("");
+        if message_id.is_empty() || chat_id.is_empty() {
+            return Ok(InboundDecision::Ignored("missing message_id/chat_id".into()));
+        }
+        if message_type != "text" {
+            tracing::info!(channel = %channel.get_str("_id").unwrap_or_default(), "feishu: 忽略非文本消息 {message_type}");
+            return Ok(InboundDecision::Ignored(message_type.to_string()));
+        }
+        // content 是 JSON 字符串需二次解析；@ 占位清洗
+        let content: Value =
+            serde_json::from_str(message.get("content").and_then(|v| v.as_str()).unwrap_or("{}"))
+                .unwrap_or(json!({}));
+        let text = clean_mention(content.get("text").and_then(|v| v.as_str()).unwrap_or(""));
+        if text.is_empty() {
+            return Ok(InboundDecision::Ignored("empty text".into()));
+        }
+        Ok(InboundDecision::Message(InboundMessage {
+            message_id,
+            text,
+            chat_key: chat_id.clone(),
+            reply_ctx: json!({ "chat_id": chat_id }),
+        }))
+    }
+}
+
+// ------------------------------------------------------------ 长连接（Stream）帧协议
+//
+// 官方协议按 lark_oapi ws SDK 对齐：POST /callback/ws/endpoint 换 wss 地址
+// （带 device_id/service_id 查询参数），WS 帧为 pbbp2 protobuf：
+//   Frame { SeqID=1, LogID=2, service=3, method=4, headers=5(repeated
+//   Header{key=1,value=2}), payload_encoding=6, payload_type=7, payload=8 }
+// method：0=CONTROL（type=ping/pong），1=DATA（type=event，payload 为与
+// webhook 推送同构的事件 JSON）。事件处理完回写同构帧，payload =
+// {"code":200,"headers":{},"data":null}；未 ACK 飞书会重推（去重兜底）。
+// 保活：每 PingInterval（默认 120s，服务端可下发）发 CONTROL/ping 帧。
+
+/// pbbp2.Header（字段号与官方 SDK 序列化描述符一致）
+#[derive(Clone, PartialEq, prost::Message)]
+pub(crate) struct PbHeader {
+    #[prost(string, tag = "1")]
+    pub key: String,
+    #[prost(string, tag = "2")]
+    pub value: String,
+}
+
+/// pbbp2.Frame（省略未用的 payload_encoding/payload_type/LogIDNew）
+#[derive(Clone, PartialEq, prost::Message)]
+pub(crate) struct PbFrame {
+    #[prost(uint64, tag = "1")]
+    pub seq_id: u64,
+    #[prost(uint64, tag = "2")]
+    pub log_id: u64,
+    #[prost(int32, tag = "3")]
+    pub service: i32,
+    #[prost(int32, tag = "4")]
+    pub method: i32,
+    #[prost(message, repeated, tag = "5")]
+    pub headers: Vec<PbHeader>,
+    #[prost(bytes = "vec", tag = "8")]
+    pub payload: Vec<u8>,
+}
+
+impl PbFrame {
+    fn header(&self, key: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|h| h.key == key)
+            .map(|h| h.value.as_str())
+    }
+
+    fn ping(service: i32) -> Self {
+        PbFrame {
+            seq_id: 0,
+            log_id: 0,
+            service,
+            method: 0, // CONTROL
+            headers: vec![PbHeader { key: "type".into(), value: "ping".into() }],
+            payload: vec![],
+        }
+    }
+
+    /// 事件 ACK：回显原帧头部 + biz_rt，payload 带 HTTP 语义码
+    fn ack(mut self, ok: bool) -> Self {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        self.headers.push(PbHeader { key: "biz_rt".into(), value: ms.to_string() });
+        self.payload = json!({ "code": if ok { 200 } else { 500 }, "headers": {}, "data": null })
+            .to_string()
+            .into_bytes();
+        self
+    }
+}
+
+/// POST /callback/ws/endpoint 换连接地址 + 服务端保活配置
+async fn open_ws_endpoint(app_id: &str, app_secret: &str) -> Result<(String, u64), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(format!("{FEISHU_BASE}{WS_ENDPOINT_URI}"))
+        .header("locale", "zh")
+        .json(&json!({ "AppID": app_id, "AppSecret": app_secret }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let body: Value = resp.json().await.unwrap_or(json!({}));
+    if !status.is_success() || body.get("code").and_then(|v| v.as_i64()) != Some(0) {
+        return Err(format!(
+            "获取长连接端点失败 HTTP {status}: {} {}",
+            body.get("msg").and_then(|v| v.as_str()).unwrap_or(""),
+            body.get("code").map(|c| c.to_string()).unwrap_or_default()
+        ));
+    }
+    let url = body
+        .pointer("/data/URL")
+        .and_then(|v| v.as_str())
+        .ok_or("端点响应缺少 URL")?
+        .to_string();
+    let ping_interval = body
+        .pointer("/data/ClientConfig/PingInterval")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(WS_PING_INTERVAL_SECS);
+    Ok((url, ping_interval.clamp(30, 600)))
+}
+
+/// 从连接 URL 提取 service_id（保活帧必须带）
+fn service_id_of(url: &str) -> i32 {
+    url.split("service_id=")
+        .nth(1)
+        .and_then(|v| v.split('&').next())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+/// 一次长连接的完整生命周期：断开即返回，由 im::stream_conn_loop 重连
+async fn run_ws_connection(state: &AppState, channel: &BsonDoc) -> Result<(), String> {
+    let app_id = channel.get_str("app_id").unwrap_or_default().to_string();
+    let app_secret = channel.get_str("app_secret").unwrap_or_default().to_string();
+    let (url, ping_interval) = open_ws_endpoint(&app_id, &app_secret).await?;
+    let service_id = service_id_of(&url);
+    let (ws, _) = tokio_tungstenite::connect_async(&url)
+        .await
+        .map_err(|e| format!("WS 连接失败: {e}"))?;
+    tracing::info!(channel = %channel.get_str("_id").unwrap_or_default(), "feishu: 长连接已建立");
+    let (mut write, mut read) = ws.split();
+    let (tx, mut rx) = mpsc::unbounded_channel::<WsMessage>();
+    let writer = tokio::spawn(async move {
+        while let Some(m) = rx.recv().await {
+            if write.send(m).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // 分包聚合：sum>1 的事件按 message_id 收齐再处理
+    let mut partials: std::collections::HashMap<String, std::collections::BTreeMap<u64, Vec<u8>>> =
+        std::collections::HashMap::new();
+    let result = ws_read_loop(state, channel, &tx, &mut read, service_id, ping_interval, &mut partials).await;
+
+    let _ = tx.send(WsMessage::Close(None));
+    writer.abort();
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ws_read_loop(
+    state: &AppState,
+    channel: &BsonDoc,
+    tx: &mpsc::UnboundedSender<WsMessage>,
+    read: &mut (impl StreamExt<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>> + Unpin),
+    service_id: i32,
+    ping_interval: u64,
+    partials: &mut std::collections::HashMap<String, std::collections::BTreeMap<u64, Vec<u8>>>,
+) -> Result<(), String> {
+    loop {
+        // 任何入站帧都会重置保活计时（每轮新建 sleep）
+        let idle = tokio::time::sleep(std::time::Duration::from_secs(ping_interval));
+        tokio::select! {
+            frame = read.next() => match frame {
+                Some(Ok(WsMessage::Binary(b))) => {
+                    let frame: PbFrame = PbFrame::decode(&b[..]).map_err(|e| format!("帧解码失败: {e}"))?;
+                    match frame.method {
+                        0 => {
+                            // CONTROL：pong 载荷可能带保活配置更新（v1 记日志）
+                            if frame.header("type") == Some("pong") && !frame.payload.is_empty() {
+                                tracing::debug!("feishu: 收到 pong 配置更新");
+                            }
+                        }
+                        1 => {
+                            let message_id = frame.header("message_id").unwrap_or_default().to_string();
+                            let sum: u64 = frame.header("sum").and_then(|v| v.parse().ok()).unwrap_or(1);
+                            let seq: u64 = frame.header("seq").and_then(|v| v.parse().ok()).unwrap_or(0);
+                            let frame_type = frame.header("type").unwrap_or_default().to_string();
+                            // 合包：收齐 sum 片再处理；非 event 类型（card 等）按官方行为跳过
+                            let payload = if sum > 1 {
+                                let parts = partials.entry(message_id.clone()).or_default();
+                                parts.insert(seq, frame.payload.clone());
+                                if parts.len() != sum as usize {
+                                    continue;
+                                }
+                                let assembled = parts.values().flatten().copied().collect::<Vec<u8>>();
+                                partials.remove(&message_id);
+                                assembled
+                            } else {
+                                frame.payload.clone()
+                            };
+                            if frame_type != "event" {
+                                continue;
+                            }
+                            // 事件处理 spawn 出去，处理完再 ACK；未 ACK 飞书重推，去重兜底
+                            let st = state.clone();
+                            let ch = channel.clone();
+                            let tx2 = tx.clone();
+                            let mid = message_id.clone();
+                            tokio::spawn(async move {
+                                let ok = handle_stream_event(&st, &ch, &payload).await;
+                                let ack = frame_for_ack(&mid);
+                                let _ = tx2.send(WsMessage::Binary(ack.ack(ok).encode_to_vec()));
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                Some(Ok(WsMessage::Ping(p))) => { let _ = tx.send(WsMessage::Pong(p)); }
+                Some(Ok(WsMessage::Pong(_))) => {}
+                Some(Ok(WsMessage::Close(_))) => return Err("gateway closed".into()),
+                Some(Ok(_)) => {}
+                Some(Err(e)) => return Err(format!("WS 读取错误: {e}")),
+                None => return Err("WS 流结束".into()),
+            },
+            _ = idle => {
+                let _ = tx.send(WsMessage::Binary(PbFrame::ping(service_id).encode_to_vec()));
+                let wait = tokio::time::sleep(std::time::Duration::from_secs(PONG_WAIT_SECS));
+                tokio::select! {
+                    frame = read.next() => match frame {
+                        Some(Ok(WsMessage::Binary(b))) => {
+                            let f: PbFrame = PbFrame::decode(&b[..]).map_err(|e| format!("帧解码失败: {e}"))?;
+                            if f.method == 1 {
+                                // 保活等待期到的数据帧按正常路径补处理会打乱结构，
+                                // 简化：直接判为活跃连接后回主循环会丢帧——按官方
+                                // SDK 语义处理事件帧（罕见路径，直接内联处理）
+                                let message_id = f.header("message_id").unwrap_or_default().to_string();
+                                let ok = handle_stream_event(state, channel, &f.payload).await;
+                                let ack = frame_for_ack(&message_id);
+                                let _ = tx.send(WsMessage::Binary(ack.ack(ok).encode_to_vec()));
+                            }
+                        }
+                        Some(Ok(WsMessage::Ping(p))) => { let _ = tx.send(WsMessage::Pong(p)); }
+                        Some(Ok(_)) => {}
+                        Some(Err(e)) => return Err(format!("WS 读取错误: {e}")),
+                        None => return Err("WS 流结束".into()),
+                    },
+                    _ = wait => return Err("ping 超时".into()),
+                }
+            }
+        }
+    }
+}
+
+/// 按官方 SDK 语义构造 ACK 帧：回显事件帧头（message_id 等）
+fn frame_for_ack(message_id: &str) -> PbFrame {
+    PbFrame {
+        seq_id: 0,
+        log_id: 0,
+        service: 0,
+        method: 1,
+        headers: vec![PbHeader { key: "message_id".into(), value: message_id.to_string() }],
+        payload: vec![],
+    }
+}
+
+/// 处理一条长连接事件：复用推送侧事件解析 + 共享流水线。返回处理结果
+/// 作为 ACK 语义码（失败 → 500，飞书重推，去重兜底）
+async fn handle_stream_event(state: &AppState, channel: &BsonDoc, payload: &[u8]) -> bool {
+    let payload: Value = match serde_json::from_slice(payload) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(channel = %channel.get_str("_id").unwrap_or_default(), "feishu: 事件载荷解析失败: {e}");
+            return true; // 载荷损坏不可重试，ACK 掉
+        }
+    };
+    let platform: &dyn crate::im::ImPlatform = &FeishuPlatform;
+    match FeishuPlatform::parse_event_payload(channel, &payload) {
+        Ok(InboundDecision::Message(msg)) => {
+            matches!(
+                crate::im::process_message(state, platform, channel, msg).await,
+                crate::im::PipelineOutcome::Accepted { .. }
+                    | crate::im::PipelineOutcome::Duplicate
+                    | crate::im::PipelineOutcome::Handled { .. }
+            )
+        }
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!(channel = %channel.get_str("_id").unwrap_or_default(), "feishu: 长连接事件校验失败: {e}");
+            true // 校验失败不可重试（重推也是同样结果），ACK 掉
+        }
+    }
+}
+
 // ------------------------------------------------------------ 测试
 
 #[cfg(test)]
@@ -281,6 +594,28 @@ mod tests {
         assert_eq!(clean_mention("@_user_1 帮我看看构建日志"), "帮我看看构建日志");
         assert_eq!(clean_mention("直接说事"), "直接说事");
         assert_eq!(clean_mention("  "), "");
+    }
+
+    #[test]
+    fn frame_roundtrip_matches_field_numbers() {
+        let f = PbFrame {
+            seq_id: 7,
+            log_id: 0,
+            service: 42,
+            method: 1,
+            headers: vec![
+                PbHeader { key: "message_id".into(), value: "m-1".into() },
+                PbHeader { key: "type".into(), value: "event".into() },
+            ],
+            payload: b"{}".to_vec(),
+        };
+        let back = PbFrame::decode(&f.encode_to_vec()[..]).unwrap();
+        assert_eq!(back.seq_id, 7);
+        assert_eq!(back.service, 42);
+        assert_eq!(back.method, 1);
+        assert_eq!(back.header("message_id"), Some("m-1"));
+        assert_eq!(back.header("type"), Some("event"));
+        assert_eq!(back.payload, b"{}");
     }
 
     #[test]
