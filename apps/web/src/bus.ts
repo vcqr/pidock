@@ -23,6 +23,9 @@ export function createWebBus(auth: AuthClient): DataBus & {
   onSessionUpserted: (cb: (machineId: string, session: any) => void) => void;
   /** WS（重）连成功后回调：推送通道不留底，断线窗口内丢的帧在此对账 */
   onReconnect: (cb: () => void) => void;
+  /** 关闭推送通道并终止重连链：logout 时调用，防止旧 bus 的重试循环
+   * 在用户重新登录后继续拿旧令牌请求、误杀新会话 */
+  close: () => void;
 } {
   let activeMachine: string | null = null;
   let machineStatusCb: ((machineId: string, status: string) => void) | null = null;
@@ -79,7 +82,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
 
   let wsTicketBusy = false;
   function connectWs(): void {
-    if (ws || wsTicketBusy) return;
+    if (closedByUs || ws || wsTicketBusy) return;
     wsTicketBusy = true;
     // WS 鉴权走一次性 ticket（/auth/ws-ticket 换发，60s 单次有效）：
     // 长期 token 不再出现在 URL / 反代访问日志里；取票失败按断线节奏重试
@@ -134,7 +137,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
         socket.onerror = () => socket.close();
       } catch (err) {
         console.warn("ws ticket fetch failed", err);
-        setTimeout(connectWs, 2000);
+        if (!closedByUs) setTimeout(connectWs, 2000);
       } finally {
         wsTicketBusy = false;
       }
@@ -401,6 +404,11 @@ export function createWebBus(auth: AuthClient): DataBus & {
         closedByUs = true;
         ws?.close();
       };
+    },
+
+    close(): void {
+      closedByUs = true;
+      ws?.close();
     },
 
     async loadHistory(sessionId: string, afterSeq?: number): Promise<ReplayEvent[]> {

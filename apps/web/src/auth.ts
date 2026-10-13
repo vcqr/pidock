@@ -120,6 +120,12 @@ export class ApiError extends Error {
 }
 
 export class AuthClient {
+  /** 已作废（logout/被新会话取代）：不再触发 onAuthLost，请求直接失败 */
+  private dead = false;
+  /** 进行中的 refresh（单飞）：并发 401 共享同一次续期——refresh token 是
+   * 单次轮换的，各自为战的并发刷新只有第一个能赢，输家误判会话死亡 */
+  private refreshInflight: Promise<boolean> | null = null;
+
   constructor(
     private state: AuthState,
     private onAuthLost: () => void,
@@ -150,19 +156,34 @@ export class AuthClient {
     saveAuth(state);
   }
 
+  /** 作废客户端：logout 时调用。作废后请求立即失败且不再触发 onAuthLost，
+   * 防止遗留的重试循环（WS ticket 取票等）在用户重新登录后误杀新会话 */
+  dispose(): void {
+    this.dead = true;
+  }
+
   private async refreshTokens(): Promise<boolean> {
+    // 单飞：并发的 401 共享同一次刷新，全部拿到同一对新令牌后各自重试
+    if (this.refreshInflight) return this.refreshInflight;
+    this.refreshInflight = (async () => {
+      try {
+        const res = await fetch(`${this.state.server_url}/auth/refresh`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ refresh_token: this.state.refresh_token }),
+        });
+        if (!res.ok) return false;
+        const data = await res.json();
+        this.update({ ...this.state, access_token: data.access_token, refresh_token: data.refresh_token });
+        return true;
+      } catch {
+        return false;
+      }
+    })();
     try {
-      const res = await fetch(`${this.state.server_url}/auth/refresh`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ refresh_token: this.state.refresh_token }),
-      });
-      if (!res.ok) return false;
-      const data = await res.json();
-      this.update({ ...this.state, access_token: data.access_token, refresh_token: data.refresh_token });
-      return true;
-    } catch {
-      return false;
+      return await this.refreshInflight;
+    } finally {
+      this.refreshInflight = null;
     }
   }
 
@@ -180,6 +201,7 @@ export class AuthClient {
   }
 
   async request(path: string, init?: RequestInit): Promise<any> {
+    if (this.dead) throw new ApiError(0, "auth client disposed");
     const url = `${this.state.server_url}${path}`;
     let res = await fetch(url, {
       ...init,
@@ -203,7 +225,10 @@ export class AuthClient {
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      if (res.status === 401) this.onAuthLost();
+      if (res.status === 401 && !this.dead) {
+        this.dead = true; // 只触发一次
+        this.onAuthLost();
+      }
       throw new ApiError(res.status, data?.error ?? `${res.status} ${path}`);
     }
     return data;

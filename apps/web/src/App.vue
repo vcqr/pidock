@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, toRaw, watch } from "vue";
 import { darkTheme, NConfigProvider } from "naive-ui";
 import {
   appConfirm,
@@ -229,7 +229,7 @@ async function verifyOtp(): Promise<void> {
   loginBusy.value = true;
   loginError.value = null;
   try {
-    const client = new AuthClient(null as never, () => logout());
+    const client = newLoginClient();
     const state =
       otpPurpose.value === "register"
         ? await client.verifyRegisterCode(serverUrl, otpChallenge.value, otpCode.value)
@@ -248,7 +248,7 @@ async function resendOtp(): Promise<void> {
   loginBusy.value = true;
   loginError.value = null;
   try {
-    const client = new AuthClient(null as never, () => logout());
+    const client = newLoginClient();
     const r = await client.resendCode(serverUrl, otpChallenge.value);
     otpChallenge.value = r.challenge;
     otpMaskedEmail.value = r.email;
@@ -426,11 +426,25 @@ watch(
   },
 );
 
+/** 登录流程用的 AuthClient：onAuthLost 仅在它仍是当前会话客户端时触发登出。
+ * 没有 this 守卫时，旧会话遗留的重试循环（WS ticket 等）401 后会把
+ * 用户刚重新登录的新会话一并杀掉，表现为「怎么登数据都拉不回来」。
+ * 注意 auth 是 ref：auth.value 是 reactive 代理，与原始实例比较必须走 toRaw */
+function isCurrentAuth(c: AuthClient): boolean {
+  return toRaw(auth.value) === c;
+}
+function newLoginClient(): AuthClient {
+  const client = new AuthClient(null as never, () => {
+    if (isCurrentAuth(client)) logout();
+  });
+  return client;
+}
+
 async function doLogin(): Promise<void> {
   loginBusy.value = true;
   loginError.value = null;
   try {
-    const client = new AuthClient(null as never, () => logout());
+    const client = newLoginClient();
     if (loginMode.value === "ldap") {
       const state = await client.loginLdap(
         serverUrl,
@@ -470,8 +484,12 @@ async function doLogin(): Promise<void> {
 }
 
 function logout(): void {
-  // 先尽力而为吊销服务端 refresh token，再清本地（网络失败不阻塞登出）
+  // 先尽力而为吊销服务端 refresh token，再清本地（网络失败不阻塞登出）。
+  // 旧客户端作废 + 旧 bus 关闭：终结其遗留的取票重试链与 WS，
+  // 否则旧链会在用户重新登录后继续 401 → 把新会话也登出
   void auth.value?.logoutRemote();
+  auth.value?.dispose();
+  bus.value?.close();
   clearAuth();
   folderPick.value?.resolve(null);
   folderPick.value = null;
@@ -581,7 +599,10 @@ function boot(state: any, client: AuthClient): void {
       void refreshSessionCounts();
       void s.refreshSessions();
     });
-    setInterval(() => void s.refreshSessions(), 30000);
+    // 会话列表慢速兜底轮询：登出/换号后旧 store 轮询作废（闭包比对当前 store）
+    setInterval(() => {
+      if (store.value === s) void s.refreshSessions();
+    }, 30000);
   });
 }
 
@@ -603,7 +624,9 @@ onMounted(() => {
       loginBusy.value = true;
       exchangeSsoCode(ssoServer, ssoCode!)
         .then((state) => {
-          const client = new AuthClient(state, () => logout());
+          const client = new AuthClient(state, () => {
+            if (isCurrentAuth(client)) logout();
+          });
           boot(state, client);
         })
         .catch((err) => {
@@ -618,7 +641,9 @@ onMounted(() => {
   void refreshMethods();
   const saved = loadAuth();
   if (saved) {
-    const client = new AuthClient(saved, () => logout());
+    const client = new AuthClient(saved, () => {
+      if (isCurrentAuth(client)) logout();
+    });
     boot(saved, client);
   }
 });
