@@ -1340,4 +1340,13 @@ h1 {
   cursor: pointer;
 }
 .cancel:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+
+/* ---- 手机端（≤480px），置于文件末尾以覆盖上方规则：头部换行、弹窗贴边 ---- */
+@media (max-width: 480px) {
+  .wrap { padding: 16px 14px 40px; }
+  .head { flex-wrap: wrap; row-gap: 10px; }
+  .title-block { flex: 1 1 100%; }
+  .head-actions { margin-left: auto; }
+  .dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 24px); padding: 16px 14px 14px; }
+}
 </style>

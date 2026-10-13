@@ -1101,4 +1101,24 @@ h2 {
 .hist-st.ok { color: var(--pd-green-text); }
 .hist-st.failed { color: var(--pd-red-text); }
 .hist-st.running { color: var(--pd-accent-text); }
+
+/* ---- 手机端（≤480px），置于文件末尾以覆盖上方规则：
+ * 头部「标题+描述」与操作按钮换行分两行，描述不再被挤成一字一行；
+ * 任务行两行布局：首行图标+名称/描述，次行开关+操作按钮；
+ * 弹窗贴边放大可视面积。 ---- */
+@media (max-width: 480px) {
+  .wrap { padding: 16px 14px 40px; }
+  .head { flex-wrap: wrap; row-gap: 10px; }
+  .title-block { flex: 1 1 100%; }
+  .head-actions { margin-left: auto; }
+  .dark-btn { padding: 6px 12px; }
+  .row { flex-wrap: wrap; gap: 10px 12px; padding: 12px; }
+  /* 52 = 图标块 38 + 列间距 14：让 info 独占首行，开关与按钮落到次行 */
+  .info { flex: 1 1 calc(100% - 52px); }
+  .switch { margin-right: auto; }
+  .dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 24px); padding: 16px 14px 14px; }
+  .freq-row { flex-wrap: wrap; }
+  .range-row { flex-wrap: wrap; }
+  .range-row .half { flex: 1 1 100%; }
+}
 </style>

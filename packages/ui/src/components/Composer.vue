@@ -105,6 +105,39 @@ const permOpen = ref(false);
 const thinkOpen = ref(false);
 const modelOpen = ref(false);
 
+/** 手机端弹层高度上限：所有弹层都向上弹出，高度以「composer 顶边到有效顶沿」的
+ * 剩余空间封顶（开弹层时量一次写入 --menu-cap）。有效顶沿 = 视口顶沿与沿途所有
+ * overflow 裁剪容器（home-wrap / 弹窗等）顶沿的最大值——只算视口会被这些容器把
+ * 菜单顶部裁掉（首个选项/搜索框不可见且滚不到）。 */
+const menuCap = ref("40dvh");
+function updateMenuCap(): void {
+  const el = rootEl.value;
+  if (!el) return;
+  const top = el.getBoundingClientRect().top;
+  let ceiling = 0;
+  const vv = window.visualViewport;
+  if (vv) ceiling = vv.offsetTop; // 键盘 / 缩放导致可视顶沿下移的量
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const cs = getComputedStyle(node);
+    if (cs.overflowY !== "visible") {
+      // 裁剪发生在 padding 盒内沿：rect.top + 上边框宽
+      ceiling = Math.max(ceiling, node.getBoundingClientRect().top + node.clientTop);
+    }
+    if (cs.position === "fixed") break; // fixed 子树的裁剪链到此为止
+  }
+  // 下限 96：宁可矮到只露一两项（内部滚动补齐），也不能越过裁剪沿把首项顶进不可见区
+  menuCap.value = `${Math.round(Math.max(96, Math.min(440, top - ceiling - 12)))}px`;
+}
+function onViewportChange(): void {
+  if (menuOpen.value || branchOpen.value || plusOpen.value || permOpen.value || thinkOpen.value || modelOpen.value) {
+    updateMenuCap();
+  }
+}
+onMounted(() => {
+  window.visualViewport?.addEventListener("resize", onViewportChange);
+  window.addEventListener("resize", onViewportChange);
+});
+
 // ---- + 菜单：图片附件 / 文档附件 / 文件提及 / 技能 ----
 interface PendingImage {
   data: string; // base64，不带 data: 前缀
@@ -726,6 +759,9 @@ async function createBranch(): Promise<void> {
   }
 }
 
+// 任一弹层打开时重算手机端高度上限（所有被观察的 ref 均已声明，watch 须置于其后）
+watch([menuOpen, branchOpen, plusOpen, permOpen, thinkOpen, modelOpen, mention, slash], updateMenuCap);
+
 function onDocClick(e: MouseEvent): void {
   if (rootEl.value && !rootEl.value.contains(e.target as Node)) {
     menuOpen.value = false;
@@ -826,7 +862,7 @@ function onKeydown(e: KeyboardEvent): void {
 </script>
 
 <template>
-  <div ref="rootEl" class="composer" :class="{ centered }" :title="disabled ? disabledHint : ''">
+  <div ref="rootEl" class="composer" :class="{ centered }" :style="{ '--menu-cap': menuCap }" :title="disabled ? disabledHint : ''">
     <div v-if="centered" class="c-chips">
       <div class="c-folder" @click="toggleProjectMenu">
         <template v-if="selected">
@@ -1676,7 +1712,9 @@ button.abort {
 }
 /* 手机（≤480px）适配必须置于文件末尾：覆盖上方 .dd/.dd-menu 基础定位规则。
  * 工具行只留图标（权限/模型/思考的下拉仍可点开）；弹层改相对 composer 全宽
- * 定位（.dd 转静态），长模型名不再把菜单撑出屏幕。 */
+ * 定位（.dd 转静态），长模型名不再把菜单撑出屏幕。
+ * 弹层统一以 --menu-cap（composer 顶边到可视区顶沿的剩余空间，见脚本）封顶并
+ * 内部滚动，否则向上弹出的菜单顶部被视口裁掉且滚不到。 */
 @media (max-width: 480px) {
   .composer { padding: 12px 12px 10px; }
   .bar { gap: 8px; }
@@ -1688,8 +1726,21 @@ button.abort {
     right: 12px;
     width: auto;
     min-width: 0;
+    max-height: var(--menu-cap, 40dvh);
+    overflow-y: auto;
   }
-  /* 菜单向上弹出，总高须小于 composer 上方视口空间，否则顶部（搜索框）被裁 */
-  .m-list { max-height: 180px; }
+  /* 外层菜单统一滚动后，内层限高撤掉，避免双层滚动条 */
+  .m-list,
+  .plus-skills { max-height: none; }
+  .perm-item { width: auto; max-width: 100%; }
+  /* 项目/分支菜单定宽 360px 会溢出窄屏；分支 chip 靠右时菜单改右对齐展开 */
+  .c-menu {
+    width: min(360px, calc(100vw - 40px));
+    max-height: var(--menu-cap, 40dvh);
+    overflow-y: auto;
+  }
+  .c-list { max-height: none; }
+  .c-branch .c-menu { left: auto; right: 0; }
+  .mention-menu { max-height: min(272px, var(--menu-cap, 272px)); }
 }
 </style>

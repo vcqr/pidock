@@ -766,7 +766,8 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
 /* 卡片：参考市场页布局——圆形头像 + 名称/副标题 + 描述段落 + 标签胶囊 */
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  /* min(320px, 100%)：窄于 320px 的屏幕按单列铺满，卡片不再横向溢出 */
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
   gap: 16px;
   max-width: 1080px;
   width: 100%;
@@ -1083,4 +1084,21 @@ label.opt:hover { background: var(--pd-bg-hover); }
 .seg-btn.active { background: var(--pd-accent); color: var(--pd-on-accent); }
 .pick-row { display: flex; gap: 8px; }
 .pick-row input { flex: 1; }
+
+/* ---- 手机端（≤480px），置于文件末尾以覆盖上方规则：
+ * 页面与弹窗贴边；标签页改横向滚动（四个标签挤压会一字一行）；
+ * 名称/简介双列改单列；可换行的操作行放开换行。 ---- */
+@media (max-width: 480px) {
+  .experts-page { padding: 16px 14px; }
+  .page-head { flex-wrap: wrap; row-gap: 10px; }
+  .head-actions { margin-left: auto; }
+  .dialog,
+  .dialog.narrow { width: calc(100vw - 16px); max-height: calc(100dvh - 24px); padding: 16px 14px 14px; }
+  .tabs { overflow-x: auto; scrollbar-width: none; gap: 2px; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: none; white-space: nowrap; padding: 8px 10px 9px; }
+  .grid2 { grid-template-columns: 1fr; }
+  .avatar-edit { flex-wrap: wrap; }
+  .check-row { flex-wrap: wrap; gap: 8px 16px; }
+}
 </style>
