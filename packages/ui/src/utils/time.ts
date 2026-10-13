@@ -20,6 +20,17 @@ export function basename(p: string | undefined): string {
   return norm.split("/").filter(Boolean).pop() ?? p;
 }
 
+/**
+ * cwd 是否落在默认工作空间内部（~/.pidock/<日期>/<会话id>/ 等托管路径）。
+ * 托管路径不算用户项目：项目候选列表、侧栏项目分组都应排除；
+ * 根目录 ~/.pidock 本身（定时任务的稳定工作区）不算内部，保留可选。
+ */
+export function isInsideDefaultWorkspace(cwd: string | null | undefined, home: string | null | undefined): boolean {
+  if (!cwd || !home) return false;
+  const h = home.replace(/\/+$/, "");
+  return cwd.startsWith(`${h}/.pidock/`) || cwd.startsWith(`${h}\\.pidock\\`);
+}
+
 export function greeting(): string {
   const h = new Date().getHours();
   if (h < 6) return "夜深了";

@@ -39,6 +39,22 @@ impl CorePaths {
     }
 }
 
+/// 默认工作空间根目录：`$HOME/.pidock`（无 HOME 时退回 USERPROFILE）。
+/// 桌面壳启动时确保存在；host 侧缺省项目的会话落在其下（<当日日期>/<会话id>/）。
+pub fn default_workspace_dir() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join(".pidock")
+}
+
+/// 确保默认工作空间根目录存在（幂等）；失败由调用方决定兜底行为。
+pub fn ensure_default_workspace() -> std::io::Result<PathBuf> {
+    let dir = default_workspace_dir();
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 pub struct CoreCtx {
     pub supervisor: Arc<Supervisor>,
     pub scheduler: Arc<SchedulerManager>,

@@ -3,7 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, 
 import { NSplit } from "naive-ui";
 import type { AgentStore, ExpertInfo, UiItem } from "../store.js";
 import { REVEAL_PATH } from "../databus.js";
-import { formatSpan, greeting } from "../utils/time.js";
+import { formatSpan, greeting, isInsideDefaultWorkspace } from "../utils/time.js";
 import FileIcon from "./FileIcon.vue";
 import FilePreview from "./FilePreview.vue";
 import FilesPanel from "./FilesPanel.vue";
@@ -214,10 +214,12 @@ const modelSupportsImages = computed<boolean | undefined>(() => {
   return hit.input.includes("image");
 });
 
-// distinct project dirs for the composer folder selector
+// distinct project dirs for the composer folder selector（排除默认工作空间内部托管路径）
 const projects = computed(() => {
   const set = new Set<string>();
-  for (const s of props.store.sessions) if (s.cwd) set.add(s.cwd);
+  for (const s of props.store.sessions) {
+    if (s.cwd && !isInsideDefaultWorkspace(s.cwd, props.store.homeDir)) set.add(s.cwd);
+  }
   return [...set];
 });
 
@@ -764,10 +766,13 @@ async function sendFromHome(
   images?: Array<{ data: string; mime_type: string }>,
   files?: Array<{ name: string; mime_type: string; size: number; data: string }>,
 ): Promise<void> {
-  // cwd 为 null = 「不在项目中工作」（host 落到主目录）；
-  // 未指定时用最近会话的目录兜底；首页选中的模型随新会话生效
+  // cwd 为 null = 「不在项目中工作」（host 落到默认工作空间的当日会话目录）；
+  // 未指定时用最近会话的目录兜底（默认工作空间内部的托管目录不算项目，仍走缺省）；
+  // 首页选中的模型随新会话生效
   const last = props.store.sessions[0];
-  const dir = cwd === null ? undefined : cwd || last?.cwd || ".";
+  const lastCwd =
+    last?.cwd && !isInsideDefaultWorkspace(last.cwd, props.store.homeDir) ? last.cwd : undefined;
+  const dir = cwd === null ? undefined : cwd || lastCwd || ".";
   await props.store.newSession(dir, homeModel.value ?? undefined, hiredExpert.value?.id);
   hiredExpert.value = null;
   // 首页暂存的权限模式 / 思考级别随新会话下发；失败时不发送，避免以错误权限执行任务

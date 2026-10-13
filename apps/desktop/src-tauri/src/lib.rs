@@ -166,6 +166,11 @@ async fn fs_list(state: tauri::State<'_, Arc<CoreCtx>>, path: Option<String>) ->
 }
 
 pub fn run() {
+    // 启动即初始化默认工作空间（~/.pidock）：定时任务与缺省会话的工作目录。
+    // 失败不阻塞启动——调度器执行任务、host 惰性建会话目录时仍会按需重试
+    if let Err(e) = pidock_core::ensure_default_workspace() {
+        eprintln!("[pidock] 初始化默认工作空间失败: {e}");
+    }
     let (sync_tx, sync_rx) = mpsc::channel::<pidock_core::sync::SyncControl>(8);
     let ctx = CoreCtx::new(CorePaths::default_data(), sync_tx);
 

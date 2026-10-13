@@ -25,6 +25,7 @@ import { parseAttachments, normalizeImage, type IncomingAttachment } from "./att
 import { createTodoWriteTool, sanitizeTodos } from "./todo.js";
 import { createAskUserQuestionTool, type AskAnswer } from "./ask.js";
 import { buildExpertPromptBlock, ExpertsService, matchExpertCommand, type ExpertSessionConfig } from "./experts.js";
+import { defaultSessionDir, isManagedSessionDir } from "./workspace.js";
 import { basename } from "node:path";
 import {
   ATTACHMENT_THRESHOLD_BYTES,
@@ -410,13 +411,18 @@ export class SessionPool {
     /** 雇佣的专家 id（缺省 = 普通会话） */
     expert_id?: string;
   }): Promise<{ session_id: string; file: string; cwd: string; expert_id?: string; expert_name?: string }> {
-    // 无头模式下没有"当前项目"概念：缺省落在用户主目录而不是 host 进程目录
-    const cwd = params.cwd ?? homedir();
+    // 缺省项目 = 默认工作空间：~/.pidock/<当日日期>/<会话id>/，产出物按会话归档。
+    // 预生成会话 id 让目录名与会话 id 一致；空串与缺省同等对待（调度器/端点会传 ""）。
+    // 目录不立即创建——由 tool_call 钩子在首个获准执行的工具调用时惰性补建，
+    // 纯问答对话不会留下空目录
+    const preId = params.cwd ? undefined : randomUUID();
+    const cwd = params.cwd || (preId ? defaultSessionDir(preId) : homedir());
     this.requireTrustDecision(cwd);
     const expertCfg = this.experts.resolveForSession(params.expert_id);
     // 显式传入的模型/思考级别优先于专家预设
     const model = await this.resolveModel(params.model ?? expertCfg?.expert.model);
-    const sessionManager = SessionManager.create(cwd);
+    // 预生成 id 时经 NewSessionOptions 注入，保证 SDK 会话 id 与目录名一致
+    const sessionManager = SessionManager.create(cwd, undefined, preId ? { id: preId } : undefined);
     // 新会话默认计划模式：修改类工具（bash/write/edit）先被拦下，用户可在输入卡切换；
     // 专家可带建议权限模式（如只读专家保持 plan、自动化场景的 full）
     const permission = { mode: expertCfg?.expert.permission_mode ?? "plan" };
@@ -438,7 +444,10 @@ export class SessionPool {
           factory: (pi: ExtensionAPI) => {
             pi.on("tool_call", async (event) => {
               this.snapshotBeforeMutation(sessionIdRef.id, cwd, event.toolName, event.input);
-              return this.enforcePermission(sessionIdRef.id, permission, event.toolName, event.input);
+              const decision = await this.enforcePermission(sessionIdRef.id, permission, event.toolName, event.input);
+              // 放行即视为开始使用环境，此时才补建缺省会话目录
+              this.ensureManagedDirLazy(!!preId, cwd);
+              return decision;
             });
           },
         },
@@ -561,7 +570,10 @@ export class SessionPool {
           factory: (pi: ExtensionAPI) => {
             pi.on("tool_call", async (event) => {
               this.snapshotBeforeMutation(sessionIdRef.id, cwd, event.toolName, event.input);
-              return this.enforcePermission(sessionIdRef.id, permission, event.toolName, event.input);
+              const decision = await this.enforcePermission(sessionIdRef.id, permission, event.toolName, event.input);
+              // 重开的缺省会话同样惰性建目录（按 cwd 是否在默认工作空间内判定）
+              this.ensureManagedDirLazy(isManagedSessionDir(cwd), cwd);
+              return decision;
             });
           },
         },
@@ -909,6 +921,20 @@ export class SessionPool {
    * 权限模式对修改类工具（bash/write/edit）的拦截与审批。
    * 作为内置扩展在会话创建时注入，tool_call 处理器可异步等待用户审批。
    */
+  /**
+   * 惰性建目录：缺省会话目录（~/.pidock/<日期>/<会话id>/）等到首个获准执行的
+   * 工具调用才创建，纯问答对话不留空目录。managed 判定见 workspace.ts；
+   * mkdir 幂等，失败不拦——工具执行时会给出更明确的 ENOENT 错误。
+   */
+  private ensureManagedDirLazy(managed: boolean, cwd: string): void {
+    if (!managed) return;
+    try {
+      mkdirSync(cwd, { recursive: true });
+    } catch {
+      // 目录建不起来时交由工具自身的 ENOENT 报错
+    }
+  }
+
   private async enforcePermission(
     sessionId: string,
     permission: { mode: PermissionMode },

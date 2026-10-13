@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { DataBus } from "../databus.js";
-import { basename } from "../utils/time.js";
+import { basename, isInsideDefaultWorkspace } from "../utils/time.js";
 import Composer from "./Composer.vue";
 import Icon from "./Icon.vue";
 import { appConfirm } from "../confirm.js";
@@ -250,7 +250,8 @@ async function loadComposerContext(): Promise<void> {
     const list: string[] = [];
     for (const s of r?.sessions ?? []) {
       const cwd: string | undefined = s?.cwd;
-      if (!cwd || cwd === home || seen.has(cwd)) continue;
+      // 排除主目录与默认工作空间内部托管路径（~/.pidock 根本身保留，可作为任务工作区）
+      if (!cwd || cwd === home || seen.has(cwd) || isInsideDefaultWorkspace(cwd, home)) continue;
       seen.add(cwd);
       list.push(cwd);
     }

@@ -14,4 +14,4 @@ pub mod scheduler;
 pub mod supervisor;
 pub mod sync;
 
-pub use ctx::{CoreCtx, CorePaths};
+pub use ctx::{default_workspace_dir, ensure_default_workspace, CoreCtx, CorePaths};

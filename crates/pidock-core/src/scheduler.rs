@@ -77,7 +77,7 @@ pub struct ScheduledJob {
     pub prompt: String,
     /// 用户本地时间的 cron 表达式（含秒域，如 "0 30 9 * * *"）
     pub cron: String,
-    /// 工作空间目录；空 = 主目录
+    /// 工作空间目录；空 = 默认工作空间（~/.pidock，任务有稳定目录，产出物按任务积累）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     /// 模型；空 = 默认模型（显式传入优先于专家预设）
@@ -694,12 +694,20 @@ impl SchedulerManager {
 /// 任何一步失败都把运行记录终结为 failed。
 async fn execute_run(mgr: Arc<SchedulerManager>, job: ScheduledJob, mut run: RunRecord) {
     let exec = async {
+        // 空 workspace = 默认工作空间（~/.pidock）；创建失败时退回空串，
+        // 由 host 按缺省会话目录（~/.pidock/<日期>/<会话id>/）兜底
+        let cwd = match job.workspace.as_deref().map(str::trim) {
+            Some(w) if !w.is_empty() => w.to_string(),
+            _ => crate::ctx::ensure_default_workspace()
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        };
         let created = mgr
             .supervisor
             .request(
                 "session.create".into(),
                 json!({
-                    "cwd": job.workspace.clone().unwrap_or_default(),
+                    "cwd": cwd,
                     "model": job.model,
                     "expert_id": job.expert_id,
                     "thinking_level": job.thinking_level,

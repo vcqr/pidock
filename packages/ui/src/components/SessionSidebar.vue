@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { SessionSummaryUi } from "../store.js";
-import { basename, relTime } from "../utils/time.js";
+import { basename, isInsideDefaultWorkspace, relTime } from "../utils/time.js";
 import { REVEAL_PATH, WINDOW_CONTROLS, IS_MAC, onTitlebarDblclick } from "../databus.js";
 import Icon from "./Icon.vue";
 import TrafficLights from "./TrafficLights.vue";
@@ -232,10 +232,10 @@ const filtered = computed(() => {
   );
 });
 
-/** 会话是否「不在项目中」（cwd 为主目录或为空）；主目录未知（web 快照）时不做拆分 */
+/** 会话是否「不在项目中」（cwd 为主目录、为空，或落在默认工作空间内部）；主目录未知（web 快照）时不做拆分 */
 function isLooseTask(s: SessionSummaryUi): boolean {
   if (!props.homeDir) return false;
-  return !s.cwd || s.cwd === props.homeDir;
+  return !s.cwd || s.cwd === props.homeDir || isInsideDefaultWorkspace(s.cwd, props.homeDir);
 }
 
 /** 项目视图里「任务」分组：不在项目中的会话 */
