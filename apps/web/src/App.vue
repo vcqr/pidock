@@ -38,6 +38,7 @@ import AdminAuthCfg from "./components/AdminAuthCfg.vue";
 import AdminInvites from "./components/AdminInvites.vue";
 import AdminUsers from "./components/AdminUsers.vue";
 import AccessTokens from "./components/AccessTokens.vue";
+import ImChannels from "./components/ImChannels.vue";
 import WebhookEndpoints from "./components/WebhookEndpoints.vue";
 import MachineCard from "./components/MachineCard.vue";
 import MachinePopover from "./components/MachinePopover.vue";
@@ -288,8 +289,8 @@ const activeMachine = computed(() => machines.value.find((m) => m.machine_id ===
 const activeOsMeta = computed(() => osMeta(activeMachine.value?.os));
 /** 每台机器的会话数（首页卡片与机器详情浮层用），null=尚未取到 */
 const sessionCounts = ref<Record<string, number | null>>({});
-/** home=机器卡片墙；ws=会话工作区（登录后先见 home）；admin/tokens/webhooks=共享左栏的内容区切换 */
-const view = ref<"home" | "ws" | "admin" | "tokens" | "webhooks">("home");
+/** home=机器卡片墙；ws=会话工作区（登录后先见 home）；admin/tokens/webhooks/im=共享左栏的内容区切换 */
+const view = ref<"home" | "ws" | "admin" | "tokens" | "webhooks" | "im">("home");
 /** 管理面板内部的标签页（离开再回来保持选中） */
 const adminPane = ref<"invites" | "users" | "auth">("invites");
 /** 左栏管理组菜单：定位到对应面板 */
@@ -819,6 +820,15 @@ onBeforeUnmount(() => {
           <Icon name="plug-line" :size="15" />
           <span>Webhook</span>
         </button>
+        <button
+          class="side-item"
+          :class="{ on: view === 'im' }"
+          title="IM 渠道"
+          @click="view = 'im'"
+        >
+          <Icon name="chat-1-line" :size="15" />
+          <span>IM 渠道</span>
+        </button>
         <!-- 管理组：仅管理员可见 -->
         <template v-if="auth?.role === 'admin'">
           <div class="side-group">管理</div>
@@ -914,6 +924,7 @@ onBeforeUnmount(() => {
       </div>
       <AccessTokens v-else-if="view === 'tokens'" :client="auth" />
       <WebhookEndpoints v-else-if="view === 'webhooks'" :client="auth" />
+      <ImChannels v-else-if="view === 'im'" :client="auth" />
     </main>
   </div>
 

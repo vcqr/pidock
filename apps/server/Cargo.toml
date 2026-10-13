@@ -36,6 +36,10 @@ ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ri
 # 登录邮箱验证码 SMTP 发信：rustls 后端与 ldap3/reqwest 一致
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
 url = "2"
+# 飞书事件订阅：AES-256-CBC 解密（Encrypt Key）+ base64 事件体
+base64 = "0.22"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
 rdkafka = { version = "0.36", optional = true, features = ["cmake-build", "tokio"] }
 
 [features]

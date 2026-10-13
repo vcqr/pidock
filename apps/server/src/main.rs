@@ -5,6 +5,7 @@ mod auth;
 mod config;
 mod gateway;
 mod guard;
+mod im;
 mod ingest;
 mod ldap;
 mod mailer;
@@ -785,6 +786,7 @@ async fn main() {
         .merge(sso::router())
         .merge(pat::router())
         .merge(webhook::router())
+        .merge(im::router())
         .layer(cors)
         .with_state(state.clone());
     let app = if web_dir.is_empty() {

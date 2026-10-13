@@ -196,6 +196,33 @@ pi 压缩会话会重写 JSONL → 条目索引偏移。host drain 时检测
   为端点 `callback_secret`（创建时生成、列表可见，仅用于调用方验签）。
   共享会话期间被人工插话可能携带后续轮次输出（policy=new 专属会话无此
   问题），已知取舍
+
+### 3.11 IM 接入（飞书先行，平台可扩展）
+
+IM 群聊作为触发源与回复通道：@机器人发消息 → 指定节点执行 → 结果回群。
+复用 webhook 的中间层（`deliver` 编排、`on_turn_idle` 空闲触发、审计、
+限流框架），替换两端（鉴权 = 平台侧校验；回复 = 平台消息 API）。
+
+- **渠道 = `im_channels` 文档**：平台凭证（app_id/app_secret/
+  verification_token/encrypt_key）+ 与 webhook_endpoints 同构的目标配置
+  （machine/expert/model/permission/session_policy/workspace），因此
+  `webhook::deliver` 直接吃渠道文档。归属 = 配置它的账号；任何 @机器人
+  的人都可能触发，权限默认 edit-auto（比 webhook 保守）
+- **入站** `POST /im/feishu/event/{channel_id}`：URL 内渠道 id = 弱凭证 +
+  确定性路由。url_verification 原样回 challenge（1s 内）；配置 Encrypt
+  Key 时验签（`X-Lark-Signature` = sha256(ts+nonce+key+body)）+ 解密
+  （AES-256-CBC，key = SHA256(Encrypt Key)，密文 = base64(iv+data)，PKCS7）；
+  事件 token 必须等于 verification_token；`message_id` Redis 去重防飞书
+  重推；只接 text（content 二次解析 + 清洗 `@_user_N` 占位）→ deliver →
+  立即 200（飞书 3s 超时）。投递失败直接回群说明（best effort）
+- **回复**：pending 记录加 `kind`（webhook | im_feishu）+ `reply_chat_id`，
+  `post_callback` 按 kind 分发；飞书回消息走
+  `POST /open-apis/im/v1/messages?receive_id_type=chat_id`，
+  tenant_access_token 经 app 凭证换取并缓存 Redis（到期前 5 分钟）；
+  超时/无输出同样有兜底文案。重试节奏与 webhook 回调一致（10s/60s）
+- **管理面**：web 控制台「IM 渠道」页（CRUD + 启停 + 展开详情含事件订阅
+  URL 复制与接入步骤）。多平台 = 在 `im/` 下新增平台适配文件实现
+  验证/解析/回复三件事；v2 候选：按群绑定节点、富文本、长连接订阅模式
 - 管理面在 web 控制台「Webhook」页（`/webhooks` CRUD + 启停），专家下拉
   经 `/rpc` `experts.list` 实时拉取目标节点；自动化任务表单同款专家字段
   （`ScheduledJob.expert_id` 随 `session.create` 绑定）
@@ -235,10 +262,14 @@ webhook_endpoints {_id=端点id, user_id, name, token_hash, machine_id, session_
                  (new|latest|fixed), fixed_session_id, expert_id, model, thinking_level,
                  permission_mode, workspace, callback_url, callback_secret, enabled,
                  created_at, updated_at}
-webhook_pending_callbacks {_id=投递id, endpoint_id, user_id, machine_id, session_id,
-                 callback_url, callback_secret, text, status(pending|delivering|
-                 delivered|failed), attempts, last_status_code, last_error,
-                 created_at, expires_at, claimed_at, finished_at}
+webhook_pending_callbacks {_id=投递id, kind(webhook|im_feishu), endpoint_id, im_channel_id,
+                 user_id, machine_id, session_id, callback_url, callback_secret, reply_chat_id,
+                 text, status(pending|delivering|delivered|failed), attempts, last_status_code,
+                 last_error, created_at, expires_at, claimed_at, finished_at}
+im_channels      {_id=渠道id, user_id, platform(feishu), name, app_id, app_secret,
+                 verification_token, encrypt_key, machine_id, session_policy(new|latest|fixed),
+                 fixed_session_id, expert_id, model, thinking_level, permission_mode,
+                 workspace, enabled, created_at, updated_at}
 attachment_meta  {_id=sha256, user_id, size, created_at}
 ```
 

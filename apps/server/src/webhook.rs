@@ -44,7 +44,7 @@ const MAX_TEXT_CHARS: usize = 100_000;
 /// 每用户最多端点数
 const MAX_ENDPOINTS_PER_USER: usize = 20;
 /// 完成回调等待上限：超过即投递 timeout 兜底通知
-const CALLBACK_TTL_SECS: i64 = 30 * 60;
+pub(crate) const CALLBACK_TTL_SECS: i64 = 30 * 60;
 /// 回调 HTTP 客户端单次超时
 const CALLBACK_HTTP_TIMEOUT_SECS: u64 = 10;
 /// 回调重试节奏：立即 → 10s → 60s，全失败记 failed 留查
@@ -102,21 +102,21 @@ async fn verify(state: &AppState, token: &str) -> Result<(String, BsonDoc), Stri
     Ok((user_id, d))
 }
 
-/// 端点固定窗口限流；Redis 故障放行并记日志（可用性优先）
-async fn rate_limit(state: &AppState, endpoint_id: &str) -> bool {
+/// 端点固定窗口限流；Redis 故障放行并记日志（可用性优先）。IM 入站同用
+pub(crate) async fn rate_limit(state: &AppState, key_scope: &str, id: &str, max: i64) -> bool {
     let mut conn = state.redis.clone();
-    let key = format!("webhook:rl:{endpoint_id}");
+    let key = format!("webhook:rl:{key_scope}:{id}");
     let n: i64 = match redis::cmd("INCR").arg(&key).query_async(&mut conn).await {
         Ok(n) => n,
         Err(e) => {
-            tracing::warn!(endpoint = %endpoint_id, "webhook 限流 Redis 故障放行: {e}");
+            tracing::warn!(scope = %key_scope, id = %id, "限流 Redis 故障放行: {e}");
             return true;
         }
     };
     if n == 1 {
         let _: Result<(), _> = conn.expire(&key, 60).await;
     }
-    n <= RATE_LIMIT_PER_MIN
+    n <= max
 }
 
 /// 单步 RPC：把命令经 gateway 中继到节点并在服务端等回执。
@@ -153,8 +153,10 @@ async fn node_rpc(
     }
 }
 
-/// 按端点配置解析目标会话并投递消息；返回（session_id, 最终命令 command_id）
-async fn deliver(
+/// 按端点配置解析目标会话并投递消息；返回（session_id, 最终命令 command_id）。
+/// IM 渠道复用同一编排：传入的文档只需具备同名字段
+/// （machine_id/session_policy/fixed_session_id/expert_id/model/thinking_level/permission_mode/workspace/name）
+pub(crate) async fn deliver(
     state: &AppState,
     user_id: &str,
     ep: &BsonDoc,
@@ -634,7 +636,7 @@ async fn invoke(
     let ep_id = ep.get_str("_id").unwrap_or_default().to_string();
     let machine_id = ep.get_str("machine_id").unwrap_or_default().to_string();
 
-    if !rate_limit(&state, &ep_id).await {
+    if !rate_limit(&state, "webhook", &ep_id, RATE_LIMIT_PER_MIN).await {
         return Err(api_err(StatusCode::TOO_MANY_REQUESTS, "调用过于频繁，请稍后再试"));
     }
     let text = body.text.trim().to_string();
@@ -763,6 +765,7 @@ async fn register_pending(
         .collection::<BsonDoc>("webhook_pending_callbacks")
         .insert_one(doc! {
             "_id": &cb_id,
+            "kind": "webhook",
             "endpoint_id": ep.get_str("_id").unwrap_or_default(),
             "user_id": ep.get_str("user_id").unwrap_or_default(),
             "machine_id": ep.get_str("machine_id").unwrap_or_default(),
@@ -853,7 +856,9 @@ pub async fn run_maintenance(state: AppState) {
 }
 
 /// 会话最近一条 assistant 消息（取最近 10 条 message_complete 解析挑选）
-async fn fetch_last_assistant(state: &AppState, session_id: &str) -> Option<Value> {
+/// 会话最近一条 assistant 消息（取最近 10 条 message_complete 解析挑选）。
+/// IM 回复通道复用同一提取
+pub(crate) async fn fetch_last_assistant(state: &AppState, session_id: &str) -> Option<Value> {
     let docs = state
         .mongo
         .collection::<BsonDoc>("session_events")
@@ -906,8 +911,18 @@ fn sign_callback(secret: &str, body: &[u8]) -> String {
     format!("sha256={:x}", mac.finalize().into_bytes())
 }
 
-/// 投递一次回调（带重试）。timed_out = 清扫超时兜底，payload 不再取消息
-async fn post_callback(state: &AppState, cb: &BsonDoc, timed_out: bool) {
+/// 投递分发：按 pending 记录的 kind 路由到对应回复通道
+/// （webhook = POST callback_url；im_* = 各 IM 平台回消息 API）。
+/// timed_out = 清扫超时兜底，投递内容为超时提示而非任务结果
+pub(crate) async fn post_callback(state: &AppState, cb: &BsonDoc, timed_out: bool) {
+    match cb.get_str("kind").unwrap_or("webhook") {
+        "im_feishu" => crate::im::feishu::reply_completed(state, cb, timed_out).await,
+        _ => post_webhook_callback(state, cb, timed_out).await,
+    }
+}
+
+/// 投递一次 webhook 回调（带重试）
+async fn post_webhook_callback(state: &AppState, cb: &BsonDoc, timed_out: bool) {
     let cb_id = cb.get_str("_id").unwrap_or_default().to_string();
     let url = cb.get_str("callback_url").unwrap_or_default().to_string();
     let secret = cb.get_str("callback_secret").unwrap_or_default().to_string();
@@ -980,7 +995,7 @@ async fn post_callback(state: &AppState, cb: &BsonDoc, timed_out: bool) {
     tracing::warn!(delivery = %cb_id, url = %url, "webhook 回调投递失败: {last_error}");
 }
 
-async fn finish_pending(
+pub(crate) async fn finish_pending(
     state: &AppState,
     cb_id: &str,
     status: &str,
