@@ -11,6 +11,7 @@ import {
   SessionSidebar,
   SettingsView,
   StatePill,
+  TrafficLights,
   ATTACHMENT_LOADER,
   FOLDER_PICKER,
   FILE_PICKER,
@@ -101,6 +102,17 @@ function onGlobalKey(e: KeyboardEvent): void {
 // ---- 左栏（会话侧栏）拖拽调宽（NSplit），宽度记忆在 localStorage ----
 const SIDEBAR_KEY = "pidock.sidebarWidth";
 const sidebarWidth = ref<number | null>(readSidebarWidth());
+// ---- 左栏折叠：整体收起侧栏（NSplit 第一格压到 0），状态同样记忆在 localStorage ----
+const SIDEBAR_COLLAPSED_KEY = "pidock.sidebarCollapsed";
+const sidebarCollapsed = ref(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1");
+function toggleSidebar(): void {
+  sidebarCollapsed.value = !sidebarCollapsed.value;
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed.value ? "1" : "0");
+  } catch {
+    // localStorage 不可用时仅本次会话内生效
+  }
+}
 function readSidebarWidth(): number | null {
   const v = Number(localStorage.getItem(SIDEBAR_KEY));
   return Number.isFinite(v) && v >= 190 && v <= 520 ? Math.round(v) : null;
@@ -117,11 +129,13 @@ function saveSidebar(): void {
     // localStorage 不可用时忽略
   }
 }
-/** 设置中心「恢复默认布局」：清掉宽度记忆，回到 260px */
+/** 设置中心「恢复默认布局」：清掉宽度/折叠记忆，回到 260px 展开态 */
 function resetLayout(): void {
   sidebarWidth.value = null;
+  sidebarCollapsed.value = false;
   try {
     localStorage.removeItem(SIDEBAR_KEY);
+    localStorage.removeItem(SIDEBAR_COLLAPSED_KEY);
   } catch {
     // ignore
   }
@@ -304,7 +318,8 @@ onMounted(async () => {
       <n-split
         direction="horizontal"
         class="layout-split"
-        :size="`${sidebarWidth ?? 260}px`"
+        :size="`${sidebarCollapsed ? 0 : sidebarWidth ?? 260}px`"
+        :disabled="sidebarCollapsed"
         min="190px"
         max="520px"
         :resize-trigger-size="6"
@@ -315,6 +330,7 @@ onMounted(async () => {
       >
         <template #1>
       <SessionSidebar
+        v-show="!sidebarCollapsed"
         :sessions="store.sessions"
         :active-id="store.activeId"
         :home-dir="store.homeDir"
@@ -341,6 +357,15 @@ onMounted(async () => {
       <main class="main">
         <!-- deep：整条子树可拖拽；双击最大化走 onTitlebarDblclick（内建脚本被守卫拦截） -->
         <header class="titlebar" data-tauri-drag-region="deep" @dblclick="onTitlebarDblclick($event, toggleMaximize)">
+          <!-- 侧栏折叠后 macOS 红绿灯失去落点，挪进主标题栏（组件在非 macOS 自隐藏） -->
+          <TrafficLights v-if="sidebarCollapsed" />
+          <button
+            class="tbtn"
+            :title="sidebarCollapsed ? '展开左栏' : '收起左栏'"
+            @click="toggleSidebar"
+          >
+            <Icon :name="sidebarCollapsed ? 'menu-unfold-line' : 'menu-fold-line'" :size="15" />
+          </button>
           <StatePill :state="store.agentState" />
           <span class="transport">{{ bus.transport }}</span>
           <span v-if="store.lastError" class="err" :title="store.lastError">{{ store.lastError }}</span>
