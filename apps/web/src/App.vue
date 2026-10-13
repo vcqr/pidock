@@ -38,6 +38,7 @@ import AdminAuthCfg from "./components/AdminAuthCfg.vue";
 import AdminInvites from "./components/AdminInvites.vue";
 import AdminUsers from "./components/AdminUsers.vue";
 import AccessTokens from "./components/AccessTokens.vue";
+import WebhookEndpoints from "./components/WebhookEndpoints.vue";
 import MachineCard from "./components/MachineCard.vue";
 import MachinePopover from "./components/MachinePopover.vue";
 import { osMeta, type MachineUi } from "./machine.js";
@@ -287,8 +288,8 @@ const activeMachine = computed(() => machines.value.find((m) => m.machine_id ===
 const activeOsMeta = computed(() => osMeta(activeMachine.value?.os));
 /** 每台机器的会话数（首页卡片与机器详情浮层用），null=尚未取到 */
 const sessionCounts = ref<Record<string, number | null>>({});
-/** home=机器卡片墙；ws=会话工作区（登录后先见 home）；admin/tokens=共享左栏的内容区切换 */
-const view = ref<"home" | "ws" | "admin" | "tokens">("home");
+/** home=机器卡片墙；ws=会话工作区（登录后先见 home）；admin/tokens/webhooks=共享左栏的内容区切换 */
+const view = ref<"home" | "ws" | "admin" | "tokens" | "webhooks">("home");
 /** 管理面板内部的标签页（离开再回来保持选中） */
 const adminPane = ref<"invites" | "users" | "auth">("invites");
 /** 左栏管理组菜单：定位到对应面板 */
@@ -788,7 +789,7 @@ onBeforeUnmount(() => {
     </div>
   </div>
 
-  <!-- 控制台：左栏常驻，右侧内容按 view 切换（节点 / 管理面板 / 访问令牌） -->
+  <!-- 控制台：左栏常驻，右侧内容按 view 切换（节点 / 管理面板 / 访问令牌 / webhook） -->
   <div v-else-if="store && view !== 'ws'" class="home">
     <aside class="home-side">
       <div class="side-brand">
@@ -808,6 +809,15 @@ onBeforeUnmount(() => {
         >
           <Icon name="shield-flash-line" :size="15" />
           <span>访问令牌</span>
+        </button>
+        <button
+          class="side-item"
+          :class="{ on: view === 'webhooks' }"
+          title="Webhook 端点"
+          @click="view = 'webhooks'"
+        >
+          <Icon name="plug-line" :size="15" />
+          <span>Webhook</span>
         </button>
         <!-- 管理组：仅管理员可见 -->
         <template v-if="auth?.role === 'admin'">
@@ -903,6 +913,7 @@ onBeforeUnmount(() => {
         <AdminAuthCfg v-else :client="auth" />
       </div>
       <AccessTokens v-else-if="view === 'tokens'" :client="auth" />
+      <WebhookEndpoints v-else-if="view === 'webhooks'" :client="auth" />
     </main>
   </div>
 

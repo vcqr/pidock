@@ -78,6 +78,19 @@ async fn handle_frame(state: &AppState, payload: &str) {
 
     ingest_one(state, &user_id, &machine_id, &envelope).await;
 
+    // webhook 完成回调：agent 转入空闲视为该轮结束（存在挂起回调则认领并异步投递）
+    if envelope.get("kind").and_then(|v| v.as_str()) == Some("agent_state_changed")
+        && envelope.pointer("/payload/state").and_then(|v| v.as_str()) == Some("idle")
+    {
+        let session_id = envelope
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !session_id.is_empty() {
+            crate::webhook::on_turn_idle(state.clone(), session_id).await;
+        }
+    }
+
     // realtime push to web clients of this user
     state.publish_to_user(&user_id, payload).await;
 }

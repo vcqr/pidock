@@ -170,6 +170,36 @@ pi 压缩会话会重写 JSONL → 条目索引偏移。host drain 时检测
 `delete_many` 该会话全部事件 → host 从 seq=1 重新回放。**ingest 单 worker
 严格保序**（曾经每帧 spawn 导致标记晚于重建事件到达，已修）。
 
+### 3.10 入站 webhook（外部系统 → 指定节点）
+
+让 CI / 告警 / 机器人等外部系统凭端点令牌远程驱动节点发消息。端点 =
+`webhook_endpoints` 文档：`pw_` 令牌哈希 + 目标配置（节点 / 专家 / 模型 /
+权限模式 / 会话策略）一体，明文只在创建响应出现一次。
+
+- **鉴权独立于账号令牌**：`pw_` 前缀不走 `verify_token` 的 access 分支，
+  调不了 `/rpc`、`/commands` 等账号命令面——调用方唯一的自由度是
+  `POST /webhooks/invoke {text}`，其余全部封在端点配置里（权限最小面）。
+  每端点固定窗口限流 30/min（Redis 故障放行），每次调用实时校验账号状态
+- **会话策略**：`fixed`（固定会话）/ `latest`（镜像 sessions 按 updated_at
+  取最近活跃）/ `new`（服务端编排 `session.create`（绑专家）→
+  `set_permission_mode` → `session.rename` → `agent.prompt`，与本地定时
+  任务 execute_run 同一命令序列，节点无感知）；编排各步经 gateway
+  `route_command` 等回执，节点离线 `refused_offline`
+- **审计**：每次 invoke 落 `commands` 集合（`source: "webhook"` +
+  `endpoint_id`），与 /commands、/rpc 同表异源
+- **完成回调**：invoke 带 `callback_url`（调用级）或端点配置兜底时，登记
+  `webhook_pending_callbacks` 挂起记录；agent 转空闲（`agent_state_changed`
+  state=idle，上行白名单进 ingest）即认领并异步 POST 结果（最后一轮
+  assistant 文本）到回调地址——ingest 单 worker 绝不内联等 HTTP。30 分钟
+  未结束由后台清扫（30s 一轮）兜底投递 `status: "timeout"`；投递失败重试
+  3 次（10s/60s）。请求签名 `X-PiDock-Signature: sha256=HMAC(body)`，密钥
+  为端点 `callback_secret`（创建时生成、列表可见，仅用于调用方验签）。
+  共享会话期间被人工插话可能携带后续轮次输出（policy=new 专属会话无此
+  问题），已知取舍
+- 管理面在 web 控制台「Webhook」页（`/webhooks` CRUD + 启停），专家下拉
+  经 `/rpc` `experts.list` 实时拉取目标节点；自动化任务表单同款专家字段
+  （`ScheduledJob.expert_id` 随 `session.create` 绑定）
+
 ## 4. 协议参考
 
 ### 方法（core → host；web 经 REST/命令映射到同一套）
@@ -200,6 +230,15 @@ sessions         {_id=session_id, user_id, machine_id, status(running|idle|
 session_events   {machine_id, session_id, seq, event_id, kind, payload(JSON 字符串),
                  ts, ingested_at}   唯一索引 (session_id, seq)
 commands         {command_id, user_id, machine_id, session_id, type, payload, status, ts}
+access_tokens    {_id=jti, user_id, name, token_hash(sha256), days, expires_at, created_at}
+webhook_endpoints {_id=端点id, user_id, name, token_hash, machine_id, session_policy
+                 (new|latest|fixed), fixed_session_id, expert_id, model, thinking_level,
+                 permission_mode, workspace, callback_url, callback_secret, enabled,
+                 created_at, updated_at}
+webhook_pending_callbacks {_id=投递id, endpoint_id, user_id, machine_id, session_id,
+                 callback_url, callback_secret, text, status(pending|delivering|
+                 delivered|failed), attempts, last_status_code, last_error,
+                 created_at, expires_at, claimed_at, finished_at}
 attachment_meta  {_id=sha256, user_id, size, created_at}
 ```
 

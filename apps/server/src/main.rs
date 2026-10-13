@@ -15,6 +15,7 @@ mod s3;
 mod sso;
 mod state;
 mod turnstile;
+mod webhook;
 
 use axum::{
     extract::{Path, Query, State},
@@ -702,6 +703,12 @@ async fn main() {
         }
     });
 
+    // webhook 完成回调：建索引 + 超时兜底清扫（30s 一轮）
+    let state_for_webhook = state.clone();
+    tokio::spawn(async move {
+        webhook::run_maintenance(state_for_webhook).await;
+    });
+
     // 定期清扫过期白名单（Mongo 为事实源后的数据卫生）：
     // refresh_tokens 到期即删；access_tokens 留 30 天供列表展示「已过期」后再删
     let state_for_sweep = state.clone();
@@ -777,6 +784,7 @@ async fn main() {
         .merge(admin::router())
         .merge(sso::router())
         .merge(pat::router())
+        .merge(webhook::router())
         .layer(cors)
         .with_state(state.clone());
     let app = if web_dir.is_empty() {

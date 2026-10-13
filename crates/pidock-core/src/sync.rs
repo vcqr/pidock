@@ -406,6 +406,12 @@ async fn execute_command(
                     p["expert_id"] = v.clone();
                 }
             }
+            // 思考级别：webhook 编排随建会话下发（与本地自动化 execute_run 同构）
+            if let Some(v) = payload.get("thinking_level") {
+                if v.is_string() {
+                    p["thinking_level"] = v.clone();
+                }
+            }
             ("session.create", p)
         }
         "session.resolve_approval" => (

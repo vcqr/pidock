@@ -80,9 +80,12 @@ pub struct ScheduledJob {
     /// 工作空间目录；空 = 主目录
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
-    /// 模型；空 = 默认模型
+    /// 模型；空 = 默认模型（显式传入优先于专家预设）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 专家 id；空 = 普通会话（session.create 随建随绑，专家自带模型/思考/权限预设）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expert_id: Option<String>,
     /// 思考级别（off/minimal/low/medium/high）；空 = 默认
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<String>,
@@ -698,6 +701,7 @@ async fn execute_run(mgr: Arc<SchedulerManager>, job: ScheduledJob, mut run: Run
                 json!({
                     "cwd": job.workspace.clone().unwrap_or_default(),
                     "model": job.model,
+                    "expert_id": job.expert_id,
                     "thinking_level": job.thinking_level,
                 }),
             )
@@ -895,6 +899,7 @@ mod tests {
             cron: "0 30 9 * * *".into(),
             workspace: Some("D:\\work".into()),
             model: None,
+            expert_id: Some("exp-reviewer".into()),
             thinking_level: Some("medium".into()),
             images: Some(vec![JobImage {
                 data: "aGk=".into(),

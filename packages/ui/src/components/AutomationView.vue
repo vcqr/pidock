@@ -33,6 +33,8 @@ interface Job {
   cron: string;
   workspace?: string | null;
   model?: string | null;
+  /** 雇佣的专家 id；空 = 普通会话 */
+  expert_id?: string | null;
   thinking_level?: string | null;
   images?: Array<{ data: string; mime_type: string }> | null;
   permission_mode: string;
@@ -234,10 +236,11 @@ async function removeJob(j: Job): Promise<void> {
   }
 }
 
-// ---- Composer 上下文（工作空间 / 模型 / @ 文件 / 技能） ----
+// ---- Composer 上下文（工作空间 / 模型 / @ 文件 / 技能 / 专家） ----
 const projects = ref<string[]>([]);
 const homeDir = ref<string | null>(null);
 const modelOptions = ref<string[]>([]);
+const expertOptions = ref<Array<{ id: string; name: string; icon?: string }>>([]);
 async function loadComposerContext(): Promise<void> {
   try {
     const r = await props.bus.request("session.list");
@@ -264,6 +267,16 @@ async function loadComposerContext(): Promise<void> {
       .filter((x: string) => x && x !== "undefined/undefined");
   } catch {
     modelOptions.value = [];
+  }
+  try {
+    const r = await props.bus.request("experts.list");
+    expertOptions.value = (r?.experts ?? []).map((e: any) => ({
+      id: String(e.id ?? ""),
+      name: String(e.name ?? ""),
+      icon: e.icon ? String(e.icon) : undefined,
+    }));
+  } catch {
+    expertOptions.value = [];
   }
 }
 async function mentionLoader(cwd: string): Promise<Array<{ path: string; name: string; dir: boolean }>> {
@@ -307,6 +320,8 @@ const fEnd = ref("");
 const fPerm = ref("full");
 const fModel = ref("");
 const fThink = ref("");
+/** 雇佣专家：随 session.create 绑定（空 = 普通会话） */
+const fExpert = ref("");
 
 const peekTimes = ref<number[]>([]);
 const peekErr = ref("");
@@ -354,6 +369,7 @@ function openAdd(): void {
   fPerm.value = "full";
   fModel.value = "";
   fThink.value = "";
+  fExpert.value = "";
   peekTimes.value = [];
   peekErr.value = "";
   dialogSeq.value += 1;
@@ -372,6 +388,7 @@ function openEdit(j: Job): void {
   fPerm.value = j.permission_mode || "full";
   fModel.value = j.model ?? "";
   fThink.value = j.thinking_level ?? "";
+  fExpert.value = j.expert_id ?? "";
   peekTimes.value = [];
   peekErr.value = "";
   dialogSeq.value += 1;
@@ -401,6 +418,7 @@ async function applyDraft(
       cron: buildCron(),
       workspace: cwd ?? null,
       model: fModel.value || null,
+      expert_id: fExpert.value || null,
       thinking_level: fThink.value || null,
       images: images?.length ? images : null,
       permission_mode: fPerm.value,
@@ -586,6 +604,19 @@ function copyRunId(sid: string): void {
             <label>结束</label>
             <input v-model="fEnd" type="datetime-local" />
           </div>
+        </div>
+
+        <div class="field">
+          <label>雇佣专家</label>
+          <select v-model="fExpert" class="expert-select">
+            <option value="">不使用专家（默认模型裸跑）</option>
+            <option v-for="e in expertOptions" :key="e.id" :value="e.id">
+              {{ e.name }}
+            </option>
+          </select>
+          <p v-if="fExpert" class="field-hint">
+            任务会话将绑定该专家（含其技能 / 工具与权限预设）；显式选择的模型与权限优先。
+          </p>
         </div>
 
         <div class="composer-slot">
