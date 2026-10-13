@@ -464,7 +464,7 @@ async fn post_command(
         "type": body.command_type,
         "payload": body.payload,
     });
-    match gateway::route_command(&state, &user_id, &body.machine_id, &command).await {
+    match gateway::route_command(&state, &user_id, &body.machine_id, &command, None).await {
         Ok(command_id) => {
             // audit trail
             let _ = state
@@ -492,6 +492,93 @@ async fn post_command(
                 "error"
             };
             Ok(Json(json!({"status": status})))
+        }
+    }
+}
+
+/// REST 控制面：server 代替浏览器把命令中继到桌面并在服务端等回执，HTTP
+/// 响应直接带回结果。浏览器控制面从此只依赖 HTTP（WS 只承载事件推送）——
+/// 弱网/重连/多标签下专家、配置等拉取不再受浏览器侧回执关联可靠性的影响。
+/// 命令面与 POST /commands 完全一致（同名 type/payload），桌面端无感知。
+#[derive(Deserialize)]
+struct RpcBody {
+    machine_id: String,
+    #[serde(default)]
+    session_id: String,
+    #[serde(rename = "type")]
+    method: String,
+    #[serde(default)]
+    payload: Value,
+}
+
+/// 服务端等待回执的上限：与旧前端 30s 客户端超时同级。turn 型命令
+/// （agent.prompt 等）桌面端本就立即回「已受理」，不受此限
+const RPC_TIMEOUT_SECS: u64 = 30;
+
+async fn post_rpc(
+    State(state): State<AppState>,
+    tok: Bearer,
+    Json(body): Json<RpcBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let user_id = auth::verify_token(&state, &tok.0, "access")
+        .await
+        .map(|c| c.sub)
+        .map_err(|e| err(StatusCode::UNAUTHORIZED, e))?;
+    let command = json!({
+        "session_id": body.session_id,
+        "type": body.method,
+        "payload": body.payload,
+    });
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    match gateway::route_command(&state, &user_id, &body.machine_id, &command, Some(tx)).await {
+        Err(e) => {
+            let status = if e == "refused_offline" {
+                "refused_offline"
+            } else if e == "forbidden" {
+                "forbidden"
+            } else {
+                "error"
+            };
+            Ok(Json(json!({"status": status})))
+        }
+        Ok(command_id) => {
+            // audit trail（与 /commands 同构）
+            let _ = state
+                .mongo
+                .collection::<BsonDoc>("commands")
+                .insert_one(doc! {
+                    "command_id": &command_id,
+                    "user_id": &user_id,
+                    "machine_id": &body.machine_id,
+                    "session_id": &body.session_id,
+                    "type": &body.method,
+                    "payload": serde_json::to_string(&body.payload).unwrap_or_default(),
+                    "status": "sent",
+                    "ts": chrono::Utc::now().to_rfc3339(),
+                })
+                .await;
+            match tokio::time::timeout(std::time::Duration::from_secs(RPC_TIMEOUT_SECS), rx).await
+            {
+                // 回执 payload：{command_id, ok, result | error}
+                Ok(Ok(reply)) => {
+                    if reply.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+                        Ok(Json(json!({
+                            "status": "ok",
+                            "result": reply.get("result").cloned().unwrap_or(json!({})),
+                        })))
+                    } else {
+                        Ok(Json(json!({
+                            "status": "error",
+                            "error": reply.get("error").and_then(|v| v.as_str()).unwrap_or("command failed"),
+                        })))
+                    }
+                }
+                Ok(Err(_)) => Ok(Json(json!({"status": "error", "error": "命令回执通道中断"}))),
+                Err(_) => {
+                    state.pending_commands.lock().await.remove(&command_id);
+                    Ok(Json(json!({"status": "timeout"})))
+                }
+            }
         }
     }
 }
@@ -680,6 +767,7 @@ async fn main() {
             get(session_file_changes),
         )
         .route("/commands", post(post_command))
+        .route("/rpc", post(post_rpc))
         .route("/attachments/presign", post(attachments_presign))
         .route("/attachments/{attachment_id}/url", get(attachment_url))
         .route("/ws/desktop", get(gateway::ws_desktop))

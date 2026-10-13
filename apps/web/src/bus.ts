@@ -1,9 +1,10 @@
 /**
  * Web DataBus: HTTP (REST) + WebSocket (live push).
  *
+ * - 控制面（命令）：POST /rpc —— server 代替浏览器把命令中继到桌面并在
+ *   服务端等回执，HTTP 响应直接带回结果。浏览器只依赖 HTTP，WS 断开
+ *   不影响专家/配置/自动化等拉取
  * - session.list / session.events -> REST
- * - agent.* / session.create      -> POST /commands (routed to the desktop)
- *    with command_id correlation against `command_result` envelopes
  * - live events                   -> /ws/web (Redis pub/sub relay), with
  *    after_seq gap-fill on reconnect
  */
@@ -11,7 +12,8 @@ import type { DataBus, ReplayEvent } from "@pidock/ui";
 import type { Envelope } from "@pidock/protocol";
 import type { AuthClient } from "./auth.js";
 
-const COMMAND_TIMEOUT_MS = 30_000;
+// 服务端等回执上限 30s；客户端再加 5s 网络余量，避免连接黑洞时请求悬挂
+const RPC_CLIENT_TIMEOUT_MS = 35_000;
 // ephemeral kinds are push-only; deltas stay desktop-local
 const GAP_FILL_AFTER_SEQ = true;
 
@@ -37,7 +39,6 @@ export function createWebBus(auth: AuthClient): DataBus & {
   let wsOpen = false;
   let closedByUs = false;
   const lastSeqBySession = new Map<string, number>();
-  const pendingCommands = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }>();
 
   function trackSeq(e: Envelope): void {
     if (e.persist && typeof e.seq === "number") {
@@ -62,20 +63,6 @@ export function createWebBus(auth: AuthClient): DataBus & {
       // 压缩/分叉重同步：服务端已清空该会话事件并按新 seq 重灌，本地游标作废，
       // 否则重连后的 after_seq 补拉会漏掉重灌的低序号事件
       if (env.kind === "session_resynced") lastSeqBySession.delete(env.session_id);
-      if (env.kind === "command_result") {
-        const commandId = (env.payload as any)?.command_id;
-        const pending = commandId ? pendingCommands.get(commandId) : undefined;
-        if (pending) {
-          pendingCommands.delete(commandId);
-          const ok = (env.payload as any)?.ok === true;
-          ok
-            ? pending.resolve((env.payload as any).result)
-            : pending.reject(new Error((env.payload as any)?.error ?? "command failed"));
-        }
-        // still forward for visibility
-        eventHandler?.(env);
-        return;
-      }
       eventHandler?.(env);
     }
   }
@@ -144,10 +131,13 @@ export function createWebBus(auth: AuthClient): DataBus & {
     })();
   }
 
+  /** 控制面命令：POST /rpc，server 中继到桌面并在服务端等回执，
+   * HTTP 响应直接带回结果（不再依赖浏览器 WS 收 command_result） */
   async function command(sessionId: string, type: string, payload: unknown): Promise<any> {
     if (!activeMachine) throw new Error("未选择节点");
-    const res = await auth.request("/commands", {
+    const res = await auth.request("/rpc", {
       method: "POST",
+      signal: AbortSignal.timeout(RPC_CLIENT_TIMEOUT_MS),
       body: JSON.stringify({
         machine_id: activeMachine,
         session_id: sessionId,
@@ -155,32 +145,11 @@ export function createWebBus(auth: AuthClient): DataBus & {
         payload,
       }),
     });
-    if (res.status === "refused_offline") {
-      throw new Error("节点离线，无法远程控制");
-    }
-    if (res.status === "forbidden") {
-      throw new Error("无权控制该节点");
-    }
-    if (res.status !== "sent" || !res.command_id) {
-      throw new Error(res.error ?? "command failed");
-    }
-    // correlate with the desktop's command_result envelope
-    return await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pendingCommands.delete(res.command_id);
-        reject(new Error("命令超时（桌面端未响应）"));
-      }, COMMAND_TIMEOUT_MS);
-      pendingCommands.set(res.command_id, {
-        resolve: (v) => {
-          clearTimeout(timer);
-          resolve(v);
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-      });
-    });
+    if (res.status === "ok") return res.result ?? {};
+    if (res.status === "refused_offline") throw new Error("节点离线，无法远程控制");
+    if (res.status === "forbidden") throw new Error("无权控制该节点");
+    if (res.status === "timeout") throw new Error("命令超时（桌面端未响应）");
+    throw new Error(res.error ?? "command failed");
   }
 
   return {

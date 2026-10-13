@@ -10,15 +10,15 @@
 
 use axum::{
     extract::{
-        ws::{Message, WebSocket},
-        Query, State, WebSocketUpgrade,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Query, State,
     },
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::auth::{user_active, verify_token};
 use crate::state::AppState;
@@ -168,15 +168,31 @@ async fn desktop_socket(state: AppState, user_id: String, socket: WebSocket) {
             _ => {
                 // envelope: stamp user_id + machine_id, push into pipeline
                 let mid = machine_id.clone().unwrap_or_default();
-                let wrapped = crate::pipeline::wrap(&user_id, &mid, &frame);
-                // command_result 是纯请求-回执（ingest 对它不落库不推送），直转用户
-                // 实时频道：大回执（专家档案带头像可超 kafka 默认 1MB 消息上限被
-                // broker 拒收 → web 端 30s「命令超时」）不再受管道消息上限约束，命令
-                // 回执也少一跳管道时延
+                // command_result 是纯请求-回执：先唤醒 REST 控制面（POST /rpc）
+                // 的服务端等待者，再直转用户实时频道（旧前端在浏览器侧做
+                // command_id 关联，仍依赖这条推送；新前端纯 HTTP，忽略即可）。
+                // 直转同时让它不再过管道——大回执（专家档案带头像可超 kafka
+                // 默认 1MB 消息上限）不受消息上限约束，命令回执少一跳时延
                 if frame.get("kind").and_then(|v| v.as_str()) == Some("command_result") {
+                    let cid = frame
+                        .pointer("/payload/command_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    if !cid.is_empty() {
+                        if let Some(waiter) =
+                            state.pending_commands.lock().await.remove(&cid)
+                        {
+                            let _ = waiter.send(frame.get("payload").cloned().unwrap_or(json!({})));
+                        }
+                    }
+                    let wrapped = crate::pipeline::wrap(&user_id, &mid, &frame);
                     state.publish_to_user(&user_id, &wrapped.to_string()).await;
-                } else if let Err(e) = state.sink.publish(&mid, &wrapped.to_string()).await {
-                    tracing::error!("pipeline publish failed: {e}");
+                } else {
+                    let wrapped = crate::pipeline::wrap(&user_id, &mid, &frame);
+                    if let Err(e) = state.sink.publish(&mid, &wrapped.to_string()).await {
+                        tracing::error!("pipeline publish failed: {e}");
+                    }
                 }
             }
         }
@@ -269,11 +285,14 @@ async fn web_socket(state: AppState, user_id: String, socket: WebSocket) {
 /// route a command from the web to a connected desktop machine.
 /// The machine must belong to the requesting user: routes carry the owner
 /// stamped at register time, so cross-user command injection is refused here.
+/// `wait` 传入时（REST 控制面）把回执等待者挂到 pending_commands，由
+/// desktop_socket 在 command_result 到达时唤醒。
 pub async fn route_command(
     state: &AppState,
     user_id: &str,
     machine_id: &str,
     command: &Value,
+    wait: Option<oneshot::Sender<Value>>,
 ) -> Result<String, String> {
     let routes = state.routes.lock().await;
     let route = routes.get(machine_id).ok_or("refused_offline")?;
@@ -282,15 +301,22 @@ pub async fn route_command(
         return Err("forbidden".to_string());
     }
     let command_id = uuid::Uuid::now_v7().to_string();
+    if let Some(tx) = wait {
+        state
+            .pending_commands
+            .lock()
+            .await
+            .insert(command_id.clone(), tx);
+    }
     let frame = json!({
         "ctrl": "command",
         "command_id": command_id,
         "user_id": user_id,
         "command": command,
     });
-    route
-        .tx
-        .send(frame)
-        .map_err(|_| "refused_offline".to_string())?;
+    if route.tx.send(frame).is_err() {
+        state.pending_commands.lock().await.remove(&command_id);
+        return Err("refused_offline".to_string());
+    }
     Ok(command_id)
 }

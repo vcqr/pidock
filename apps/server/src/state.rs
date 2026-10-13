@@ -22,6 +22,11 @@ pub struct AppState {
     pub sink: Arc<dyn EventSink>,
     pub s3: crate::s3::S3Client,
     pub routes: Arc<tokio::sync::Mutex<HashMap<String, MachineRoute>>>,
+    /// REST 控制面（POST /rpc）的服务端命令关联：command_id -> 等待回执的
+    /// oneshot。server 代替浏览器等 command_result，HTTP 响应直接带回结果，
+    /// 浏览器控制面从此只依赖 HTTP（WS 断开不影响专家/配置等拉取）。
+    /// 条目在回执到达（gateway 唤醒）或超时（/rpc 移除）后清理
+    pub pending_commands: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
 }
 
 /// one connected desktop machine: the command sender plus the owning user
@@ -53,6 +58,7 @@ impl AppState {
             s3,
             sink,
             routes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            pending_commands: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         })
     }
 
