@@ -169,6 +169,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
             expert_id: s.expert_id || undefined,
             expert_name: s.expert_name || undefined,
             parent_session_id: s.parent_session_id || undefined,
+            source: s.source || undefined,
             created_at: s.created_at,
             open: true, // never trigger session.open over the web
             state: s.status === "running" ? "responding" : s.status === "idle" ? "idle" : s.status,

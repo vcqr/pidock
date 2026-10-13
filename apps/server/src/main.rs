@@ -320,6 +320,7 @@ async fn machine_sessions(
                 "expert_id": d.get_str("expert_id").unwrap_or(""),
                 "expert_name": d.get_str("expert_name").unwrap_or(""),
                 "parent_session_id": d.get_str("parent_session_id").unwrap_or(""),
+                "source": d.get_str("source").unwrap_or(""),
                 "created_at": d.get_str("created_at").unwrap_or(""),
                 "updated_at": d.get_str("updated_at").unwrap_or(""),
             })
@@ -708,6 +709,12 @@ async fn main() {
     let state_for_webhook = state.clone();
     tokio::spawn(async move {
         webhook::run_maintenance(state_for_webhook).await;
+    });
+
+    // IM 流模式平台对账：enabled 的流渠道保证有连接任务在跑（30s 一轮）
+    let state_for_im = state.clone();
+    tokio::spawn(async move {
+        im::run_stream_supervisor(state_for_im).await;
     });
 
     // 定期清扫过期白名单（Mongo 为事实源后的数据卫生）：

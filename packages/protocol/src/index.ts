@@ -110,6 +110,8 @@ export interface SessionMetaPayload {
   expert_name?: string;
   /** 分叉新会话记录源会话（云镜像存该字段供 web 侧栏分叉徽标） */
   parent_session_id?: string;
+  /** 程序化创建来源（automation | webhook | im）；人工创建无此字段（侧栏类型徽标） */
+  source?: string;
 }
 
 export interface CompactionSummaryPayload {

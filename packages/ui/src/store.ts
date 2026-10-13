@@ -101,6 +101,8 @@ export interface SessionSummaryUi {
   expert_name?: string;
   /** 分叉来源会话（fork 产生的会话带父会话 id，侧栏出分叉标识） */
   parent_session_id?: string;
+  /** 程序化创建来源（automation | webhook | im），人工创建无此字段（侧栏类型徽标） */
+  source?: string;
   created_at: string;
   updated_at?: string;
   open: boolean;
@@ -871,6 +873,7 @@ export function createAgentStore(bus: DataBus) {
       expert_id: summary.expert_id,
       expert_name: summary.expert_name,
       parent_session_id: summary.parent_session_id,
+      source: summary.source,
       created_at: summary.created_at ?? new Date().toISOString(),
       open: summary.open ?? true,
       state: summary.state ?? "idle",

@@ -1,37 +1,29 @@
-//! 飞书开放平台事件订阅适配器。
+//! 飞书开放平台适配器（HTTP 推送型）。
 //!
-//! 流程：加密体验签（X-Lark-Signature = sha256(ts+nonce+encrypt_key+body)）
-//! 与解密（AES-256-CBC：key = SHA256(encrypt_key)，密文 = base64(iv+data)，
-//! PKCS7）→ url_verification 原样回 challenge → 事件 token 比对
-//! verification_token → message_id 去重（飞书失败重试会重复推送）→ 文本
-//! 消息清洗 @ 占位 → 复用 webhook::deliver 投递节点 → 登记 kind=im_feishu
-//! 的挂起回调，agent 空闲时经 post_callback 分发回这里调平台 API 回消息。
+//! 只实现 [`crate::im::ImPlatform`] 的四件事：凭证校验、入站验证/解密/
+//! 解析（url_verification 回 challenge、事件 token 比对、AES-256-CBC 解密）、
+//! 回文本（tenant_access_token + im/v1/messages）。去重/审计/deliver/
+//! pending 登记由共享流水线（crate::im::process_message）统一执行。
 
-use axum::{
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-    Json,
-};
-use mongodb::bson::{doc, Document as BsonDoc};
-use sha2::{Digest, Sha256};
+use async_trait::async_trait;
+use axum::http::HeaderMap;
+use mongodb::bson::Document as BsonDoc;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
+use crate::im::{ChannelBody, InboundDecision, InboundMessage};
 use crate::state::AppState;
-use crate::webhook;
 
 const FEISHU_BASE: &str = "https://open.feishu.cn";
 /// 单次调用飞书 API 的超时
 const HTTP_TIMEOUT_SECS: u64 = 10;
-/// 回调投递重试节奏（与 webhook 回调一致）
-const RETRY_BACKOFF_SECS: [u64; 2] = [10, 60];
 
-fn now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339()
-}
+pub(crate) struct FeishuPlatform;
 
 // ------------------------------------------------------------ 验签与解密
 
-/// 配置 Encrypt Key 后飞书携带签名头；缺失时放行（token 校验兜底），不匹配即拒
+/// 配置 Encrypt Key 后飞书携带签名头：sha256(ts + nonce + encrypt_key + body)；
+/// 缺失时放行（token 校验兜底），不匹配即拒
 fn verify_signature(encrypt_key: &str, headers: &HeaderMap, raw_body: &str) -> Result<(), String> {
     let Some(sig) = headers.get("x-lark-signature").and_then(|v| v.to_str().ok()) else {
         tracing::warn!("feishu: 请求未带签名头，回落 token 校验");
@@ -89,128 +81,6 @@ fn check_token(channel: &BsonDoc, got: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-// ------------------------------------------------------------ 事件处理
-
-/// 事件订阅入口主体。业务失败统一回 200（飞书对非 2xx 会重试，重试救不了
-/// 节点离线这类错误，反而造成重复推送）；防伪失败才回 4xx。
-pub(crate) async fn handle_event(
-    state: &AppState,
-    channel: &BsonDoc,
-    headers: &HeaderMap,
-    raw_body: &str,
-) -> Response {
-    let channel_id = channel.get_str("_id").unwrap_or_default().to_string();
-
-    // 1) 外层 JSON；加密体先验签再解密
-    let mut payload: Value = match serde_json::from_str(raw_body) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(channel = %channel_id, "feishu: 非法 JSON: {e}");
-            return (StatusCode::BAD_REQUEST, Json(json!({"ok": false}))).into_response();
-        }
-    };
-    if let Some(encrypted) = payload.get("encrypt").and_then(|v| v.as_str()) {
-        let encrypt_key = channel.get_str("encrypt_key").unwrap_or_default();
-        if encrypt_key.is_empty() {
-            return (StatusCode::BAD_REQUEST, Json(json!({"ok": false, "error": "收到加密事件但渠道未配置 Encrypt Key"})))
-                .into_response();
-        }
-        if let Err(e) = verify_signature(encrypt_key, headers, raw_body) {
-            tracing::warn!(channel = %channel_id, "feishu: {e}");
-            return (StatusCode::FORBIDDEN, Json(json!({"ok": false, "error": e}))).into_response();
-        }
-        match decrypt_event(encrypt_key, encrypted) {
-            Ok(v) => payload = v,
-            Err(e) => {
-                tracing::warn!(channel = %channel_id, "feishu: {e}");
-                return (StatusCode::BAD_REQUEST, Json(json!({"ok": false, "error": e}))).into_response();
-            }
-        }
-    }
-
-    // 2) 订阅地址验证：原样回 challenge（飞书要求 1s 内）
-    if payload.get("type").and_then(|v| v.as_str()) == Some("url_verification") {
-        if let Err(e) = check_token(channel, payload.get("token").and_then(|v| v.as_str())) {
-            tracing::warn!(channel = %channel_id, "feishu: url_verification {e}");
-            return (StatusCode::FORBIDDEN, Json(json!({"ok": false, "error": e}))).into_response();
-        }
-        let challenge = payload.get("challenge").cloned().unwrap_or(Value::Null);
-        tracing::info!(channel = %channel_id, "feishu: url_verification 通过");
-        return Json(json!({ "challenge": challenge })).into_response();
-    }
-
-    // 3) 事件信封：token 校验 + 类型分发
-    if check_token(channel, payload.pointer("/header/token").and_then(|v| v.as_str())).is_err() {
-        return (StatusCode::FORBIDDEN, Json(json!({"ok": false, "error": "token mismatch"}))).into_response();
-    }
-    let event_type = payload
-        .pointer("/header/event_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if event_type != "im.message.receive_v1" {
-        return Json(json!({"ok": true, "ignored": event_type})).into_response();
-    }
-    let message = payload.pointer("/event/message").cloned().unwrap_or(json!({}));
-    let message_id = message.get("message_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let chat_id = message.get("chat_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let message_type = message.get("message_type").and_then(|v| v.as_str()).unwrap_or("");
-    if message_id.is_empty() || chat_id.is_empty() {
-        return Json(json!({"ok": true, "ignored": "missing message_id/chat_id"})).into_response();
-    }
-
-    // 4) 幂等：飞书超时/失败会重推同一事件
-    let dedup_key = format!("im:dedup:{channel_id}:{message_id}");
-    let mut conn = state.redis.clone();
-    let fresh: Result<i64, _> = redis::cmd("SET")
-        .arg(&dedup_key)
-        .arg(1)
-        .arg("NX")
-        .arg("EX")
-        .arg(3600)
-        .query_async(&mut conn)
-        .await;
-    if fresh == Ok(0) {
-        return Json(json!({"ok": true, "dedup": true})).into_response();
-    }
-
-    // 5) v1 只接文本；content 是 JSON 字符串需二次解析，@ 占位清洗
-    if message_type != "text" {
-        tracing::info!(channel = %channel_id, "feishu: 忽略非文本消息 {message_type}");
-        return Json(json!({"ok": true, "ignored": message_type})).into_response();
-    }
-    let content: Value = serde_json::from_str(message.get("content").and_then(|v| v.as_str()).unwrap_or("{}"))
-        .unwrap_or(json!({}));
-    let text = clean_mention(content.get("text").and_then(|v| v.as_str()).unwrap_or(""));
-    if text.is_empty() {
-        return Json(json!({"ok": true, "ignored": "empty text"})).into_response();
-    }
-
-    // 6) 投递节点（复用 webhook 编排）+ 立即返回
-    let user_id = channel.get_str("user_id").unwrap_or_default().to_string();
-    let machine_id = channel.get_str("machine_id").unwrap_or_default().to_string();
-    let started = std::time::Instant::now();
-    match webhook::deliver(state, &user_id, channel, &text).await {
-        Ok((session_id, _command_id)) => {
-            audit(state, channel, &machine_id, &session_id, "ok", started).await;
-            match register_pending(state, channel, &session_id, &text, &chat_id).await {
-                Ok(_) => Json(json!({"ok": true, "session_id": session_id})).into_response(),
-                Err(e) => {
-                    tracing::warn!(channel = %channel_id, "feishu: 回调登记失败 {e}");
-                    Json(json!({"ok": true, "session_id": session_id, "reply": false})).into_response()
-                }
-            }
-        }
-        Err(e) => {
-            let status = if e == "refused_offline" { "refused_offline" } else { "error" };
-            audit(state, channel, &machine_id, "", status, started).await;
-            // 投递失败直接在群里说明（best effort），避免用户干等
-            let hint = if e == "refused_offline" { "节点离线，消息未送达" } else { &e };
-            let _ = reply_text(state, channel, &chat_id, &format!("⚠️ PiDock 投递失败：{hint}")).await;
-            Json(json!({"ok": false, "error": e})).into_response()
-        }
-    }
-}
-
 /// @ 机器人的文本带 @_user_1 占位符，按空白段剔除
 fn clean_mention(text: &str) -> String {
     text.split_whitespace()
@@ -219,67 +89,122 @@ fn clean_mention(text: &str) -> String {
         .join(" ")
 }
 
-async fn audit(
-    state: &AppState,
-    channel: &BsonDoc,
-    machine_id: &str,
-    session_id: &str,
-    status: &str,
-    started: std::time::Instant,
-) {
-    let _ = state
-        .mongo
-        .collection::<mongodb::bson::Document>("commands")
-        .insert_one(doc! {
-            "command_id": uuid::Uuid::now_v7().to_string(),
-            "user_id": channel.get_str("user_id").unwrap_or_default(),
-            "machine_id": machine_id,
-            "session_id": session_id,
-            "type": "im.invoke",
-            "payload": channel.get_str("name").unwrap_or_default(),
-            "source": "im",
-            "endpoint_id": channel.get_str("_id").unwrap_or_default(),
-            "status": status,
-            "duration_ms": started.elapsed().as_millis() as i64,
-            "ts": now_rfc3339(),
-        })
-        .await;
-}
+// ------------------------------------------------------------ 适配器实现
 
-/// 登记 IM 挂起回调：agent 空闲时 post_callback 按 kind 分发回 reply_completed
-async fn register_pending(
-    state: &AppState,
-    channel: &BsonDoc,
-    session_id: &str,
-    text: &str,
-    chat_id: &str,
-) -> Result<String, String> {
-    let cb_id = uuid::Uuid::now_v7().to_string();
-    let expires_at = (chrono::Utc::now() + chrono::Duration::seconds(webhook::CALLBACK_TTL_SECS)).to_rfc3339();
-    state
-        .mongo
-        .collection::<BsonDoc>("webhook_pending_callbacks")
-        .insert_one(doc! {
-            "_id": &cb_id,
-            "kind": "im_feishu",
-            "im_channel_id": channel.get_str("_id").unwrap_or_default(),
-            "user_id": channel.get_str("user_id").unwrap_or_default(),
-            "machine_id": channel.get_str("machine_id").unwrap_or_default(),
-            "session_id": session_id,
-            "callback_url": "",
-            "callback_secret": "",
-            "reply_chat_id": chat_id,
-            "text": text,
-            "status": "pending",
-            "created_at": now_rfc3339(),
-            "expires_at": &expires_at,
-        })
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(cb_id)
-}
+#[async_trait]
+impl crate::im::ImPlatform for FeishuPlatform {
+    fn kind(&self) -> &'static str {
+        "feishu"
+    }
 
-// ------------------------------------------------------------ 回消息
+    fn validate_channel(&self, body: &ChannelBody) -> Result<(), String> {
+        if body.verification_token.trim().is_empty() {
+            return Err("Verification Token 不能为空（飞书开发者后台「事件与回调 → 加密策略」获取）".into());
+        }
+        Ok(())
+    }
+
+    async fn parse_inbound(
+        &self,
+        _state: &AppState,
+        channel: &BsonDoc,
+        headers: &HeaderMap,
+        raw_body: &str,
+    ) -> Result<InboundDecision, String> {
+        // 1) 外层 JSON；加密体先验签再解密
+        let mut payload: Value = serde_json::from_str(raw_body).map_err(|e| format!("非法 JSON: {e}"))?;
+        if let Some(encrypted) = payload.get("encrypt").and_then(|v| v.as_str()) {
+            let encrypt_key = channel.get_str("encrypt_key").unwrap_or_default();
+            if encrypt_key.is_empty() {
+                return Err("收到加密事件但渠道未配置 Encrypt Key".into());
+            }
+            verify_signature(encrypt_key, headers, raw_body)?;
+            payload = decrypt_event(encrypt_key, encrypted)?;
+        }
+
+        // 2) 订阅地址验证：原样回 challenge（飞书要求 1s 内，token 先校验）
+        if payload.get("type").and_then(|v| v.as_str()) == Some("url_verification") {
+            check_token(channel, payload.get("token").and_then(|v| v.as_str()))?;
+            tracing::info!(channel = %channel.get_str("_id").unwrap_or_default(), "feishu: url_verification 通过");
+            let challenge = payload.get("challenge").cloned().unwrap_or(Value::Null);
+            return Ok(InboundDecision::Verification(json!({ "challenge": challenge })));
+        }
+
+        // 3) 事件信封：token 校验 + 类型分发
+        check_token(channel, payload.pointer("/header/token").and_then(|v| v.as_str()))?;
+        let event_type = payload
+            .pointer("/header/event_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if event_type != "im.message.receive_v1" {
+            return Ok(InboundDecision::Ignored(event_type.to_string()));
+        }
+        let message = payload.pointer("/event/message").cloned().unwrap_or(json!({}));
+        let message_id = message.get("message_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let chat_id = message.get("chat_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let message_type = message.get("message_type").and_then(|v| v.as_str()).unwrap_or("");
+        if message_id.is_empty() || chat_id.is_empty() {
+            return Ok(InboundDecision::Ignored("missing message_id/chat_id".into()));
+        }
+        if message_type != "text" {
+            tracing::info!(channel = %channel.get_str("_id").unwrap_or_default(), "feishu: 忽略非文本消息 {message_type}");
+            return Ok(InboundDecision::Ignored(message_type.to_string()));
+        }
+        // content 是 JSON 字符串需二次解析；@ 占位清洗
+        let content: Value =
+            serde_json::from_str(message.get("content").and_then(|v| v.as_str()).unwrap_or("{}"))
+                .unwrap_or(json!({}));
+        let text = clean_mention(content.get("text").and_then(|v| v.as_str()).unwrap_or(""));
+        if text.is_empty() {
+            return Ok(InboundDecision::Ignored("empty text".into()));
+        }
+        Ok(InboundDecision::Message(InboundMessage {
+            message_id,
+            text,
+            chat_key: chat_id.clone(),
+            reply_ctx: json!({ "chat_id": chat_id }),
+        }))
+    }
+
+    async fn reply_text(
+        &self,
+        state: &AppState,
+        channel: &BsonDoc,
+        reply_ctx: &Value,
+        text: &str,
+    ) -> Result<(), String> {
+        // 桌面侧活动转发只有 chat_key 兜底（对飞书而言 chat_key 即 chat_id）
+        let chat_id = reply_ctx
+            .get("chat_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| reply_ctx.get("chat_key").and_then(|v| v.as_str()))
+            .ok_or("reply_ctx 缺少 chat_id")?;
+        let token = tenant_token(state, channel).await?;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| e.to_string())?;
+        // content 与事件方向一样是 JSON 字符串
+        let content = json!({ "text": text }).to_string();
+        let resp = client
+            .post(format!("{FEISHU_BASE}/open-apis/im/v1/messages?receive_id_type=chat_id"))
+            .bearer_auth(token)
+            .json(&json!({ "receive_id": chat_id, "msg_type": "text", "content": content }))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let code = resp.status().as_u16();
+        let body: Value = resp.json().await.unwrap_or(json!({}));
+        if code / 100 == 2 && body.get("code").and_then(|v| v.as_i64()) == Some(0) {
+            Ok(())
+        } else {
+            Err(format!(
+                "飞书回消息失败 HTTP {code}: {}",
+                body.get("msg").and_then(|v| v.as_str()).unwrap_or("")
+            ))
+        }
+    }
+}
 
 /// tenant_access_token：app 凭证换取，Redis 缓存到过期前 5 分钟
 async fn tenant_token(state: &AppState, channel: &BsonDoc) -> Result<String, String> {
@@ -320,94 +245,6 @@ async fn tenant_token(state: &AppState, channel: &BsonDoc) -> Result<String, Str
     let ttl = expire.saturating_sub(300).clamp(60, 7200) as u64;
     let _: Result<(), _> = conn.set_ex(&cache_key, &token, ttl).await;
     Ok(token)
-}
-
-/// 发一条文本到会话（chat_id），返回是否成功
-async fn reply_text(state: &AppState, channel: &BsonDoc, chat_id: &str, text: &str) -> Result<(), String> {
-    let token = tenant_token(state, channel).await?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| e.to_string())?;
-    // content 同事件方向一样是 JSON 字符串
-    let content = json!({ "text": text }).to_string();
-    let resp = client
-        .post(format!("{FEISHU_BASE}/open-apis/im/v1/messages?receive_id_type=chat_id"))
-        .bearer_auth(token)
-        .json(&json!({ "receive_id": chat_id, "msg_type": "text", "content": content }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let code = resp.status().as_u16();
-    let body: Value = resp.json().await.unwrap_or(json!({}));
-    if code / 100 == 2 && body.get("code").and_then(|v| v.as_i64()) == Some(0) {
-        Ok(())
-    } else {
-        Err(format!(
-            "飞书回消息失败 HTTP {code}: {}",
-            body.get("msg").and_then(|v| v.as_str()).unwrap_or("")
-        ))
-    }
-}
-
-/// post_callback 的 im_feishu 分支：agent 一轮结束/超时，把结果发回群聊
-pub(crate) async fn reply_completed(state: &AppState, cb: &BsonDoc, timed_out: bool) {
-    let cb_id = cb.get_str("_id").unwrap_or_default().to_string();
-    let channel_id = cb.get_str("im_channel_id").unwrap_or_default().to_string();
-    let chat_id = cb.get_str("reply_chat_id").unwrap_or_default().to_string();
-    let session_id = cb.get_str("session_id").unwrap_or_default().to_string();
-
-    let channel = match state
-        .mongo
-        .collection::<BsonDoc>("im_channels")
-        .find_one(doc! { "_id": &channel_id })
-        .await
-    {
-        Ok(Some(c)) => c,
-        _ => {
-            webhook::finish_pending(state, &cb_id, "failed", 0, None, "im channel missing").await;
-            return;
-        }
-    };
-
-    let (status, text) = if timed_out {
-        ("timeout", "⏱️ PiDock 任务超过 30 分钟未结束，已放弃等待。".to_string())
-    } else {
-        match webhook::fetch_last_assistant(state, &session_id).await {
-            Some(m) => {
-                let t = m.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-                if t.is_empty() {
-                    ("no_output", "PiDock 任务已结束，本轮没有文本输出。".to_string())
-                } else {
-                    ("ok", t)
-                }
-            }
-            None => ("no_output", "PiDock 任务已结束，本轮没有文本输出。".to_string()),
-        }
-    };
-
-    let mut attempts = 0u32;
-    let mut last_code: Option<u16> = None;
-    let mut last_error = String::new();
-    for i in 0..=RETRY_BACKOFF_SECS.len() {
-        if i > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(RETRY_BACKOFF_SECS[i - 1])).await;
-        }
-        attempts += 1;
-        match reply_text(state, &channel, &chat_id, &text).await {
-            Ok(()) => {
-                webhook::finish_pending(state, &cb_id, "delivered", attempts, last_code, "").await;
-                tracing::info!(delivery = %cb_id, "feishu 回复投递成功");
-                return;
-            }
-            Err(e) => {
-                last_error = e;
-                last_code = None;
-            }
-        }
-    }
-    webhook::finish_pending(state, &cb_id, "failed", attempts, last_code, &last_error).await;
-    tracing::warn!(delivery = %cb_id, status = %status, "feishu 回复投递失败: {last_error}");
 }
 
 // ------------------------------------------------------------ 测试

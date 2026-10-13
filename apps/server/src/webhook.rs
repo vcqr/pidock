@@ -155,18 +155,22 @@ async fn node_rpc(
 
 /// 按端点配置解析目标会话并投递消息；返回（session_id, 最终命令 command_id）。
 /// IM 渠道复用同一编排：传入的文档只需具备同名字段
-/// （machine_id/session_policy/fixed_session_id/expert_id/model/thinking_level/permission_mode/workspace/name）
+/// （machine_id/session_policy/fixed_session_id/expert_id/model/thinking_level/permission_mode/workspace/name）。
+/// session_override 非空时跳过策略解析直接使用（IM auto 策略的群专属会话）
 pub(crate) async fn deliver(
     state: &AppState,
     user_id: &str,
     ep: &BsonDoc,
     text: &str,
+    session_override: Option<&str>,
 ) -> Result<(String, String), String> {
     let machine_id = ep.get_str("machine_id").unwrap_or_default();
     let policy = ep.get_str("session_policy").unwrap_or("latest");
     let ep_name = ep.get_str("name").unwrap_or("");
 
-    let session_id = if policy == "new" {
+    let session_id = if let Some(sid) = session_override.filter(|s| !s.is_empty()) {
+        sid.to_string()
+    } else if policy == "new" || policy == "auto" {
         // 与自动化 execute_run 同序：建会话（绑专家/模型）→ 放宽权限 → 命名 → 发消息
         let created = node_rpc(
             state,
@@ -179,6 +183,8 @@ pub(crate) async fn deliver(
                 "model": ep.get_str("model").ok().filter(|s| !s.is_empty()),
                 "expert_id": ep.get_str("expert_id").ok().filter(|s| !s.is_empty()),
                 "thinking_level": ep.get_str("thinking_level").ok().filter(|s| !s.is_empty()),
+                // 程序化创建来源：IM 渠道带 platform 字段，webhook 端点没有
+                "source": if ep.get_str("platform").map(|p| !p.is_empty()).unwrap_or(false) { "im" } else { "webhook" },
             }),
         )
         .await?;
@@ -206,7 +212,7 @@ pub(crate) async fn deliver(
             machine_id,
             &sid,
             "session.rename",
-            json!({ "session_id": sid, "name": format!("🪝 {ep_name}") }),
+            json!({ "session_id": sid, "name": ep_name }),
         )
         .await?;
         sid
@@ -651,7 +657,7 @@ async fn invoke(
     }
 
     let started = std::time::Instant::now();
-    match deliver(&state, &user_id, &ep, &text).await {
+    match deliver(&state, &user_id, &ep, &text, None).await {
         Ok((session_id, command_id)) => {
             // 完成回调：调用级 URL 优先于端点配置；登记失败不影响投递结果
             let cb_url = if !body.callback_url.trim().is_empty() {
@@ -806,7 +812,11 @@ pub async fn on_turn_idle(state: AppState, session_id: &str) {
         Ok(Some(cb)) => {
             tokio::spawn(async move { post_callback(&state, &cb, false).await });
         }
-        Ok(None) => {}
+        // 认领不到 pending = 这轮不是 IM/webhook 触发：若是群绑定的会话
+        // （auto 策略），把 agent 最终回复转发到群（双向同步）
+        Ok(None) => {
+            tokio::spawn(crate::im::forward_session_activity(state, session_id.to_string()));
+        }
         Err(e) => tracing::warn!("webhook 回调认领失败: {e}"),
     }
 }
@@ -912,12 +922,15 @@ fn sign_callback(secret: &str, body: &[u8]) -> String {
 }
 
 /// 投递分发：按 pending 记录的 kind 路由到对应回复通道
-/// （webhook = POST callback_url；im_* = 各 IM 平台回消息 API）。
-/// timed_out = 清扫超时兜底，投递内容为超时提示而非任务结果
+/// （webhook = POST callback_url；其余 = IM，经 im::dispatch_reply 按注册
+/// 表找平台适配器）。timed_out = 清扫超时兜底，投递内容为超时提示而非任务结果
 pub(crate) async fn post_callback(state: &AppState, cb: &BsonDoc, timed_out: bool) {
     match cb.get_str("kind").unwrap_or("webhook") {
-        "im_feishu" => crate::im::feishu::reply_completed(state, cb, timed_out).await,
-        _ => post_webhook_callback(state, cb, timed_out).await,
+        "webhook" => post_webhook_callback(state, cb, timed_out).await,
+        other => {
+            let kind = other.strip_prefix("im_").unwrap_or(other); // 兼容历史 im_feishu 记录
+            crate::im::dispatch_reply(state, kind, cb, timed_out).await;
+        }
     }
 }
 

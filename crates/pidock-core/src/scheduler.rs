@@ -711,6 +711,7 @@ async fn execute_run(mgr: Arc<SchedulerManager>, job: ScheduledJob, mut run: Run
                     "model": job.model,
                     "expert_id": job.expert_id,
                     "thinking_level": job.thinking_level,
+                    "source": "automation",
                 }),
             )
             .await?;
@@ -729,11 +730,11 @@ async fn execute_run(mgr: Arc<SchedulerManager>, job: ScheduledJob, mut run: Run
                 )
                 .await?;
         }
-        // 命名便于在侧栏识别定时任务的会话
+        // 命名便于在侧栏识别定时任务的会话（类型徽标由 source 字段渲染）
         mgr.supervisor
             .request(
                 "session.rename".into(),
-                json!({ "session_id": sid, "name": format!("⏰ {}", job.name) }),
+                json!({ "session_id": sid, "name": job.name }),
             )
             .await?;
         let mut prompt_params = json!({ "session_id": sid, "text": job.prompt });

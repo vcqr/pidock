@@ -337,6 +337,16 @@ function rowTitle(s: SessionSummaryUi): string {
   return [s.name || basename(s.cwd), s.model, st].filter(Boolean).join(" · ");
 }
 
+/** 程序化创建来源的侧栏类型徽标（remixicon，替代旧 emoji 前缀） */
+const SOURCE_ICONS: Record<string, { icon: string; title: string }> = {
+  automation: { icon: "time-line", title: "自动化任务会话" },
+  webhook: { icon: "plug-line", title: "Webhook 触发会话" },
+  im: { icon: "chat-1-line", title: "IM 群聊会话" },
+};
+function sourceIcon(s: SessionSummaryUi): { icon: string; title: string } | null {
+  return (s.source && SOURCE_ICONS[s.source]) || null;
+}
+
 function openSearch(): void {
   searchOpen.value = true;
   requestAnimationFrame(() => searchInput.value?.focus());
@@ -494,6 +504,13 @@ onBeforeUnmount(() => {
                 />
                 <span v-else class="txt">{{ s.name || basename(s.cwd) }}</span>
                 <Icon
+                  v-if="sourceIcon(s) && renaming !== s.session_id"
+                  class="fork-badge"
+                  :name="sourceIcon(s)!.icon"
+                  :size="12"
+                  :title="sourceIcon(s)!.title"
+                />
+                <Icon
                   v-if="s.parent_session_id && renaming !== s.session_id"
                   class="fork-badge"
                   name="git-branch-line"
@@ -546,6 +563,13 @@ onBeforeUnmount(() => {
               />
               <span v-else class="txt">{{ s.name || basename(s.cwd) }}</span>
               <Icon
+                v-if="sourceIcon(s) && renaming !== s.session_id"
+                class="fork-badge"
+                :name="sourceIcon(s)!.icon"
+                :size="12"
+                :title="sourceIcon(s)!.title"
+              />
+              <Icon
                 v-if="s.parent_session_id && renaming !== s.session_id"
                 class="fork-badge"
                 name="git-branch-line"
@@ -591,6 +615,13 @@ onBeforeUnmount(() => {
             @blur="commitRename(s)"
           />
           <span v-else class="txt">{{ s.name || basename(s.cwd) }}</span>
+          <Icon
+            v-if="sourceIcon(s) && renaming !== s.session_id"
+            class="fork-badge"
+            :name="sourceIcon(s)!.icon"
+            :size="12"
+            :title="sourceIcon(s)!.title"
+          />
           <Icon
             v-if="s.parent_session_id && renaming !== s.session_id"
             class="fork-badge"

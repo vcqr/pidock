@@ -197,32 +197,62 @@ pi 压缩会话会重写 JSONL → 条目索引偏移。host drain 时检测
   共享会话期间被人工插话可能携带后续轮次输出（policy=new 专属会话无此
   问题），已知取舍
 
-### 3.11 IM 接入（飞书先行，平台可扩展）
+### 3.11 IM 接入（平台适配器架构：飞书 / 钉钉）
 
 IM 群聊作为触发源与回复通道：@机器人发消息 → 指定节点执行 → 结果回群。
 复用 webhook 的中间层（`deliver` 编排、`on_turn_idle` 空闲触发、审计、
 限流框架），替换两端（鉴权 = 平台侧校验；回复 = 平台消息 API）。
 
-- **渠道 = `im_channels` 文档**：平台凭证（app_id/app_secret/
-  verification_token/encrypt_key）+ 与 webhook_endpoints 同构的目标配置
-  （machine/expert/model/permission/session_policy/workspace），因此
+**工厂式架构（兼容性的真正保障）**：`im.rs` 定义 `ImPlatform` trait
+（`kind` / `validate_channel` / `parse_inbound` / `reply_text` /
+`uses_stream` + `stream_connection`），平台差异压缩到这四个方法；静态
+注册表（`platforms()`）供路由、校验、回复分发、流监督统一查找。**共享
+流水线（`process_message`）上收在本模块**：message_id 去重、审计、
+deliver 编排、pending 登记、投递失败回群说明——平台适配器写不出不一致
+的流水线。加平台 = 一个文件实现 trait + 注册表加一行。
+
+- **渠道 = `im_channels` 文档**：平台凭证 + 与 webhook_endpoints 同构的
+  目标配置（machine/expert/model/permission/session_policy/workspace），
   `webhook::deliver` 直接吃渠道文档。归属 = 配置它的账号；任何 @机器人
   的人都可能触发，权限默认 edit-auto（比 webhook 保守）
-- **入站** `POST /im/feishu/event/{channel_id}`：URL 内渠道 id = 弱凭证 +
-  确定性路由。url_verification 原样回 challenge（1s 内）；配置 Encrypt
-  Key 时验签（`X-Lark-Signature` = sha256(ts+nonce+key+body)）+ 解密
-  （AES-256-CBC，key = SHA256(Encrypt Key)，密文 = base64(iv+data)，PKCS7）；
-  事件 token 必须等于 verification_token；`message_id` Redis 去重防飞书
-  重推；只接 text（content 二次解析 + 清洗 `@_user_N` 占位）→ deliver →
-  立即 200（飞书 3s 超时）。投递失败直接回群说明（best effort）
-- **回复**：pending 记录加 `kind`（webhook | im_feishu）+ `reply_chat_id`，
-  `post_callback` 按 kind 分发；飞书回消息走
-  `POST /open-apis/im/v1/messages?receive_id_type=chat_id`，
-  tenant_access_token 经 app 凭证换取并缓存 Redis（到期前 5 分钟）；
-  超时/无输出同样有兜底文案。重试节奏与 webhook 回调一致（10s/60s）
-- **管理面**：web 控制台「IM 渠道」页（CRUD + 启停 + 展开详情含事件订阅
-  URL 复制与接入步骤）。多平台 = 在 `im/` 下新增平台适配文件实现
-  验证/解析/回复三件事；v2 候选：按群绑定节点、富文本、长连接订阅模式
+- **会话策略（IM 专属语义）**：`auto`（默认，群专属会话）——每个对话按
+  `chat_key`（飞书 chat_id / 钉钉 conversationId，稳定标识；钉钉的
+  sessionWebhook 是临时的不能做绑定键）绑定一个专属会话：首条消息走
+  新建编排并把映射落 `im_chat_sessions`，后续消息直接复用，上下文连续；
+  群里发 `/new` 重置映射（该条不投递，回执确认），下一条消息重新开会话。
+  `new`（每条新建）/ `latest`（最近活跃，会漂移）/ `fixed`（指定会话，
+  保存时强制非空；会话被删则报错回群，发 /new 不适用，需改配置）
+- **飞书（HTTP 推送型）** `POST /im/feishu/event/{channel_id}`：URL 内
+  渠道 id = 弱凭证 + 确定性路由。url_verification 原样回 challenge（1s
+  内）；Encrypt Key 验签（`X-Lark-Signature` = sha256(ts+nonce+key+body)）
+  + 解密（AES-256-CBC，key = SHA256(Encrypt Key)，base64(iv+data)，PKCS7）；
+  事件 token 必须等于 verification_token；只接 text（清洗 `@_user_N`）；
+  回复走 `im/v1/messages`，tenant_access_token 换取后缓存 Redis
+- **钉钉（Stream 流模式）**：服务端作 WS 客户端主动连钉钉，**无需公网
+  回调地址**。`POST /v1.0/gateway/connections/open`（clientId/clientSecret
+  + 订阅 SYSTEM/ping、SYSTEM/disconnect、CALLBACK 机器人 topic）换
+  endpoint+ticket → WSS 接入 → 下行帧 `{type, headers{topic,messageId},
+  data(JSON 串)}` 逐帧 ACK（`{code:200, headers{messageId}}`）；机器人
+  载荷 `msgId/text.content/sessionWebhook`，回复直接 POST sessionWebhook
+  （临时地址免 access_token）；保活 = 空闲 60s 发 WS Ping、5s 无入站判死；
+  业务处理 spawn 出去不阻塞读循环，处理完才 ACK（未 ACK 钉钉重推 → 去重
+  兜底）。`run_stream_supervisor`（30s 对账）为 enabled 渠道保证连接任务
+  在跑，停用/删除即回收；连接内部 3s→60s 退避重连，重连前重读渠道配置
+- **回复分发**：pending 记录 `kind` = 平台 kind（历史 `im_` 前缀兼容）+
+  `reply_ctx`（平台自定义不透明 JSON：飞书 chat_id / 钉钉 conversationId
+  + sessionWebhook + robotCode）；`post_callback` → `im::dispatch_reply`
+  按注册表分发，共享「取最后一轮 assistant 文本 → 10s/60s 重试 → 落终态」，
+  超时/无输出有兜底文案
+- **双向同步**：auto 绑定的会话（im_chat_sessions）是双向通道。桌面/web
+  在同会话的活动推到群——人工输入经 ingest 的 `message_complete(role=user)`
+  挂钩实时镜像（前缀「👤 桌面端」；IM 自身 prompt 的会话回显由 Redis
+  echo 标记按文本哈希抑制 30s）；agent 最终回复在空闲信号认领不到 pending
+  时转发（前缀「🤖」= 桌面侧发起），IM 触发的轮次走原有回执通道不重复。
+  钉钉主动推送优先群消息 API（`robot/groupMessages/send`，conversationId
+  + robotCode(缺省 AppKey) + access_token 缓存 Redis），sessionWebhook
+  仅作兜底——它是临时地址，撑不住主动推送
+- **管理面**：web 控制台「IM 渠道」页，表单/详情按平台条件渲染（飞书展示
+  事件订阅 URL，钉钉展示 Stream 接入说明）；平台清单由 server 注册表下发
 - 管理面在 web 控制台「Webhook」页（`/webhooks` CRUD + 启停），专家下拉
   经 `/rpc` `experts.list` 实时拉取目标节点；自动化任务表单同款专家字段
   （`ScheduledJob.expert_id` 随 `session.create` 绑定）
@@ -262,14 +292,17 @@ webhook_endpoints {_id=端点id, user_id, name, token_hash, machine_id, session_
                  (new|latest|fixed), fixed_session_id, expert_id, model, thinking_level,
                  permission_mode, workspace, callback_url, callback_secret, enabled,
                  created_at, updated_at}
-webhook_pending_callbacks {_id=投递id, kind(webhook|im_feishu), endpoint_id, im_channel_id,
-                 user_id, machine_id, session_id, callback_url, callback_secret, reply_chat_id,
+webhook_pending_callbacks {_id=投递id, kind(webhook|feishu|dingtalk…), endpoint_id, im_channel_id,
+                 user_id, machine_id, session_id, callback_url, callback_secret, reply_ctx(JSON 串),
                  text, status(pending|delivering|delivered|failed), attempts, last_status_code,
                  last_error, created_at, expires_at, claimed_at, finished_at}
-im_channels      {_id=渠道id, user_id, platform(feishu), name, app_id, app_secret,
-                 verification_token, encrypt_key, machine_id, session_policy(new|latest|fixed),
+im_channels      {_id=渠道id, user_id, platform(feishu|dingtalk…), name, app_id, app_secret,
+                 verification_token, encrypt_key, machine_id, session_policy(auto|new|latest|fixed),
                  fixed_session_id, expert_id, model, thinking_level, permission_mode,
                  workspace, enabled, created_at, updated_at}
+im_chat_sessions {_id="{渠道id}:{chat_key}", channel_id, chat_key, session_id,
+                 reply_ctx(JSON 串，最近一次 IM 消息的回复定位), created_at, updated_at}
+                 auto 策略的群专属会话映射 + 双向同步的反查索引（session_id）
 attachment_meta  {_id=sha256, user_id, size, created_at}
 ```
 

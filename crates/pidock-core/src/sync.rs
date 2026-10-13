@@ -412,6 +412,12 @@ async fn execute_command(
                     p["thinking_level"] = v.clone();
                 }
             }
+            // 程序化创建来源（automation | webhook | im），侧栏类型徽标用
+            if let Some(v) = payload.get("source") {
+                if v.is_string() {
+                    p["source"] = v.clone();
+                }
+            }
             ("session.create", p)
         }
         "session.resolve_approval" => (

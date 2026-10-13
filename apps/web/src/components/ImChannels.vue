@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { Icon, appConfirm } from "@pidock/ui";
 import { ApiError, type ApiClient } from "../auth.js";
 
@@ -41,6 +41,7 @@ const PERM_OPTIONS = [
 ];
 const THINK_OPTIONS = ["off", "minimal", "low", "medium", "high"];
 const POLICY_LABELS: Record<string, string> = {
+  auto: "自动（群专属）",
   new: "每次新建",
   latest: "最近活跃",
   fixed: "固定会话",
@@ -49,6 +50,9 @@ const POLICY_LABELS: Record<string, string> = {
 const channels = ref<ChannelInfo[]>([]);
 const machines = ref<MachineInfo[]>([]);
 const experts = ref<Array<{ id: string; name: string }>>([]);
+/** 平台清单（server 注册表下发）；标签映射前端兜底 */
+const platformOptions = ref<string[]>(["feishu", "dingtalk"]);
+const PLATFORM_LABELS: Record<string, string> = { feishu: "飞书", dingtalk: "钉钉" };
 const loading = ref(true);
 const error = ref<string | null>(null);
 const busyId = ref("");
@@ -61,12 +65,15 @@ const expandedId = ref("");
 
 // 创建/编辑表单
 const fName = ref("");
+const fPlatform = ref<"feishu" | "dingtalk">("feishu");
+/** 飞书走 HTTP 推送；钉钉走 Stream 长连接（无需 verification_token/encrypt_key） */
+const isFeishu = computed(() => fPlatform.value === "feishu");
 const fAppId = ref("");
 const fAppSecret = ref("");
 const fEncryptKey = ref("");
 const fVerifyToken = ref("");
 const fMachine = ref("");
-const fPolicy = ref<"new" | "latest" | "fixed">("new");
+const fPolicy = ref<"auto" | "new" | "latest" | "fixed">("auto");
 const fFixedSid = ref("");
 const fExpert = ref("");
 const fModel = ref("");
@@ -85,6 +92,7 @@ async function load(): Promise<void> {
   try {
     const r = await props.client.request(`/im/channels`);
     channels.value = r.channels ?? [];
+    if (Array.isArray(r.platforms) && r.platforms.length) platformOptions.value = r.platforms;
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err);
   } finally {
@@ -129,12 +137,13 @@ function openAdd(): void {
   populating = false;
   editingId.value = null;
   fName.value = "";
+  fPlatform.value = "feishu";
   fAppId.value = "";
   fAppSecret.value = "";
   fEncryptKey.value = "";
   fVerifyToken.value = "";
   fMachine.value = "";
-  fPolicy.value = "new";
+  fPolicy.value = "auto";
   fFixedSid.value = "";
   fExpert.value = "";
   fModel.value = "";
@@ -148,12 +157,14 @@ function openEdit(t: ChannelInfo): void {
   populating = true;
   editingId.value = t.id;
   fName.value = t.name;
+  fPlatform.value = (["feishu", "dingtalk"].includes(t.platform) ? t.platform : "feishu") as "feishu" | "dingtalk";
   fAppId.value = t.app_id;
   fAppSecret.value = t.app_secret;
   fEncryptKey.value = t.encrypt_key;
   fVerifyToken.value = t.verification_token;
   fMachine.value = t.machine_id;
-  fPolicy.value = (["new", "latest", "fixed"].includes(t.session_policy) ? t.session_policy : "latest") as
+  fPolicy.value = (["auto", "new", "latest", "fixed"].includes(t.session_policy) ? t.session_policy : "auto") as
+    | "auto"
     | "new"
     | "latest"
     | "fixed";
@@ -169,7 +180,7 @@ function openEdit(t: ChannelInfo): void {
 
 function formBody(): string {
   return JSON.stringify({
-    platform: "feishu",
+    platform: fPlatform.value,
     name: fName.value,
     app_id: fAppId.value,
     app_secret: fAppSecret.value,
@@ -187,7 +198,8 @@ function formBody(): string {
 }
 
 async function save(): Promise<void> {
-  if (!fName.value.trim() || !fAppId.value.trim() || !fVerifyToken.value.trim() || !fMachine.value) return;
+  if (!fName.value.trim() || !fAppId.value.trim() || (isFeishu.value && !fVerifyToken.value.trim()) || !fMachine.value)
+    return;
   creating.value = true;
   error.value = null;
   try {
@@ -303,25 +315,34 @@ function fmtDate(s: string): string {
           </div>
           <div class="f-field">
             <label>平台</label>
-            <select disabled>
-              <option>飞书（更多平台陆续接入）</option>
+            <select v-model="fPlatform">
+              <option v-for="p in platformOptions" :key="p" :value="p">{{ PLATFORM_LABELS[p] ?? p }}</option>
             </select>
           </div>
           <div class="f-field">
             <label>App ID</label>
-            <input v-model="fAppId" placeholder="cli_xxx" spellcheck="false" />
+            <input v-model="fAppId" :placeholder="isFeishu ? 'cli_xxx' : 'AppKey'" spellcheck="false" />
           </div>
           <div class="f-field">
             <label>App Secret</label>
-            <input v-model="fAppSecret" placeholder="开发者后台「凭证与基础信息」" spellcheck="false" />
+            <input v-model="fAppSecret" :placeholder="isFeishu ? '开发者后台「凭证与基础信息」' : 'AppSecret'" spellcheck="false" />
           </div>
-          <div class="f-field">
-            <label>Verification Token</label>
-            <input v-model="fVerifyToken" placeholder="事件与回调 → 加密策略" spellcheck="false" />
-          </div>
-          <div class="f-field">
-            <label>Encrypt Key（可选）</label>
-            <input v-model="fEncryptKey" placeholder="配置后事件加密推送，服务端自动解密验签" spellcheck="false" />
+          <template v-if="isFeishu">
+            <div class="f-field">
+              <label>Verification Token</label>
+              <input v-model="fVerifyToken" placeholder="事件与回调 → 加密策略" spellcheck="false" />
+            </div>
+            <div class="f-field">
+              <label>Encrypt Key（可选）</label>
+              <input v-model="fEncryptKey" placeholder="配置后事件加密推送，服务端自动解密验签" spellcheck="false" />
+            </div>
+          </template>
+          <div v-else class="f-field f-wide">
+            <label>接入方式</label>
+            <span class="f-hint">
+              钉钉走 Stream 模式：服务端主动长连接钉钉网关，无需公网回调地址。需在钉钉开发者后台
+              创建企业内部应用、开通「机器人」能力，消息接收模式选择 Stream 模式，并订阅机器人消息。
+            </span>
           </div>
           <div class="f-field">
             <label>目标节点</label>
@@ -335,10 +356,17 @@ function fmtDate(s: string): string {
           <div class="f-field">
             <label>会话策略</label>
             <div class="seg">
+              <button :class="{ on: fPolicy === 'auto' }" @click="fPolicy = 'auto'">自动</button>
               <button :class="{ on: fPolicy === 'new' }" @click="fPolicy = 'new'">每次新建</button>
               <button :class="{ on: fPolicy === 'latest' }" @click="fPolicy = 'latest'">最近活跃</button>
               <button :class="{ on: fPolicy === 'fixed' }" @click="fPolicy = 'fixed'">固定会话</button>
             </div>
+          </div>
+          <div v-if="fPolicy === 'auto'" class="f-field f-wide">
+            <span class="f-hint">
+              自动（群专属）：每个对话首次来消息时自动建会话并记住绑定，之后该群所有消息都进同一会话（上下文连续）；
+              在群里发送 <code class="mono">/new</code> 可重置，下一条消息开启新会话。
+            </span>
           </div>
           <div v-if="fPolicy === 'fixed'" class="f-field">
             <label>会话 ID</label>
@@ -387,7 +415,7 @@ function fmtDate(s: string): string {
             <button class="ghost" @click="showForm = false">取消</button>
             <button
               class="primary"
-              :disabled="creating || !fName.trim() || !fAppId.trim() || !fVerifyToken.trim() || !fMachine"
+              :disabled="creating || !fName.trim() || !fAppId.trim() || (isFeishu && !fVerifyToken.trim()) || !fMachine"
               @click="save"
             >
               {{ creating ? (editingId ? "保存中…" : "创建中…") : editingId ? "保存修改" : "创建渠道" }}
@@ -417,7 +445,7 @@ function fmtDate(s: string): string {
                 </button>
                 <div class="row-main">
                   <span class="tname">{{ t.name }}</span>
-                  <span class="chip accent">飞书</span>
+                  <span class="chip accent">{{ PLATFORM_LABELS[t.platform] ?? t.platform }}</span>
                   <span class="chip">{{ t.machine_hostname || "未知节点" }}</span>
                   <span class="chip">{{ POLICY_LABELS[t.session_policy] ?? t.session_policy }}</span>
                   <span v-if="t.expert_id" class="chip accent">专家</span>
@@ -431,18 +459,24 @@ function fmtDate(s: string): string {
                 <button class="revoke" :disabled="busyId === t.id" @click="remove(t)">删除</button>
               </div>
               <div v-if="expandedId === t.id" class="im-detail">
-                <div class="url-row">
+                <div v-if="t.platform === 'feishu'" class="url-row">
                   <span class="d-k">事件订阅 URL</span>
                   <code class="mono url">{{ eventUrl(t) }}</code>
                   <button class="ghost" @click="copyUrl(t)">{{ copiedUrlId === t.id ? "已复制 ✓" : "复制" }}</button>
                 </div>
+                <div v-else class="url-row">
+                  <span class="d-k">接入方式</span>
+                  <span class="d-v">Stream 长连接（服务端主动连钉钉，无需公网回调地址）</span>
+                </div>
                 <div class="d-grid">
                   <span class="d-k">App ID</span>
                   <span class="d-v mono">{{ t.app_id }}</span>
-                  <span class="d-k">Verification Token</span>
-                  <span class="d-v mono">{{ t.verification_token }}</span>
-                  <span class="d-k">Encrypt Key</span>
-                  <span class="d-v mono">{{ t.encrypt_key || "未配置（明文推送）" }}</span>
+                  <template v-if="t.platform === 'feishu'">
+                    <span class="d-k">Verification Token</span>
+                    <span class="d-v mono">{{ t.verification_token }}</span>
+                    <span class="d-k">Encrypt Key</span>
+                    <span class="d-v mono">{{ t.encrypt_key || "未配置（明文推送）" }}</span>
+                  </template>
                   <span class="d-k">会话策略</span>
                   <span class="d-v">
                     {{ POLICY_LABELS[t.session_policy] ?? t.session_policy
@@ -460,10 +494,15 @@ function fmtDate(s: string): string {
                   <span class="d-v mono">{{ t.id }}</span>
                 </div>
                 <div class="d-steps">
-                  <span class="f-hint">
+                  <span v-if="t.platform === 'feishu'" class="f-hint">
                     接入步骤：① 开发者后台创建企业自建应用 → ② 事件与回调 → 订阅方式选「将事件发送至开发者服务器」，
                     粘贴上方 URL → ③ 开通 im:message.receive_v1 订阅与「以应用身份发消息」权限 → ④ 发布应用版本，
                     在群里 @机器人 试试。
+                  </span>
+                  <span v-else class="f-hint">
+                    接入步骤：① 开发者后台创建企业内部应用并获取 AppKey/AppSecret → ② 应用内添加「机器人」能力 →
+                    ③ 消息接收模式选择 Stream 模式并订阅机器人消息（无需填服务器地址）→ ④ 发布应用版本，
+                    在群里 @机器人 或单聊发消息试试。渠道保存后约 30 秒内服务端自动建立连接。
                   </span>
                 </div>
               </div>

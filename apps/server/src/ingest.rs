@@ -1,10 +1,27 @@
 //! Ingest consumer: pipeline -> dedupe -> Mongo (persisted events + session
 //! status) -> Redis pub/sub push to web clients.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use mongodb::bson::{doc, Document as BsonDoc};
 use serde_json::{json, Value};
 
 use crate::state::AppState;
+
+/// 每会话最近一次 agent 状态：pi 一轮结束会连发两次 idle（agent_end 与
+/// agent_settled），空闲挂钩只认第一次，否则回复会重复推送
+fn last_agent_state() -> &'static Mutex<HashMap<String, String>> {
+    static MAP: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 记录状态并判断是否重复 idle（与上一次状态相同即重复）
+fn is_repeat_state(session_id: &str, state: &str) -> bool {
+    let mut map = last_agent_state().lock().expect("state map poisoned");
+    let prev = map.insert(session_id.to_string(), state.to_string());
+    prev.as_deref() == Some(state)
+}
 
 /// session status derived from envelope kinds
 fn derive_status(kind: &str, payload: &Value, current: Option<&str>) -> Option<String> {
@@ -78,16 +95,40 @@ async fn handle_frame(state: &AppState, payload: &str) {
 
     ingest_one(state, &user_id, &machine_id, &envelope).await;
 
-    // webhook 完成回调：agent 转入空闲视为该轮结束（存在挂起回调则认领并异步投递）
-    if envelope.get("kind").and_then(|v| v.as_str()) == Some("agent_state_changed")
-        && envelope.pointer("/payload/state").and_then(|v| v.as_str()) == Some("idle")
+    // webhook 完成回调 + IM 双向转发：agent 转入空闲视为该轮结束。
+    // 连发的第二次 idle（agent_settled）跳过，防止重复推送
+    if envelope.get("kind").and_then(|v| v.as_str()) == Some("agent_state_changed") {
+        if let Some(agent_state) = envelope.pointer("/payload/state").and_then(|v| v.as_str()) {
+            let session_id = envelope
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let repeat = is_repeat_state(session_id, agent_state);
+            if agent_state == "idle" && !repeat && !session_id.is_empty() {
+                crate::webhook::on_turn_idle(state.clone(), session_id).await;
+            }
+        }
+    }
+
+    // 会话移除：状态跟踪表同步清理
+    if envelope.get("kind").and_then(|v| v.as_str()) == Some("session_removed") {
+        if let Some(session_id) = envelope.get("session_id").and_then(|v| v.as_str()) {
+            last_agent_state().lock().expect("state map poisoned").remove(session_id);
+        }
+    }
+
+    // IM 双向同步：桌面端人工输入镜像到绑定的群（IM 自身来源的回显由
+    // echo 标记抑制）
+    if envelope.get("kind").and_then(|v| v.as_str()) == Some("message_complete")
+        && envelope.pointer("/payload/role").and_then(|v| v.as_str()) == Some("user")
     {
-        let session_id = envelope
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if !session_id.is_empty() {
-            crate::webhook::on_turn_idle(state.clone(), session_id).await;
+        if let Some(session_id) = envelope.get("session_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            let payload = envelope.get("payload").cloned().unwrap_or(serde_json::json!({}));
+            tokio::spawn(crate::im::mirror_user_message(
+                state.clone(),
+                session_id.to_string(),
+                payload,
+            ));
         }
     }
 
@@ -215,7 +256,7 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
             }
             None => {}
         }
-        for field in ["parent_session_id", "expert_id", "expert_name"] {
+        for field in ["parent_session_id", "expert_id", "expert_name", "source"] {
             if let Some(v) = payload.get(field).and_then(|t| t.as_str()) {
                 set.insert(field, v.to_string());
             }
@@ -279,6 +320,7 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
             "expert_id": get("expert_id"),
             "expert_name": get("expert_name"),
             "parent_session_id": get("parent_session_id"),
+            "source": get("source"),
             "created_at": existing
                 .as_ref()
                 .and_then(|d| d.get_str("created_at").ok())
@@ -291,5 +333,23 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
             "session": session,
         });
         state.publish_to_user(user_id, &frame.to_string()).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeat_idle_detected_but_first_passes() {
+        let sid = format!("test-{}", uuid::Uuid::now_v7());
+        // 首次 idle 放行
+        assert!(!is_repeat_state(&sid, "running"));
+        assert!(!is_repeat_state(&sid, "idle"));
+        // 一轮结束的连发第二次 idle（agent_settled）判重
+        assert!(is_repeat_state(&sid, "idle"));
+        // 新一轮开始后恢复
+        assert!(!is_repeat_state(&sid, "thinking"));
+        assert!(!is_repeat_state(&sid, "idle"));
     }
 }

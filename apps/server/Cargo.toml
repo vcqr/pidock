@@ -40,6 +40,8 @@ url = "2"
 base64 = "0.22"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
+# 钉钉 Stream 模式：服务端作 WS 客户端长连接（与 pidock-core 的 sync-agent 同款）
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 rdkafka = { version = "0.36", optional = true, features = ["cmake-build", "tokio"] }
 
 [features]

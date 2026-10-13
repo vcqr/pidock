@@ -101,6 +101,8 @@ interface RegistryEntry {
   expert_id?: string;
   /** 分叉来源会话（fork 产生的会话记录其父会话，供侧栏标识） */
   parent_session_id?: string;
+  /** 程序化创建来源（automation | webhook | im），人工创建无此字段 */
+  source?: string;
   created_at: string;
 }
 
@@ -114,6 +116,8 @@ export interface SessionSummary {
   expert_id?: string;
   expert_name?: string;
   parent_session_id?: string;
+  /** 程序化创建来源（automation | webhook | im），人工创建无此字段 */
+  source?: string;
   created_at: string;
   open: boolean;
   state: AgentState;
@@ -410,6 +414,8 @@ export class SessionPool {
     thinking_level?: string;
     /** 雇佣的专家 id（缺省 = 普通会话） */
     expert_id?: string;
+    /** 程序化创建来源（automation | webhook | im），人工创建不传 */
+    source?: string;
   }): Promise<{ session_id: string; file: string; cwd: string; expert_id?: string; expert_name?: string }> {
     // 缺省项目 = 默认工作空间：~/.pidock/<当日日期>/<会话id>/，产出物按会话归档。
     // 预生成会话 id 让目录名与会话 id 一致；空串与缺省同等对待（调度器/端点会传 ""）。
@@ -512,6 +518,7 @@ export class SessionPool {
       cwd,
       model: params.model ?? expertCfg?.expert.model,
       ...(expertCfg ? { expert_id: expertCfg.expert.id } : {}),
+      ...(params.source ? { source: params.source } : {}),
       created_at: new Date().toISOString(),
     });
 
@@ -522,6 +529,7 @@ export class SessionPool {
         cwd,
         model: params.model ?? expertCfg?.expert.model,
         ...(expertCfg ? { expert_id: expertCfg.expert.id, expert_name: expertCfg.expert.name } : {}),
+        ...(params.source ? { source: params.source } : {}),
       }),
       {
         persist: false,
@@ -638,6 +646,7 @@ export class SessionPool {
         ...(registryEntry?.parent_session_id
           ? { parent_session_id: registryEntry.parent_session_id }
           : {}),
+        ...(registryEntry?.source ? { source: registryEntry.source } : {}),
         ...(expertCfg ? { expert_id: expertCfg.expert.id, expert_name: expertCfg.expert.name } : {}),
       }),
       { persist: false },
@@ -701,6 +710,7 @@ export class SessionPool {
         ? { expert_id: entry.expert_id, ...(expertNames.get(entry.expert_id) ? { expert_name: expertNames.get(entry.expert_id) } : {}) }
         : {}),
       ...(entry.parent_session_id ? { parent_session_id: entry.parent_session_id } : {}),
+      ...(entry.source ? { source: entry.source } : {}),
       created_at: entry.created_at,
       open: openIds.has(entry.session_id),
       state: this.stateOf(entry.session_id),
