@@ -92,12 +92,67 @@ fn check_token(channel: &BsonDoc, got: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// @ 机器人的文本带 @_user_1 占位符，按空白段剔除
+/// 富文本（post）转 markdown：优先 content_v2 的 md 标签（最大保留原始
+/// markdown 与格式），fallback 按 content 标签拼接可表达的文本
+/// （text/a 取文本、code_block 取代码、at 保留占位符交给清洗）
+fn post_markdown(content: &Value) -> String {
+    // content_v2: [[{tag:"md", text}...]] — 段落数组，md 文本即原文
+    if let Some(paragraphs) = content.get("content_v2").and_then(|v| v.as_array()) {
+        let md = paragraphs
+            .iter()
+            .filter_map(|p| p.as_array())
+            .map(|els| {
+                els.iter()
+                    .filter(|e| e.get("tag").and_then(|t| t.as_str()) == Some("md"))
+                    .filter_map(|e| e.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if !md.is_empty() {
+            return md;
+        }
+    }
+    // fallback: content 老结构拼接
+    if let Some(paragraphs) = content.get("content").and_then(|v| v.as_array()) {
+        return paragraphs
+            .iter()
+            .filter_map(|p| p.as_array())
+            .map(|els| {
+                els.iter()
+                    .filter_map(|e| {
+                        let tag = e.get("tag").and_then(|t| t.as_str()).unwrap_or("");
+                        match tag {
+                            "text" | "a" | "code_block" => e.get("text").and_then(|t| t.as_str()),
+                            "at" => e.get("user_id").and_then(|t| t.as_str()),
+                            _ => None,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+    }
+    String::new()
+}
+
+/// 剔除 @ 机器人的 @_user_N 占位符。仅移除占位 token 本身，保留其余
+/// 空白与换行（多行/markdown 消息的格式不能压扁）
 fn clean_mention(text: &str) -> String {
-    text.split_whitespace()
-        .filter(|seg| !seg.starts_with("@_user_"))
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(idx) = rest.find("@_user_") {
+        out.push_str(&rest[..idx]);
+        rest = &rest[idx + "@_user_".len()..];
+        let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+        rest = &rest[digits..];
+    }
+    out.push_str(rest);
+    out.trim().to_string()
 }
 
 // ------------------------------------------------------------ 适配器实现
@@ -173,17 +228,47 @@ impl crate::im::ImPlatform for FeishuPlatform {
             .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
             .build()
             .map_err(|e| e.to_string())?;
-        // content 与事件方向一样是 JSON 字符串
-        let content = json!({ "text": text }).to_string();
-        let resp = client
-            .post(format!("{FEISHU_BASE}/open-apis/im/v1/messages?receive_id_type=chat_id"))
-            .bearer_auth(token)
-            .json(&json!({ "receive_id": chat_id, "msg_type": "text", "content": content }))
+        let url = format!("{FEISHU_BASE}/open-apis/im/v1/messages?receive_id_type=chat_id");
+
+        // 三层降级：post 富文本（md 标签，GFM 表格/任务列表原生渲染，表格
+        // 前后须 \n\n 分隔）→ interactive 卡片（markdown 元素 + 表格组件，
+        // 有 ~30KB 上限）→ 纯文本
+        // 官方发送示例：md 标签放在标准 content 数组内（content_v2 是接收
+        // 侧字段）；md 独占段落，CommonMark 0.31 + GFM 含表格/任务列表/脚注
+        let post_content = json!({
+            "post": { "zh_cn": { "content": [ [ { "tag": "md", "text": ensure_table_spacing(text) } ] ] } }
+        })
+        .to_string();
+        let r = client
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&json!({ "receive_id": chat_id, "msg_type": "post", "content": post_content }))
             .send()
             .await
-            .map_err(|e| e.to_string())?;
-        let code = resp.status().as_u16();
-        let body: Value = resp.json().await.unwrap_or(json!({}));
+            .map_err(|e| e.to_string());
+        if tier_ok(r).await {
+            return Ok(());
+        }
+        if text.chars().count() <= 9000 {
+            let card = json!({
+                "schema": "2.0",
+                "config": { "wide_screen_mode": true },
+                "elements": card_elements(text),
+            });
+            let r = client
+                .post(&url)
+                .bearer_auth(&token)
+                .json(&json!({ "receive_id": chat_id, "msg_type": "interactive", "content": card.to_string() }))
+                .send()
+                .await
+                .map_err(|e| e.to_string());
+            if tier_ok(r).await {
+                return Ok(());
+            }
+        }
+        let r = send_text_message(state, channel, chat_id, text).await?;
+        let code = r.status().as_u16();
+        let body: Value = r.json().await.unwrap_or(json!({}));
         if code / 100 == 2 && body.get("code").and_then(|v| v.as_i64()) == Some(0) {
             Ok(())
         } else {
@@ -193,6 +278,173 @@ impl crate::im::ImPlatform for FeishuPlatform {
             ))
         }
     }
+}
+
+/// 层级发送成功判定：HTTP 2xx 且业务 code == 0，失败记日志供降级排查
+async fn tier_ok(resp: Result<reqwest::Response, String>) -> bool {
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: Value = r.json().await.unwrap_or(json!({}));
+            let ok = body.get("code").and_then(|v| v.as_i64()) == Some(0);
+            if !ok {
+                tracing::warn!(body = %body, "feishu: 消息层级发送业务失败，降级");
+            }
+            ok
+        }
+        Ok(r) => {
+            tracing::warn!(status = %r.status(), "feishu: 消息层级发送 HTTP 失败，降级");
+            false
+        }
+        Err(e) => {
+            tracing::warn!(err = %e, "feishu: 消息层级发送请求失败，降级");
+            false
+        }
+    }
+}
+
+/// 表格前后补空行（官方规则：表格必须以 \n\n 与其他块级元素分隔，
+/// 否则后续内容会被解析为表格的续行）
+fn ensure_table_spacing(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 4);
+    let mut i = 0;
+    while i < lines.len() {
+        let table_start = lines[i].contains('|')
+            && i + 1 < lines.len()
+            && is_table_delimiter(lines[i + 1]);
+        if table_start {
+            if !out.last().map(|l| l.trim().is_empty()).unwrap_or(true) {
+                out.push(String::new());
+            }
+            out.push(lines[i].to_string());
+            i += 1;
+            while i < lines.len() && lines[i].contains('|') && !lines[i].trim().is_empty() {
+                out.push(lines[i].to_string());
+                i += 1;
+            }
+            // 表格结束：确保后面有空行
+            out.push(String::new());
+            continue;
+        }
+        out.push(lines[i].to_string());
+        i += 1;
+    }
+    out.join("\n").trim_end().to_string() + "\n"
+}
+
+/// 纯文本消息发送（卡片降级路径），返回原始响应供统一校验
+async fn send_text_message(
+    state: &AppState,
+    channel: &BsonDoc,
+    chat_id: &str,
+    text: &str,
+) -> Result<reqwest::Response, String> {
+    let token = tenant_token(state, channel).await?;
+    let client = crate::http::base_client(&state.cfg)?
+        .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let content = json!({ "text": text }).to_string();
+    client
+        .post(format!("{FEISHU_BASE}/open-apis/im/v1/messages?receive_id_type=chat_id"))
+        .bearer_auth(token)
+        .json(&json!({ "receive_id": chat_id, "msg_type": "text", "content": content }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ------------------------------------------------------------ 卡片元素构建
+
+/// markdown 换行转 GFM 硬换行（行尾两空格），避免卡片渲染成软换行
+fn hard_breaks(text: &str) -> String {
+    text.replace('\n', "  \n")
+}
+
+fn is_table_delimiter(line: &str) -> bool {
+    let t = line.trim().trim_matches('|');
+    !t.is_empty() && t.split('|').all(|c| !c.trim().is_empty() && c.trim().chars().all(|ch| ch == '-' || ch == ':'))
+}
+
+fn split_table_row(line: &str) -> Vec<String> {
+    let t = line.trim();
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let t = t.strip_suffix('|').unwrap_or(t);
+    t.split('|').map(|c| c.trim().to_string()).collect()
+}
+
+/// GFM 表格 → 飞书卡片 table 组件（卡片 markdown 元素不支持表格语法）
+fn table_element(rows: &[String]) -> Option<Value> {
+    if rows.len() < 2 {
+        return None;
+    }
+    let header = split_table_row(&rows[0]);
+    if header.is_empty() || header.iter().all(|h| h.is_empty()) {
+        return None;
+    }
+    let columns: Vec<Value> = header
+        .iter()
+        .enumerate()
+        .map(|(i, h)| json!({ "name": format!("c{i}"), "display_name": h, "data_type": "text" }))
+        .collect();
+    let body: Vec<Value> = rows[1..]
+        .iter()
+        .map(|line| {
+            let cells = split_table_row(line);
+            let mut obj = serde_json::Map::new();
+            for (i, _) in header.iter().enumerate() {
+                obj.insert(format!("c{i}"), json!(cells.get(i).cloned().unwrap_or_default()));
+            }
+            Value::Object(obj)
+        })
+        .collect();
+    Some(json!({
+        "tag": "table",
+        "page_size": 10,
+        "row_height": "low",
+        "columns": columns,
+        "rows": body,
+    }))
+}
+
+/// markdown 文本 → 卡片元素序列：GFM 表格拆成独立 table 组件，其余为
+/// markdown 元素（换行转硬换行）
+fn card_elements(text: &str) -> Vec<Value> {
+    let mut elements: Vec<Value> = Vec::new();
+    let mut md = String::new();
+    let lines: Vec<&str> = text.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let table_start = lines[i].contains('|')
+            && i + 1 < lines.len()
+            && is_table_delimiter(lines[i + 1]);
+        if table_start {
+            if !md.trim().is_empty() {
+                elements.push(json!({ "tag": "markdown", "content": hard_breaks(md.trim_end()) }));
+                md.clear();
+            }
+            let mut rows = vec![lines[i].to_string()];
+            i += 2; // 跳过表头与分隔行
+            while i < lines.len() && lines[i].contains('|') && !lines[i].trim().is_empty() {
+                rows.push(lines[i].to_string());
+                i += 1;
+            }
+            if let Some(el) = table_element(&rows) {
+                elements.push(el);
+            }
+            continue;
+        }
+        md.push_str(lines[i]);
+        md.push('\n');
+        i += 1;
+    }
+    if !md.trim().is_empty() {
+        elements.push(json!({ "tag": "markdown", "content": hard_breaks(md.trim_end()) }));
+    }
+    if elements.is_empty() {
+        elements.push(json!({ "tag": "markdown", "content": "" }));
+    }
+    elements
 }
 
 /// tenant_access_token：app 凭证换取，Redis 缓存到过期前 5 分钟
@@ -261,15 +513,22 @@ impl FeishuPlatform {
         if message_id.is_empty() || chat_id.is_empty() {
             return Ok(InboundDecision::Ignored("missing message_id/chat_id".into()));
         }
-        if message_type != "text" {
-            tracing::info!(channel = %channel.get_str("_id").unwrap_or_default(), "feishu: 忽略非文本消息 {message_type}");
-            return Ok(InboundDecision::Ignored(message_type.to_string()));
-        }
-        // content 是 JSON 字符串需二次解析；@ 占位清洗
+        // content 是 JSON 字符串需二次解析
         let content: Value =
             serde_json::from_str(message.get("content").and_then(|v| v.as_str()).unwrap_or("{}"))
                 .unwrap_or(json!({}));
-        let text = clean_mention(content.get("text").and_then(|v| v.as_str()).unwrap_or(""));
+        // text = 纯文本；post = 富文本（content_v2 的 md 标签最大保留原始
+        // markdown，官方推荐优先；老数据 fallback 到 content 标签拼接）
+        let raw = match message_type {
+            "text" => content.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            "post" => post_markdown(&content),
+            other => {
+                tracing::info!(channel = %channel.get_str("_id").unwrap_or_default(), "feishu: 忽略不支持的消息类型 {other}");
+                return Ok(InboundDecision::Ignored(other.to_string()));
+            }
+        };
+        // @ 占位清洗（text 与 post 的 at 标签同为 @_user_N 形式）
+        let text = clean_mention(&raw);
         if text.is_empty() {
             return Ok(InboundDecision::Ignored("empty text".into()));
         }
@@ -621,6 +880,48 @@ mod tests {
         assert_eq!(back.header("message_id"), Some("m-1"));
         assert_eq!(back.header("type"), Some("event"));
         assert_eq!(back.payload, b"{}");
+    }
+
+    #[test]
+    fn post_markdown_prefers_content_v2() {
+        let content: Value = serde_json::from_str(
+            r#"{"content":[[{"tag":"text","text":"第一行:"}]],
+               "content_v2":[[{"tag":"md","text":"**第一行:**\n```go\nfunc main() {}\n```"}]]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            post_markdown(&content),
+            "**第一行:**\n```go\nfunc main() {}\n```"
+        );
+    }
+
+    #[test]
+    fn post_markdown_fallback_joins_content_tags() {
+        let content: Value = serde_json::from_str(
+            r#"{"content":[[{"tag":"text","text":"@_user_1 "},{"tag":"a","href":"https://x","text":"看下这个"}],[{"tag":"code_block","language":"GO","text":"println()"}]]}"#,
+        )
+        .unwrap();
+        let md = post_markdown(&content);
+        // at 占位保留，交由 clean_mention 清洗；段落间换行必须保留
+        assert_eq!(clean_mention(&md), "看下这个\n\nprintln()");
+    }
+
+    #[test]
+    fn card_elements_splits_tables_from_markdown() {
+        let text = "前置说明\n\n| 能力 | 说明 |\n|---|---|\n| 代码 | 新功能 |\n| 测试 | 跑测试 |\n\n后置总结";
+        let els = card_elements(text);
+        assert_eq!(els.len(), 3);
+        assert_eq!(els[0].get("tag"), Some(&json!("markdown")));
+        let table = &els[1];
+        assert_eq!(table.get("tag"), Some(&json!("table")));
+        let cols = table.get("columns").unwrap().as_array().unwrap();
+        assert_eq!(cols[0].get("display_name"), Some(&json!("能力")));
+        let rows = table.get("rows").unwrap().as_array().unwrap();
+        assert_eq!(rows[0].get("c0"), Some(&json!("代码")));
+        assert_eq!(rows[1].get("c1"), Some(&json!("跑测试")));
+        assert_eq!(els[2].get("tag"), Some(&json!("markdown")));
+        // 纯 markdown 无表格 → 单元素
+        assert_eq!(card_elements("只有一段").len(), 1);
     }
 
     #[test]

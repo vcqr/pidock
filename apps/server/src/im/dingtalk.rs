@@ -289,6 +289,14 @@ async fn on_bot_message(state: &AppState, channel: &BsonDoc, data: &str) -> Opti
 // ------------------------------------------------------------ 主动推送
 
 /// sessionWebhook 发文本（临时地址，返回 {errcode: 0}）
+/// 钉钉 markdown 预处理：换行要求行尾两个空格（裸 \n 会塌成一段）；
+/// 语法不支持代码块，反引号原样显示反而碍眼，直接剥掉
+fn dingtalk_md(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\n', "  \n")
+        .replace('`', "")
+}
+
 async fn webhook_post(state: &AppState, url: &str, text: &str) -> Result<(), String> {
     let client = crate::http::base_client(&state.cfg)?
         .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
@@ -296,7 +304,7 @@ async fn webhook_post(state: &AppState, url: &str, text: &str) -> Result<(), Str
         .map_err(|e| e.to_string())?;
     let resp = client
         .post(url)
-        .json(&json!({ "msgtype": "text", "text": { "content": text } }))
+        .json(&json!({ "msgtype": "markdown", "markdown": { "title": "PiDock", "text": dingtalk_md(text) } }))
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -372,8 +380,8 @@ async fn group_send_text(
         .json(&json!({
             "openConversationId": conversation_id,
             "robotCode": robot_code,
-            "msgKey": "sampleText",
-            "msgParam": json!({ "content": text }).to_string(),
+            "msgKey": "sampleMarkdown",
+            "msgParam": json!({ "title": "PiDock", "content": dingtalk_md(text) }).to_string(),
         }))
         .send()
         .await
