@@ -686,9 +686,13 @@ watch(busy, (b) => {
 });
 watch(
   () => props.store.activeId,
-  () => {
+  async () => {
     props.store.turnFileChanges = [];
     closeReviewAll();
+    // v-show 保活不重挂载：切会话后强制回到底部，历史渲染期间由 innerRO 持续跟随
+    await nextTick();
+    followBottom.value = true;
+    scrollTarget();
   },
 );
 let chatRO: ResizeObserver | undefined;
@@ -696,6 +700,8 @@ onBeforeUnmount(() => {
   if (dividerTimer) clearInterval(dividerTimer);
   chatRO?.disconnect();
   chatRO = undefined;
+  innerRO?.disconnect();
+  innerRO = undefined;
 });
 // 启动时拉一次全量模型填充下拉缓存；后续变更由供应商页保存后调 store.refreshModels() 同步
 // （ChatView 经 v-show 保活，onMounted 只在应用启动时执行一次）
@@ -798,25 +804,45 @@ const scrollTarget = () => {
   if (el) el.scrollTop = el.scrollHeight;
 };
 
+// 吸底跟随：贴底（距底 < 80px）时新内容自动滚到底；用户上翻阅读则不打扰，翻回底部恢复跟随
+const followBottom = ref(true);
+const onScroll = () => {
+  const el = scroller.value;
+  if (el) followBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+};
+
+// 内容高度增长（流式文本、工具输出、图片/markdown 渲染、卡片展开）统一触发吸底；
+// 旧实现按文本增量 <500 才滚，大段消息一次性到达时不跟随
+const scrollInner = ref<HTMLElement | null>(null);
+let innerRO: ResizeObserver | undefined;
+watch(scrollInner, (el) => {
+  innerRO?.disconnect();
+  innerRO = undefined;
+  if (!el || typeof ResizeObserver === "undefined") return;
+  innerRO = new ResizeObserver(() => {
+    if (followBottom.value) scrollTarget();
+  });
+  innerRO.observe(el);
+});
+
 watch(
   () => props.store.items.length,
   async () => {
     await nextTick();
-    scrollTarget();
+    if (followBottom.value) scrollTarget();
   },
 );
 
-let lastLen = 0;
-watch(
-  () => props.store.items.reduce((n, it) => n + ("text" in it ? it.text.length : 0), 0),
-  async (len) => {
-    if (len - lastLen > 0 && len - lastLen < 500) {
-      await nextTick();
-      scrollTarget();
-    }
-    lastLen = len;
-  },
-);
+function onSend(
+  t: string,
+  _cwd: unknown,
+  imgs?: Array<{ data: string; mime_type: string }>,
+  files?: Array<{ name: string; mime_type: string; size: number; data: string }>,
+): void {
+  // 主动发送时无论停在哪都强制回底，保证看得到自己的消息与回复
+  followBottom.value = true;
+  void props.store.send(t, imgs, files);
+}
 </script>
 
 <template>
@@ -904,7 +930,8 @@ watch(
       >
         <template #1>
       <div class="chat-main">
-      <div ref="scroller" class="scroll">
+      <div ref="scroller" class="scroll" @scroll="onScroll">
+      <div ref="scrollInner">
         <div v-if="store.loadingHistory" class="hint">加载历史中…</div>
         <div v-if="compactionSummary" class="compaction-strip">
           <button class="cs-toggle" @click="csOpen = !csOpen">
@@ -1021,6 +1048,7 @@ watch(
           <span class="turn-line"></span>
         </div>
       </div>
+      </div>
       <div v-if="store.pendingApproval" class="approval">
         <Icon name="shield-flash-line" :size="15" />
         <div class="approval-info">
@@ -1079,7 +1107,7 @@ watch(
           :model-images-ok="modelSupportsImages"
           :models="modelOptions"
           :preset="preset"
-          @send="(t: string, _cwd: unknown, imgs?: Array<{ data: string; mime_type: string }>, files?: Array<{ name: string; mime_type: string; size: number; data: string }>) => store.send(t, imgs, files)"
+          @send="onSend"
           @abort="store.abort()"
           @set-permission-mode="setPermissionMode"
           @set-thinking-level="setThinkingLevel"
