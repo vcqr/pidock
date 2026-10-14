@@ -7,6 +7,7 @@ description = "PiDock runtime core: pi-host supervisor, scheduler, sync agent (U
 
 [dependencies]
 pidock-protocol = { path = "../pidock-protocol" }
+pidock-net = { path = "../pidock-net" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

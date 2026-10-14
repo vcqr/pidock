@@ -12,6 +12,8 @@ pub struct S3Client {
     pub bucket: String,
     pub access_key: String,
     pub secret_key: String,
+    /// 共享 HTTP 客户端（含出站代理与企业 CA，见 crate::http）
+    pub http: reqwest::Client,
 }
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
@@ -29,12 +31,19 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 impl S3Client {
-    pub fn new(endpoint: String, bucket: String, access_key: String, secret_key: String) -> Self {
+    pub fn new(
+        endpoint: String,
+        bucket: String,
+        access_key: String,
+        secret_key: String,
+        http: reqwest::Client,
+    ) -> Self {
         Self {
             endpoint,
             bucket,
             access_key,
             secret_key,
+            http,
         }
     }
 
@@ -133,7 +142,7 @@ impl S3Client {
     pub async fn ensure_bucket(&self) -> anyhow::Result<()> {
         let url = self.presign_put("", 60);
         let url = url.trim_end_matches('?').to_string();
-        let resp = reqwest::Client::new().put(&url).send().await?;
+        let resp = self.http.put(&url).send().await?;
         let status = resp.status();
         // 200 = created, 409 = already exists
         if status.is_success() || status.as_u16() == 409 {

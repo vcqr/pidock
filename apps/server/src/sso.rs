@@ -92,19 +92,19 @@ struct Discovery {
     userinfo_endpoint: String,
 }
 
-fn http_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
+fn http_client(cfg: &crate::config::Config) -> Result<reqwest::Client, String> {
+    crate::http::base_client(cfg)?
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())
 }
 
-async fn discover(issuer: &str) -> Result<Discovery, String> {
+async fn discover(cfg: &crate::config::Config, issuer: &str) -> Result<Discovery, String> {
     let url = format!(
         "{}/.well-known/openid-configuration",
         issuer.trim().trim_end_matches('/')
     );
-    let resp = http_client()?
+    let resp = http_client(cfg)?
         .get(&url)
         .send()
         .await
@@ -219,7 +219,7 @@ async fn oidc_login(State(state): State<AppState>, headers: HeaderMap) -> Result
     if !cfg.enabled {
         return Err(api_err(StatusCode::NOT_FOUND, "SSO 登录未启用"));
     }
-    let disc = discover(&cfg.issuer)
+    let disc = discover(&state.cfg, &cfg.issuer)
         .await
         .map_err(|e| api_err(StatusCode::BAD_GATEWAY, e))?;
     let st = Uuid::now_v7().simple().to_string();
@@ -275,7 +275,7 @@ async fn oidc_callback(
         Err(e) => return fail(format!("登录会话校验失败：{e}")),
     }
 
-    let disc = match discover(&cfg.issuer).await {
+    let disc = match discover(&state.cfg, &cfg.issuer).await {
         Ok(d) => d,
         Err(e) => return fail(e),
     };
@@ -287,7 +287,7 @@ async fn oidc_callback(
         .append_pair("client_id", cfg.client_id.trim())
         .append_pair("client_secret", cfg.client_secret.trim())
         .finish();
-    let client = match http_client() {
+    let client = match http_client(&state.cfg) {
         Ok(c) => c,
         Err(e) => return fail(e),
     };

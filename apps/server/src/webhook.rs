@@ -961,10 +961,12 @@ async fn post_webhook_callback(state: &AppState, cb: &BsonDoc, timed_out: bool) 
     let body = serde_json::to_vec(&payload).unwrap_or_default();
     let signature = sign_callback(&secret, &body);
 
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(CALLBACK_HTTP_TIMEOUT_SECS))
-        .build()
-    {
+    let client = match crate::http::base_client(&state.cfg)
+        .and_then(|b| {
+            b.timeout(std::time::Duration::from_secs(CALLBACK_HTTP_TIMEOUT_SECS))
+                .build()
+                .map_err(|e| e.to_string())
+        }) {
         Ok(c) => c,
         Err(e) => {
             finish_pending(state, &cb_id, "failed", 0, None, &format!("http client: {e}")).await;

@@ -98,8 +98,8 @@ fn ack_json(code: i32, message_id: &str, message: &str, data: &str) -> WsMessage
 // ------------------------------------------------------------ 连接管理
 
 /// 换取连接端点：POST connections/open
-async fn open_endpoint(channel: &BsonDoc) -> Result<(String, String), String> {
-    let client = reqwest::Client::builder()
+async fn open_endpoint(cfg: &crate::config::Config, channel: &BsonDoc) -> Result<(String, String), String> {
+    let client = crate::http::base_client(cfg)?
         .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
         .build()
         .map_err(|e| e.to_string())?;
@@ -141,9 +141,10 @@ async fn open_endpoint(channel: &BsonDoc) -> Result<(String, String), String> {
 
 /// 一次连接的完整生命周期：断开即返回，由 im::stream_conn_loop 负责重连
 async fn run_connection(state: &AppState, channel: &BsonDoc) -> Result<(), String> {
-    let (endpoint, ticket) = open_endpoint(channel).await?;
+    let (endpoint, ticket) = open_endpoint(&state.cfg, channel).await?;
     let url = format!("{endpoint}?ticket={ticket}");
-    let (ws, _) = tokio_tungstenite::connect_async(&url)
+    // WS 经出站代理（CONNECT 隧道）+ 企业 CA，见 crate::http::connect_ws
+    let ws = crate::http::connect_ws(&state.cfg, &url)
         .await
         .map_err(|e| format!("WS 连接失败: {e}"))?;
     tracing::info!(channel = %channel.get_str("_id").unwrap_or_default(), "dingtalk: 流连接已建立");
@@ -288,8 +289,8 @@ async fn on_bot_message(state: &AppState, channel: &BsonDoc, data: &str) -> Opti
 // ------------------------------------------------------------ 主动推送
 
 /// sessionWebhook 发文本（临时地址，返回 {errcode: 0}）
-async fn webhook_post(url: &str, text: &str) -> Result<(), String> {
-    let client = reqwest::Client::builder()
+async fn webhook_post(state: &AppState, url: &str, text: &str) -> Result<(), String> {
+    let client = crate::http::base_client(&state.cfg)?
         .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
         .build()
         .map_err(|e| e.to_string())?;
@@ -322,7 +323,7 @@ async fn access_token(state: &AppState, channel: &BsonDoc) -> Result<String, Str
             return Ok(cached);
         }
     }
-    let client = reqwest::Client::builder()
+    let client = crate::http::base_client(&state.cfg)?
         .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
         .build()
         .map_err(|e| e.to_string())?;
@@ -361,7 +362,7 @@ async fn group_send_text(
     text: &str,
 ) -> Result<(), String> {
     let token = access_token(state, channel).await?;
-    let client = reqwest::Client::builder()
+    let client = crate::http::base_client(&state.cfg)?
         .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
         .build()
         .map_err(|e| e.to_string())?;
@@ -432,7 +433,7 @@ impl crate::im::ImPlatform for DingTalkPlatform {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
         {
-            match webhook_post(url, text).await {
+            match webhook_post(state, url, text).await {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     // webhook 过期等场景，继续尝试群消息 API

@@ -61,3 +61,15 @@ dir = ""
 # smtp_user = "noreply@example.com"
 # smtp_pass = "app-password"
 # from = "PiDock <noreply@example.com>"  # 留空回落 smtp_user
+
+# 出站代理（企业内网部署时配置；不配 = 直连，回落读标准 HTTPS_PROXY/HTTP_PROXY
+# 环境变量）。作用于服务端全部出站请求：IM 平台 API 与长连接 WS（钉钉 Stream /
+# 飞书）、SSO/OIDC、Turnstile、webhook 回调通知、S3/RustFS。
+# no_proxy 例外列表隐含 localhost/127.0.0.1/::1；LDAP 与 SMTP 不经 HTTP 代理
+#（内网服务，通常也不应经代理）。
+# ca_path 为企业 MITM 代理的根证书（PEM）——rustls 不读系统信任库，企业中间人
+# 代理环境必须配置，否则出站 TLS 全部失败。
+# [proxy]
+# url = "http://proxy.corp.example:8080"
+# no_proxy = ".corp.example,10.0.0.0/8"
+# ca_path = "/etc/pidock/corp-root.pem"

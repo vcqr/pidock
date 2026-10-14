@@ -5,6 +5,7 @@ mod auth;
 mod config;
 mod gateway;
 mod guard;
+mod http;
 mod im;
 mod ingest;
 mod ldap;

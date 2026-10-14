@@ -33,6 +33,11 @@ pub struct Config {
     pub turnstile_secret_key: String,
     pub email: EmailCfg,
     pub rustfs: RustfsCfg,
+    /// 出站代理（企业内网部署时 IM 平台/SSO/Turnstile/S3 等出站请求需经代理）：
+    /// 显式配置 > 标准环境变量；ca_path 为企业 MITM 根证书（rustls 不读系统信任库）
+    pub proxy_url: String,
+    pub proxy_no_proxy: String,
+    pub proxy_ca_path: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -99,6 +104,7 @@ struct FileConfig {
     rustfs: RustfsCfg,
     email: EmailCfg,
     web: WebSection,
+    proxy: ProxySection,
 }
 
 #[derive(Default, Deserialize)]
@@ -145,6 +151,16 @@ struct WebSection {
     dir: String,
     #[serde(default)]
     origin: String,
+}
+
+#[derive(Default, Deserialize)]
+struct ProxySection {
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    no_proxy: String,
+    #[serde(default)]
+    ca_path: String,
 }
 
 impl Config {
@@ -240,6 +256,9 @@ impl Config {
             },
             web_dir: pick("PIDOCK_WEB_DIR", &file.web.dir, ""),
             web_origin: pick("PIDOCK_WEB_ORIGIN", &file.web.origin, ""),
+            proxy_url: pick("PIDOCK_PROXY_URL", &file.proxy.url, ""),
+            proxy_no_proxy: pick("PIDOCK_PROXY_NO_PROXY", &file.proxy.no_proxy, ""),
+            proxy_ca_path: pick("PIDOCK_PROXY_CA_PATH", &file.proxy.ca_path, ""),
             rustfs: RustfsCfg {
                 endpoint: pick(
                     "PIDOCK_RUSTFS_ENDPOINT",
@@ -293,6 +312,15 @@ impl Config {
 
         ensure_jwt_secret(&cfg.jwt_secret, &cfg.bind)?;
 
+        if !cfg.proxy_url.trim().is_empty() {
+            tracing::info!(
+                "config: egress proxy is enabled ({}; no_proxy: {}; ca_path: {})",
+                cfg.proxy_url.trim(),
+                if cfg.proxy_no_proxy.trim().is_empty() { "<not set>" } else { cfg.proxy_no_proxy.trim() },
+                if cfg.proxy_ca_path.trim().is_empty() { "<not set>" } else { cfg.proxy_ca_path.trim() },
+            );
+        }
+
         match loaded_from {
             Some(p) => tracing::info!("config: 已加载配置文件 {p}（环境变量优先于文件值）"),
             None => tracing::info!("config: 未找到配置文件，使用环境变量 / 内置默认值"),
@@ -334,6 +362,33 @@ fn ensure_jwt_secret(secret: &str, bind: &str) -> anyhow::Result<()> {
              公网暴露等同任何人可伪造会话。请在 pidock.toml [server] jwt_secret \
              或环境变量 PIDOCK_JWT_SECRET 配置强随机密钥（openssl rand -hex 32）"
         ))
+    }
+}
+
+#[cfg(test)]
+impl Config {
+    /// 测试夹具：全空 Config（绕过文件加载与 jwt 启动门槛）
+    pub(crate) fn test_config() -> Config {
+        Config {
+            bind: String::new(),
+            mongo_uri: String::new(),
+            redis_url: String::new(),
+            kafka_brokers: String::new(),
+            kafka_topic: String::new(),
+            pipeline: String::new(),
+            jwt_secret: String::new(),
+            bootstrap_invite: String::new(),
+            web_dir: String::new(),
+            web_origin: String::new(),
+            trust_proxy: false,
+            turnstile_site_key: String::new(),
+            turnstile_secret_key: String::new(),
+            email: EmailCfg::default(),
+            rustfs: RustfsCfg::default(),
+            proxy_url: String::new(),
+            proxy_no_proxy: String::new(),
+            proxy_ca_path: String::new(),
+        }
     }
 }
 

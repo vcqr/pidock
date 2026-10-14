@@ -169,7 +169,7 @@ impl crate::im::ImPlatform for FeishuPlatform {
             .or_else(|| reply_ctx.get("chat_key").and_then(|v| v.as_str()))
             .ok_or("reply_ctx 缺少 chat_id")?;
         let token = tenant_token(state, channel).await?;
-        let client = reqwest::Client::builder()
+        let client = crate::http::base_client(&state.cfg)?
             .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
             .build()
             .map_err(|e| e.to_string())?;
@@ -208,7 +208,7 @@ async fn tenant_token(state: &AppState, channel: &BsonDoc) -> Result<String, Str
     }
     let app_id = channel.get_str("app_id").unwrap_or_default();
     let app_secret = channel.get_str("app_secret").unwrap_or_default();
-    let client = reqwest::Client::builder()
+    let client = crate::http::base_client(&state.cfg)?
         .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
         .build()
         .map_err(|e| e.to_string())?;
@@ -353,8 +353,12 @@ impl PbFrame {
 }
 
 /// POST /callback/ws/endpoint 换连接地址 + 服务端保活配置
-async fn open_ws_endpoint(app_id: &str, app_secret: &str) -> Result<(String, u64), String> {
-    let client = reqwest::Client::builder()
+async fn open_ws_endpoint(
+    cfg: &crate::config::Config,
+    app_id: &str,
+    app_secret: &str,
+) -> Result<(String, u64), String> {
+    let client = crate::http::base_client(cfg)?
         .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
         .build()
         .map_err(|e| e.to_string())?;
@@ -399,9 +403,10 @@ fn service_id_of(url: &str) -> i32 {
 async fn run_ws_connection(state: &AppState, channel: &BsonDoc) -> Result<(), String> {
     let app_id = channel.get_str("app_id").unwrap_or_default().to_string();
     let app_secret = channel.get_str("app_secret").unwrap_or_default().to_string();
-    let (url, ping_interval) = open_ws_endpoint(&app_id, &app_secret).await?;
+    let (url, ping_interval) = open_ws_endpoint(&state.cfg, &app_id, &app_secret).await?;
     let service_id = service_id_of(&url);
-    let (ws, _) = tokio_tungstenite::connect_async(&url)
+    // WS 经出站代理（CONNECT 隧道）+ 企业 CA，见 crate::http::connect_ws
+    let ws = crate::http::connect_ws(&state.cfg, &url)
         .await
         .map_err(|e| format!("WS 连接失败: {e}"))?;
     tracing::info!(channel = %channel.get_str("_id").unwrap_or_default(), "feishu: 长连接已建立");

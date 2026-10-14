@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::config::Config;
+
 const SITEVERIFY_URL: &str = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
 #[derive(Deserialize)]
@@ -26,7 +28,7 @@ pub fn enabled(site_key: &str, secret: &str) -> bool {
 /// 校验前端提交的 turnstile token（300 秒有效、一次性，验过即作废）。
 /// 未启用（见 enabled）→ 恒放行；token 缺失或校验失败 → Err(用户可读消息)，
 /// 由调用方映射成 403（不计入登录失败限流，防爆破仍由 guard 兜底）。
-pub async fn verify(site_key: &str, secret: &str, token: &str, remote_ip: &str) -> Result<(), String> {
+pub async fn verify(cfg: &Config, site_key: &str, secret: &str, token: &str, remote_ip: &str) -> Result<(), String> {
     let secret = secret.trim();
     if !enabled(site_key, secret) {
         return Ok(());
@@ -45,7 +47,7 @@ pub async fn verify(site_key: &str, secret: &str, token: &str, remote_ip: &str) 
         }
         form.finish()
     };
-    let client = reqwest::Client::builder()
+    let client = crate::http::base_client(cfg)?
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| format!("Turnstile 客户端构建失败: {e}"))?;
@@ -85,16 +87,19 @@ mod tests {
     /// 未启用（含只配一半）缺 token 也放行（存量部署行为不变）
     #[tokio::test]
     async fn disabled_passes_through() {
-        assert!(verify("", "", "", "").await.is_ok());
-        assert!(verify("", "", "any-token", "1.2.3.4").await.is_ok());
-        assert!(verify("site-only", "", "any-token", "").await.is_ok());
+        let cfg = crate::config::Config::test_config();
+        assert!(verify(&cfg, "", "", "", "").await.is_ok());
+        assert!(verify(&cfg, "", "", "any-token", "1.2.3.4").await.is_ok());
+        assert!(verify(&cfg, "site-only", "", "any-token", "").await.is_ok());
     }
 
     /// 启用后 token 缺失/空白直接拒，不出网
     #[tokio::test]
     async fn enabled_requires_token() {
+        let cfg = crate::config::Config::test_config();
         assert_eq!(
             verify(
+                &cfg,
                 "1x00000000000000000000AA",
                 "1x0000000000000000000000000000000AA",
                 "  ",

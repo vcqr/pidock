@@ -646,3 +646,29 @@ export class ConfigService {
     return { models };
   }
 }
+
+/**
+ * 企业自签/中间人代理根证书：supervisor 会把 proxy.caPath 注入为
+ * NODE_EXTRA_CA_CERTS 环境变量，但 Bun 的 standalone 编译产物（release 版
+ * pi-host）不读该变量（oven-sh/bun#13868）；Bun.loadExtraCACerts 是运行期
+ * 追加信任的唯一入口。dev 模式（bun src/main.ts）下 env 已生效，此处再调
+ * 一次为幂等追加。与代理模式无关——直连也可能撞企业 MITM 证书。
+ */
+export async function loadProxyExtraCa(): Promise<void> {
+  const bun = (globalThis as any).Bun;
+  if (typeof bun?.loadExtraCACerts !== "function") return;
+  const settings = readJson(ConfigService.pidockSettingsPath()) ?? {};
+  const caPath = (settings as Json).proxy?.caPath;
+  if (typeof caPath !== "string" || !caPath.trim()) return;
+  const ca = caPath.trim();
+  if (!existsSync(ca)) {
+    process.stderr.write(`[host] proxy.caPath 不存在，忽略：${ca}\n`);
+    return;
+  }
+  try {
+    await bun.loadExtraCACerts(ca);
+    process.stderr.write(`[host] 已加载企业 CA：${ca}\n`);
+  } catch (err) {
+    process.stderr.write(`[host] 加载 proxy.caPath 失败：${String(err)}\n`);
+  }
+}

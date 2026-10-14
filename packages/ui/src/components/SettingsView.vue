@@ -230,7 +230,7 @@ const proxyLoaded = ref(false);
 const proxySaving = ref(false);
 const PROXY_MODE_HINT: Record<ProxyMode, string> = {
   direct: "所有请求直连，不使用代理",
-  system: "自动读取系统代理设置（Windows Internet 选项）",
+  system: "自动读取系统代理设置（Windows Internet 选项 / macOS 系统设置）",
   http: "手动指定 HTTP 代理地址",
 };
 
@@ -699,21 +699,21 @@ function openFolder(): void {
             <div v-if="proxy.mode === 'http'" class="row col">
               <div class="row-text">
                 <b>代理地址</b>
-                <span>对模型 API、MCP 等出站请求生效</span>
+                <span>对模型 API 与云同步（含 WS 长连接）等出站请求生效</span>
               </div>
               <input v-model="proxy.url" class="txt" placeholder="http://127.0.0.1:7890" spellcheck="false" />
             </div>
             <div class="row col">
               <div class="row-text">
                 <b>绕过列表（NO_PROXY）</b>
-                <span>逗号分隔，匹配的主机不走代理；跟随系统时与系统例外合并</span>
+                <span>逗号分隔，匹配的主机不走代理；本机回环始终绕过；跟随系统时与系统例外合并</span>
               </div>
               <input v-model="proxy.noProxy" class="txt" placeholder="localhost,127.0.0.1,.internal" spellcheck="false" />
             </div>
             <div class="row col">
               <div class="row-text">
                 <b>自定义 CA 证书</b>
-                <span>PEM 文件路径，自签名或企业代理所需；留空使用内置证书</span>
+                <span>PEM 文件路径，自签名或企业代理所需（云同步与模型 API 均生效）；留空使用内置证书</span>
               </div>
               <input v-model="proxy.caPath" class="txt" placeholder="C:\certs\corp-root.pem" spellcheck="false" />
             </div>

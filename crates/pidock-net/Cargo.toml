@@ -1,0 +1,21 @@
+[package]
+name = "pidock-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PiDock shared outbound networking: proxied WebSocket (HTTP CONNECT tunnel), custom CA, no_proxy matching"
+
+[dependencies]
+tokio = { workspace = true }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+# 显式指定 ring provider：rustls 0.23 的 builder 在多 provider 共存时才不会歧义，
+# 也保证与 tokio-tungstenite 内部的 rustls 版本一致
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
+rustls-pemfile = "2"
+webpki-roots = "0.26"
+url = "2"
+base64 = "0.22"
+percent-encoding = "2"
+
+[dev-dependencies]
+futures-util = "0.3"

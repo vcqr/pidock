@@ -199,6 +199,7 @@ async fn register(
 ) -> Result<Json<Value>, Response> {
     let ip = crate::guard::client_ip(&state.cfg, &headers, peer);
     crate::turnstile::verify(
+        &state.cfg,
         &state.cfg.turnstile_site_key,
         &state.cfg.turnstile_secret_key,
         &body.turnstile_token,
@@ -406,6 +407,7 @@ async fn login(
     let email_lc = body.email.trim().to_lowercase();
     // 人机验证：启用时验不过直接拒（token 一次性，前端失败后需重新过验证）
     crate::turnstile::verify(
+        &state.cfg,
         &state.cfg.turnstile_site_key,
         &state.cfg.turnstile_secret_key,
         &body.turnstile_token,
@@ -559,6 +561,7 @@ async fn login_ldap(
     let ip = crate::guard::client_ip(&state.cfg, &headers, peer);
     let username = body.username.trim().to_string();
     crate::turnstile::verify(
+        &state.cfg,
         &state.cfg.turnstile_site_key,
         &state.cfg.turnstile_secret_key,
         &body.turnstile_token,

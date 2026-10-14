@@ -167,8 +167,17 @@ pub struct SyncConfigureBody {
     pub token: String,
 }
 
+/// token 验证走同一套代理适配：configure 时还没有共享 client，就地构建
 async fn http_json(method: &str, url: &str, body: &Value) -> Result<Value, String> {
-    let client = reqwest::Client::new();
+    http_json_with(&crate::proxy::reqwest_client(), method, url, body).await
+}
+
+async fn http_json_with(
+    client: &reqwest::Client,
+    method: &str,
+    url: &str,
+    body: &Value,
+) -> Result<Value, String> {
     let req = match method {
         "POST" => client.post(url),
         _ => client.get(url),
@@ -197,11 +206,15 @@ async fn http_json(method: &str, url: &str, body: &Value) -> Result<Value, Strin
 /// refresh the access token; returns (access, new_refresh) — the server
 /// ROTATES refresh tokens on every call, so the new one must be persisted.
 /// PAT 模式下令牌即长期 access，直接返回、不发请求。
-async fn refresh_access(cfg: &SyncConfig) -> Result<(String, String), String> {
+async fn refresh_access(
+    client: &reqwest::Client,
+    cfg: &SyncConfig,
+) -> Result<(String, String), String> {
     if !cfg.pat.is_empty() {
         return Ok((cfg.pat.clone(), cfg.refresh_token.clone()));
     }
-    let data = http_json(
+    let data = http_json_with(
+        client,
         "POST",
         &format!("{}/auth/refresh", cfg.server_url.trim_end_matches('/')),
         &json!({"refresh_token": cfg.refresh_token}),
@@ -277,6 +290,7 @@ fn collect_attachments(value: &Value, out: &mut Vec<(String, i64)>) {
 
 async fn upload_attachments(
     supervisor: &Supervisor,
+    client: &reqwest::Client,
     access: &str,
     server_url: &str,
     envelope: &Value,
@@ -295,7 +309,6 @@ async fn upload_attachments(
             .to_string(),
         Err(_) => return,
     };
-    let client = reqwest::Client::new();
     for (sha, size) in refs {
         if uploaded.contains(sha.as_str()) {
             continue;
@@ -632,8 +645,10 @@ async fn sync_loop(
         // 换号竞态防护：刷新期间 configure 可能刚写入新账号凭据，此时旧账号
         // 轮换出的 refresh_token 绝不能落盘覆盖新凭据——只在存储里的
         // refresh_token 仍是本次刷新所用的那条时才写回，否则按新配置重来
+        // 共享 HTTP client：一次重连周期构建一次（代理设置重启后生效）
+        let http = crate::proxy::reqwest_client();
         let old_refresh = cfg.refresh_token.clone();
-        let (access, new_refresh) = match refresh_access(&cfg).await {
+        let (access, new_refresh) = match refresh_access(&http, &cfg).await {
             Ok(pair) => pair,
             Err(e) => {
                 if sync.cfg.lock().await.refresh_token.clone() != old_refresh {
@@ -675,7 +690,7 @@ async fn sync_loop(
             cfg = c.clone();
         }
 
-        // 2) ws connect
+        // 2) ws connect（代理适配在 crate::proxy::connect_ws：CONNECT 隧道 + 企业 CA）
         let ws_url = format!(
             "{}/ws/desktop?token={}",
             cfg.server_url
@@ -683,7 +698,7 @@ async fn sync_loop(
                 .replacen("http", "ws", 1),
             access
         );
-        let (ws, _) = match tokio_tungstenite::connect_async(&ws_url).await {
+        let ws = match crate::proxy::connect_ws(&ws_url).await {
             Ok(pair) => pair,
             Err(e) => {
                 // PAT 模式下 401/403 基本等于令牌被吊销，给出可行动的提示
@@ -788,6 +803,7 @@ async fn sync_loop(
                                     });
                                     upload_attachments(
                                         &supervisor,
+                                        &http,
                                         &access,
                                         &cfg.server_url,
                                         &env,
@@ -856,7 +872,7 @@ async fn sync_loop(
                             let persist = envelope.persist;
                             if persist || cloud_worthy(&envelope.kind) {
                                 let serialized = serde_json::to_value(&envelope).unwrap_or(json!({}));
-                                upload_attachments(&supervisor, &access, &cfg.server_url, &serialized, &mut uploaded).await;
+                                upload_attachments(&supervisor, &http, &access, &cfg.server_url, &serialized, &mut uploaded).await;
                                 if ws_sink.send(WsMessage::Text(serialized.to_string().into())).await.is_err() {
                                     closed = true;
                                 }

@@ -2,7 +2,7 @@ import "./runtime-setup.js";
 import { createInterface } from "node:readline";
 import { takeOverStdout } from "@earendil-works/pi-coding-agent/dist/core/output-guard.js";
 import { prepareEnv } from "./env.js";
-import { ConfigService } from "./config.js";
+import { ConfigService, loadProxyExtraCa } from "./config.js";
 import { emitError, emitResponse } from "./emit.js";
 import { ExpertsService, readAvatarFile } from "./experts.js";
 import { HOST_VERSION, RpcError, SessionPool } from "./pool.js";
@@ -96,8 +96,10 @@ const handlers: Record<string, Handler> = {
   [Method.EXPERTS_READ_AVATAR_FILE]: (p) => readAvatarFile(String(p?.srcPath ?? "")),
 };
 
-// 启动即开始修整 PATH（登录 shell 探测与等待首请求并行），请求处理前统一等待
+// 启动即开始修整 PATH（登录 shell 探测与等待首请求并行），请求处理前统一等待。
+// 企业 CA 同理：任一请求（模型 API / fetch_models / 扩展下载）前必须完成加载
 const envReady = prepareEnv();
+const caReady = loadProxyExtraCa();
 
 async function dispatch(line: string): Promise<void> {
   let request: { id?: string; method?: string; params?: unknown };
@@ -113,6 +115,7 @@ async function dispatch(line: string): Promise<void> {
     return;
   }
   await envReady;
+  await caReady;
   const handler = handlers[method];
   if (!handler) {
     emitError(id, "unknown_method", `no handler for "${method}"`);

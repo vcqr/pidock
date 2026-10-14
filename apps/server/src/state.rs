@@ -44,11 +44,16 @@ impl AppState {
             .database("pidock");
         let redis_client = redis::Client::open(cfg.redis_url.as_str())?;
         let redis = redis::aio::ConnectionManager::new(redis_client.clone()).await?;
+        let s3_http = crate::http::base_client(&cfg)
+            .map_err(anyhow::Error::msg)?
+            .build()
+            .map_err(|e| anyhow::anyhow!("S3 HTTP 客户端构建失败: {e}"))?;
         let s3 = crate::s3::S3Client::new(
             cfg.rustfs.endpoint.clone(),
             cfg.rustfs.bucket.clone(),
             cfg.rustfs.access_key.clone(),
             cfg.rustfs.secret_key.clone(),
+            s3_http,
         );
         Ok(Self {
             cfg: Arc::new(cfg),
