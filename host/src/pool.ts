@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { emitEvent } from "./emit.js";
 import { entryToPayload, metaPayloadFromSession } from "./map.js";
+import { readMcpServers } from "./mcp-probe.js";
 import { parseAttachments, normalizeImage, type IncomingAttachment } from "./attachments.js";
 import { createTodoWriteTool, sanitizeTodos } from "./todo.js";
 import { createAskUserQuestionTool, type AskAnswer } from "./ask.js";
@@ -953,6 +954,16 @@ export class SessionPool {
   ): Promise<{ block: true; reason: string } | undefined> {
     const mode = permission.mode;
     if (mode === "full") return undefined;
+    // MCP 工具：默认自动批准（与既往行为一致）；用户在设置里关闭自动批准的工具
+    // 按审批流程走——plan 模式直接拦，confirm/edit-auto 弹审批卡
+    if (toolName.startsWith("mcp__")) {
+      const resolved = this.resolveMcpTool(toolName);
+      if (!resolved || this.mcpApprovalAllowed(resolved.server, resolved.tool)) return undefined;
+      if (mode === "plan") {
+        return { block: true, reason: `计划模式下不允许调用 MCP 工具 ${toolName}（已在设置中关闭其自动批准）` };
+      }
+      return this.requestToolApproval(sessionId, toolName, input);
+    }
     const mutating = toolName === "bash" || toolName === "write" || toolName === "edit";
     if (!mutating) return undefined;
     if (mode === "plan") {
@@ -960,6 +971,15 @@ export class SessionPool {
     }
     if (mode === "edit-auto" && toolName !== "bash") return undefined;
     // confirm 模式（或 auto-edit 下的 bash）：请求用户审批并等待回复
+    return this.requestToolApproval(sessionId, toolName, input);
+  }
+
+  /** 弹审批卡并等待用户裁决（resolve_approval 回传） */
+  private async requestToolApproval(
+    sessionId: string,
+    toolName: string,
+    input: unknown,
+  ): Promise<{ block: true; reason: string } | undefined> {
     const approvalId = randomUUID();
     const pending = new Promise<boolean>((resolve) => {
       this.pendingApprovals.set(approvalId, { sessionId, toolName, args: JSON.stringify(input ?? {}), resolve });
@@ -974,6 +994,33 @@ export class SessionPool {
     const approved = await pending;
     emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "thinking" }, { persist: false });
     return approved ? undefined : { block: true, reason: "用户拒绝了本次工具调用" };
+  }
+
+  /**
+   * 从 `mcp__<server>__<tool>` 解析出服务器名与工具名。服务器名可含 `_`（名字里的 `-`
+   * 会被 pi 规范成 `_`），直接按第一段 `__` 切有歧义，因此用 mcp.json 中的服务器名
+   * 做最长前缀匹配；配置里找不到时（例如刚删除）退回首段切分。
+   */
+  private resolveMcpTool(toolName: string): { server: string; tool: string } | undefined {
+    const rest = toolName.slice("mcp__".length);
+    const names = Object.keys(readMcpServers()).sort((a, b) => b.length - a.length);
+    for (const s of names) {
+      if (s && rest.startsWith(`${s}__`)) return { server: s, tool: rest.slice(s.length + 2) };
+    }
+    const i = rest.indexOf("__");
+    return i > 0 ? { server: rest.slice(0, i), tool: rest.slice(i + 2) } : undefined;
+  }
+
+  /** MCP 工具自动批准表（pidock/settings.json mcpApprovals，缺省=true 自动批准），读盘失败按放行处理 */
+  private mcpApprovalAllowed(server: string, tool: string): boolean {
+    try {
+      const raw = JSON.parse(readFileSync(join(getAgentDir(), "pidock", "settings.json"), "utf8"));
+      const perServer = raw?.mcpApprovals?.[server];
+      if (!perServer || typeof perServer !== "object") return true;
+      return perServer[tool] !== false;
+    } catch {
+      return true;
+    }
   }
 
   /**

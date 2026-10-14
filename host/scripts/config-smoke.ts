@@ -176,6 +176,69 @@ async function main(): Promise<number> {
     const mcp = await request("config.mcp.get");
     check("mcp.set/get roundtrip", mcp.config?.servers?.demo?.command === "echo");
 
+    // ---- MCP probe（探测：临时连接拿 serverInfo + 工具清单） ----
+    const fakeServer = join(workDir, "fake-mcp-server.mjs");
+    writeFileSync(
+      fakeServer,
+      `let buf = "";
+const respond = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buf += chunk;
+  let idx;
+  while ((idx = buf.indexOf("\\n")) >= 0) {
+    const line = buf.slice(0, idx).trim();
+    buf = buf.slice(idx + 1);
+    if (!line) continue;
+    let msg;
+    try { msg = JSON.parse(line); } catch { continue; }
+    if (!msg || msg.id === undefined) continue;
+    if (msg.method === "initialize") {
+      respond(msg.id, {
+        protocolVersion: msg.params?.protocolVersion ?? "2025-06-18",
+        capabilities: { tools: {} },
+        serverInfo: { name: "fake-mcp", version: "1.2.3" },
+      });
+    } else if (msg.method === "tools/list") {
+      respond(msg.id, {
+        tools: [
+          { name: "hello", description: "Say hello to someone", inputSchema: { type: "object", properties: { name: { type: "string" } } } },
+          { name: "noop", description: "Do nothing", inputSchema: { type: "object" } },
+        ],
+      });
+    } else {
+      respond(msg.id, {});
+    }
+  }
+});
+process.stdin.on("end", () => process.exit(0));
+`,
+    );
+    const probe = await request("config.mcp.probe", {
+      entry: { command: process.execPath, args: [fakeServer], env: { SMOKE: "1" } },
+    });
+    check(
+      "mcp.probe stdio entry (serverInfo + tools)",
+      probe.ok === true &&
+        probe.serverInfo?.name === "fake-mcp" &&
+        probe.serverInfo?.version === "1.2.3" &&
+        Array.isArray(probe.tools) &&
+        probe.tools.length === 2 &&
+        probe.tools[0]?.name === "hello" &&
+        typeof probe.tools[0]?.description === "string",
+      JSON.stringify({ serverInfo: probe.serverInfo, tools: probe.tools?.length, error: probe.error }),
+    );
+
+    // echo 不是 MCP 服务器：连接失败但返回结构化结果而非抛错
+    const probeBad = await request("config.mcp.probe", { name: "demo" });
+    check("mcp.probe non-mcp command fails gracefully", probeBad.ok === false && typeof probeBad.error === "string", probeBad.error);
+    try {
+      await request("config.mcp.probe", { name: "missing" });
+      check("mcp.probe unknown name rejects", false);
+    } catch (e) {
+      check("mcp.probe unknown name rejects", String(e).includes("not_found"));
+    }
+
     await request("config.providers.set_key", { provider: "anthropic", key: "sk-ant-test-123" });
     const auth = JSON.parse(readFileSync(join(agentDir, "auth.json"), "utf8"));
     check("provider.set_key writes auth.json", auth.anthropic?.key === "sk-ant-test-123");
@@ -278,6 +341,24 @@ async function main(): Promise<number> {
       appDirect.settings?.proxy?.mode === "direct" &&
         appDirect.settings?.proxy?.url === undefined,
     );
+
+    // ---- pidock 自有设置（MCP 工具自动批准表） ----
+    await request("pidock.settings.set", { mcpApprovals: { demo: { dangerous: false }, "a-b": { t1: true } } });
+    const appApprovals = await request("pidock.settings.get");
+    check(
+      "pidock.settings mcpApprovals roundtrip",
+      appApprovals.settings?.mcpApprovals?.demo?.dangerous === false && appApprovals.settings?.mcpApprovals?.["a-b"]?.t1 === true,
+      JSON.stringify(appApprovals.settings?.mcpApprovals),
+    );
+    try {
+      await request("pidock.settings.set", { mcpApprovals: { demo: { t: "yes" } } });
+      check("pidock.settings.set rejects bad mcpApprovals", false);
+    } catch (e) {
+      check("pidock.settings.set rejects bad mcpApprovals", String(e).includes("bad_request"));
+    }
+    await request("pidock.settings.set", { mcpApprovals: {} });
+    const appCleared = await request("pidock.settings.get");
+    check("pidock.settings mcpApprovals empty clears key", appCleared.settings?.mcpApprovals === undefined);
 
     // ---- 安装：本地导入（插件单文件 + 技能压缩包） ----
     const importDir = mkdtempSync(join(tmpdir(), "pidock-import-"));

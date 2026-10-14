@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { dirname, join, resolve, sep } from "node:path";
 import { getAgentDir, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { RpcError, type SessionPool } from "./pool.js";
+import { probeServerEntry, readMcpServers, type ProbeResult } from "./mcp-probe.js";
 import { downloadToBuffer, BINARY_EXTENSIONS, extractArchive, installSkillFromBuffer, looksBinary, sanitizeInstallName } from "./archive.js";
 
 /**
@@ -449,6 +450,23 @@ export class ConfigService {
     return { ok: true };
   }
 
+  /**
+   * 探测 MCP 服务器：临时连接一次，返回 serverInfo 与工具清单。
+   * entry 缺省时按 name 读 mcp.json；entry 传入时可探测未保存的表单草稿。
+   */
+  async mcpProbe(params: { name?: string; entry?: unknown }): Promise<ProbeResult> {
+    let entry = params.entry;
+    if (entry === undefined || entry === null) {
+      const name = String(params.name ?? "").trim();
+      if (!name) throw new RpcError("bad_request", "name or entry is required");
+      entry = readMcpServers()[name];
+      if (!entry || typeof entry !== "object") {
+        throw new RpcError("not_found", `MCP server "${name}" not found`);
+      }
+    }
+    return probeServerEntry(entry);
+  }
+
   // --------------------------------------------------------------- AGENTS.md
   // 「记忆」页：pi 每次会话都会把 ~/.pi/agent/AGENTS.md 作为长期上下文注入，
   // 这里提供该文件的读写，让用户在桌面端维护跨项目记忆。
@@ -485,9 +503,9 @@ export class ConfigService {
     return { settings: readJson(path) ?? {}, path };
   }
 
-  appSettingsSet(params: { proxy?: Json; ask?: Json }): { ok: true; path: string } {
-    if (params.proxy === undefined && params.ask === undefined) {
-      throw new RpcError("bad_request", "nothing to set (expect proxy and/or ask)");
+  appSettingsSet(params: { proxy?: Json; ask?: Json; mcpApprovals?: Json }): { ok: true; path: string } {
+    if (params.proxy === undefined && params.ask === undefined && params.mcpApprovals === undefined) {
+      throw new RpcError("bad_request", "nothing to set (expect proxy, ask and/or mcpApprovals)");
     }
     const path = ConfigService.pidockSettingsPath();
     mkdirSync(dirname(path), { recursive: true });
@@ -533,6 +551,25 @@ export class ConfigService {
         throw new RpcError("bad_request", "ask.timeoutSec must be a number in [0, 3600] (0 = wait forever)");
       }
       settings.ask = { timeoutSec: Math.round(sec) };
+    }
+    if (params.mcpApprovals !== undefined) {
+      const table = params.mcpApprovals;
+      if (!table || typeof table !== "object" || Array.isArray(table)) {
+        throw new RpcError("bad_request", "mcpApprovals must be an object");
+      }
+      for (const [server, per] of Object.entries(table as Record<string, unknown>)) {
+        if (!per || typeof per !== "object" || Array.isArray(per)) {
+          throw new RpcError("bad_request", `mcpApprovals.${server} must be an object`);
+        }
+        for (const [tool, v] of Object.entries(per as Record<string, unknown>)) {
+          if (typeof v !== "boolean") {
+            throw new RpcError("bad_request", `mcpApprovals.${server}.${tool} must be a boolean`);
+          }
+        }
+      }
+      // 空表直接删键，保持 settings.json 干净
+      if (Object.keys(table as object).length === 0) delete settings.mcpApprovals;
+      else settings.mcpApprovals = table;
     }
     writeJson(path, settings);
     return { ok: true, path };

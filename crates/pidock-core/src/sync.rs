@@ -537,6 +537,7 @@ async fn execute_command(
         | "config.skills.install"
         | "config.mcp.get"
         | "config.mcp.set"
+        | "config.mcp.probe"
         | "config.agents.read"
         | "config.agents.write"
         | "stats.usage"

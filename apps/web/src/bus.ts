@@ -339,6 +339,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
         case "config.skills.install":
         case "config.mcp.get":
         case "config.mcp.set":
+        case "config.mcp.probe":
         case "config.agents.read":
         case "config.agents.write":
         case "stats.usage":

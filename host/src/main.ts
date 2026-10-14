@@ -76,6 +76,7 @@ const handlers: Record<string, Handler> = {
   [Method.CONFIG_EXTENSIONS_INSTALL]: (p) => config.extensionsInstall(p),
   [Method.CONFIG_MCP_GET]: () => config.mcpGet(),
   [Method.CONFIG_MCP_SET]: (p) => config.mcpSet(p),
+  [Method.CONFIG_MCP_PROBE]: (p) => config.mcpProbe(p),
   [Method.CONFIG_AGENTS_READ]: () => config.agentsRead(),
   [Method.CONFIG_AGENTS_WRITE]: (p) => config.agentsWrite(p),
   [Method.STATS_USAGE]: (p) => pool.usageStats(p),

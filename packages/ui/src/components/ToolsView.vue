@@ -4,6 +4,7 @@ import { FILE_PICKER, type DataBus } from "../databus.js";
 import Icon from "./Icon.vue";
 import { appConfirm } from "../confirm.js";
 import MdContent from "./MdContent.vue";
+import McpServerForm, { type McpFormState } from "./McpServerForm.vue";
 
 /**
  * Full main-area manager page for 插件 / 技能 / MCP，
@@ -57,24 +58,24 @@ const rows = ref<Row[]>([]);
 // ---- mcp form state ----
 const mcpPath = ref("");
 const rawConfig = ref<any>(null);
-const showForm = ref(false);
-const formMode = ref<"add" | "edit">("add");
-const formKey = ref(""); // original server name when editing
-const fName = ref("");
-const fType = ref<"stdio" | "http" | "streamable-http">("stdio");
-const fCommand = ref("");
-const fArgs = ref("");
-const fUrl = ref("");
-const fEnv = ref("");
-const advancedOpen = ref(false);
+const draftProbe = ref<ProbeState | null>(null); // 「测试连接」对当前表单草稿（未保存）的结果
+const draftProbing = ref(false);
 
-// pi 官方约定（pi.dev/docs/mcp）：type 取 stdio | http | streamable-http，
-// SSE 不受支持；enabled: false 表示保留条目但不连接
-const typeOptions = [
-  { value: "stdio", label: "标准输入 / 输出 (stdio)" },
-  { value: "http", label: "HTTP (http)" },
-  { value: "streamable-http", label: "可流式传输的 HTTP (streamable-http)" },
-];
+function emptyMcpForm(): McpFormState {
+  return {
+    name: "",
+    type: "stdio",
+    command: "",
+    args: "",
+    url: "",
+    env: "",
+    headers: "",
+    description: "",
+    timeout: "",
+    cwd: "",
+    advancedOpen: false,
+  };
+}
 
 let flashTimer: ReturnType<typeof setTimeout> | undefined;
 function flash(msg: string): void {
@@ -197,6 +198,7 @@ async function load(): Promise<void> {
       rawConfig.value = r.config ?? {};
       mcpPath.value = r.path ?? "";
       rows.value = parseMcp(rawConfig.value);
+      void loadApprovals();
     }
   } catch (err) {
     flash(String(err));
@@ -214,6 +216,8 @@ watch(
     tab.value = "全部";
     closeDetail();
     closeExtDetail();
+    closeMcpDetail();
+    probeCache.value = {};
     void load();
   },
 );
@@ -409,75 +413,337 @@ function parseEnv(text: string): Record<string, string> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
-function openAdd(): void {
-  formMode.value = "add";
-  formKey.value = "";
-  fName.value = "";
-  fType.value = "stdio";
-  fCommand.value = "";
-  fArgs.value = "";
-  fUrl.value = "";
-  fEnv.value = "";
-  advancedOpen.value = false;
-  showForm.value = true;
-}
-
-function openEdit(it: Row): void {
-  const v = it.entry ?? {};
-  formMode.value = "edit";
-  formKey.value = it.name;
-  fName.value = it.name;
-  fType.value = v.command
-    ? "stdio"
-    : v.url
-      ? v.type === "streamable-http"
-        ? "streamable-http"
-        : "http"
-      : "stdio";
-  fCommand.value = v.command ?? "";
-  fArgs.value = Array.isArray(v.args) ? v.args.join("\n") : "";
-  fUrl.value = v.url ?? "";
-  fEnv.value = envToLines(v.env);
-  advancedOpen.value = !!fEnv.value;
-  showForm.value = true;
-}
-
-async function saveForm(): Promise<void> {
-  const name = fName.value.trim();
-  if (!name) return flash("名称不能为空");
-  const container = serversContainer(rawConfig.value ?? {}, true)!;
-  if (formMode.value === "add" && container[name]) return flash(`服务器「${name}」已存在`);
-  if (formMode.value === "edit" && formKey.value !== name && container[name]) {
-    return flash(`服务器「${name}」已存在`);
+/** 按 shell 规则切分整行命令（引号内空格不切分），用于「命令」框直接粘贴 "obscura mcp" 这类完整命令行 */
+function splitCommandLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: '"' | "'" | null = null;
+  for (const ch of line.trim()) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === " " || ch === "\t") {
+      if (cur) {
+        out.push(cur);
+        cur = "";
+      }
+    } else {
+      cur += ch;
+    }
   }
-  if (fType.value === "stdio" && !fCommand.value.trim()) return flash("命令不能为空");
-  if (fType.value !== "stdio" && !fUrl.value.trim()) return flash("URL 不能为空");
+  if (cur) out.push(cur);
+  return out;
+}
 
-  // keep unknown extra keys of the original entry, replace the managed ones
-  const old = formMode.value === "edit" ? { ...(container[formKey.value] ?? {}) } : {};
-  for (const k of ["command", "args", "env", "url", "type"]) delete old[k];
+/** mcp.json 条目 → 表单状态（详情页与编辑共用） */
+function formStateFromEntry(name: string, v: any): McpFormState {
+  const e = v && typeof v === "object" ? v : {};
+  const env = envToLines(e.env);
+  return {
+    name,
+    type: e.command ? "stdio" : e.url ? (e.type === "streamable-http" ? "streamable-http" : "http") : "stdio",
+    command: typeof e.command === "string" ? e.command : "",
+    args: Array.isArray(e.args) ? e.args.join("\n") : "",
+    url: typeof e.url === "string" ? e.url : "",
+    env,
+    headers: envToLines(e.headers),
+    description: typeof e.description === "string" ? e.description : "",
+    timeout: typeof e.timeout === "number" && Number.isFinite(e.timeout) ? String(e.timeout) : "",
+    cwd: typeof e.cwd === "string" ? e.cwd : "",
+    // stdio 的超时/工作目录/环境变量都收在高级设置里，有值时展开
+    advancedOpen: !!env || !!(typeof e.cwd === "string" && e.cwd) || (typeof e.timeout === "number" && Number.isFinite(e.timeout)),
+  };
+}
+
+/** 本表单托管的条目键；其余键（oauth/exposure 等手工配置）原样保留 */
+const MANAGED_ENTRY_KEYS = ["command", "args", "env", "url", "type", "description", "timeout", "headers", "cwd"];
+
+/** 表单状态 → mcp.json 条目；空值键不写入 */
+function entryFromForm(state: McpFormState, oldEntry: any): any {
+  const old = oldEntry && typeof oldEntry === "object" ? { ...oldEntry } : {};
+  for (const k of MANAGED_ENTRY_KEYS) delete old[k];
   const entry: any = { ...old };
-  if (fType.value === "stdio") {
-    entry.command = fCommand.value.trim();
-    const args = parseLines(fArgs.value);
+  if (state.description.trim()) entry.description = state.description.trim();
+  const sec = Number(state.timeout.trim());
+  if (state.timeout.trim() && Number.isFinite(sec) && sec > 0) entry.timeout = sec;
+  if (state.type === "stdio") {
+    // 「命令」允许整行粘贴（如 "obscura mcp"）：首 token 为可执行文件，其余并入 args
+    const parts = splitCommandLine(state.command);
+    entry.command = parts[0] ?? "";
+    const args = [...parts.slice(1), ...parseLines(state.args)];
     if (args.length) entry.args = args;
-    const env = parseEnv(fEnv.value);
+    const env = parseEnv(state.env);
     if (env) entry.env = env;
+    if (state.cwd.trim()) entry.cwd = state.cwd.trim();
   } else {
-    entry.url = fUrl.value.trim();
-    entry.type = fType.value;
+    entry.url = state.url.trim();
+    entry.type = state.type;
+    const headers = parseEnv(state.headers);
+    if (headers) entry.headers = headers;
   }
+  return entry;
+}
 
-  if (formMode.value === "edit" && formKey.value !== name) delete container[formKey.value];
-  container[name] = entry;
+/** 共用保存：校验 → 写入容器 → config.mcp.set 落盘 → 重载列表；返回错误信息或 null */
+async function saveMcpEntry(state: McpFormState, originalKey: string): Promise<string | null> {
+  const name = state.name.trim();
+  if (!name) return "名称不能为空";
+  const container = serversContainer(rawConfig.value ?? {}, true)!;
+  if (originalKey !== name && container[name]) return `服务器「${name}」已存在`;
+  if (originalKey && !container[originalKey]) return `服务器「${originalKey}」不存在，请刷新后重试`;
+  if (state.type === "stdio" && !state.command.trim()) return "命令不能为空";
+  if (state.type !== "stdio" && !state.url.trim()) return "URL 不能为空";
+  container[name] = entryFromForm(state, originalKey ? container[originalKey] : undefined);
+  if (originalKey && originalKey !== name) delete container[originalKey];
   try {
     await props.bus.request("config.mcp.set", { config: rawConfig.value });
-    flash(formMode.value === "add" ? `已添加「${name}」` : `已保存「${name}」`);
-    showForm.value = false;
-    await load();
+  } catch (err) {
+    return String(err);
+  }
+  await load();
+  return null;
+}
+
+function openMcpAdd(): void {
+  // 添加与编辑共用详情页；isNew 模式下 mcpDetailName 为空串，保存后回填真名
+  mcpDetailName.value = "";
+  mcpDetailIsNew.value = true;
+  mcpDetailTab.value = "general";
+  toolFilter.value = "";
+  expandedTools.value = new Set();
+  detailForm.value = emptyMcpForm();
+  draftProbe.value = null;
+}
+
+/** 「测试连接」：用当前表单草稿（未保存）探测 */
+async function probeDraft(): Promise<void> {
+  if (draftProbing.value) return;
+  if (detailForm.value.type === "stdio" && !detailForm.value.command.trim()) return flash("请先填写命令");
+  if (detailForm.value.type !== "stdio" && !detailForm.value.url.trim()) return flash("请先填写 URL");
+  draftProbing.value = true;
+  draftProbe.value = { status: "probing" };
+  try {
+    const r = await props.bus.request("config.mcp.probe", {
+      name: detailForm.value.name.trim() || "draft",
+      entry: entryFromForm(detailForm.value, undefined),
+    });
+    draftProbe.value = probeStateFrom(r);
+  } catch (err) {
+    draftProbe.value = { status: "error", error: String(err) };
+  } finally {
+    draftProbing.value = false;
+  }
+}
+
+// ---- mcp 服务器详情页（通用 / 工具标签 + 探测 + 自动批准） ----
+
+interface ProbeState {
+  status: "probing" | "ok" | "error";
+  version?: string;
+  serverName?: string;
+  tools?: Array<{ name: string; description: string; inputSchema?: unknown }>;
+  error?: string;
+  needsAuth?: boolean;
+}
+
+function probeStateFrom(r: any): ProbeState {
+  if (r?.ok) {
+    return {
+      status: "ok",
+      version: r.serverInfo?.version ? String(r.serverInfo.version) : "",
+      serverName: r.serverInfo?.name ? String(r.serverInfo.name) : "",
+      tools: Array.isArray(r.tools) ? r.tools : [],
+    };
+  }
+  return { status: "error", error: String(r?.error ?? "连接失败"), needsAuth: !!r?.needsAuth };
+}
+
+/** 探测结果缓存（进程内），键为服务器名 */
+const probeCache = ref<Record<string, ProbeState>>({});
+const probeBusyName = ref("");
+
+async function probeServer(name: string): Promise<void> {
+  if (probeBusyName.value) return;
+  probeBusyName.value = name;
+  const probing: Record<string, ProbeState> = { ...probeCache.value };
+  probing[name] = { status: "probing" };
+  probeCache.value = probing;
+  try {
+    const r = await props.bus.request("config.mcp.probe", { name });
+    const next: Record<string, ProbeState> = { ...probeCache.value };
+    next[name] = probeStateFrom(r);
+    probeCache.value = next;
+  } catch (err) {
+    const next: Record<string, ProbeState> = { ...probeCache.value };
+    next[name] = { status: "error", error: String(err) };
+    probeCache.value = next;
+  } finally {
+    probeBusyName.value = "";
+  }
+}
+
+// ---- 每工具自动批准（pidock settings.json 的 mcpApprovals，缺省 = 自动批准） ----
+const approvals = ref<Record<string, Record<string, boolean>>>({});
+
+async function loadApprovals(): Promise<void> {
+  try {
+    const r = await props.bus.request("pidock.settings.get", {});
+    approvals.value = r?.settings?.mcpApprovals ?? {};
+  } catch {
+    approvals.value = {};
+  }
+}
+
+function isAutoApproved(server: string, tool: string): boolean {
+  return approvals.value[server]?.[tool] !== false;
+}
+
+async function setAutoApproved(server: string, tool: string, allowed: boolean): Promise<void> {
+  const next: Record<string, Record<string, boolean>> = {};
+  for (const [s, per] of Object.entries(approvals.value)) next[s] = { ...per };
+  const per = { ...(next[server] ?? {}) };
+  if (allowed) delete per[tool];
+  else per[tool] = false;
+  if (Object.keys(per).length) next[server] = per;
+  else delete next[server];
+  approvals.value = next;
+  try {
+    await props.bus.request("pidock.settings.set", { mcpApprovals: next });
+    flash(allowed ? `「${tool}」已恢复自动批准` : `「${tool}」将不再自动批准，调用时请求确认`);
   } catch (err) {
     flash(String(err));
+    await loadApprovals(); // 写盘失败回滚到落盘状态
   }
+}
+
+// ---- mcp 详情页状态（添加与编辑共用；isNew = 新建未保存） ----
+const mcpDetailName = ref<string | null>(null);
+const mcpDetailIsNew = ref(false);
+const mcpDetailTab = ref<"general" | "tools">("general");
+const detailForm = ref<McpFormState>(emptyMcpForm());
+const detailSaving = ref(false);
+const toolFilter = ref("");
+
+const mcpDetailRow = computed<Row | null>(() =>
+  mcpDetailName.value ? rows.value.find((r) => r.name === mcpDetailName.value) ?? null : null,
+);
+/** 详情页（新建/编辑）打开时整页替换：隐藏列表页头（标题/路径/搜索框） */
+const mcpDetailOpen = computed(() => props.kind === "mcp" && mcpDetailName.value !== null);
+const mcpProbeState = computed<ProbeState | undefined>(() =>
+  mcpDetailName.value ? probeCache.value[mcpDetailName.value] : undefined,
+);
+const mcpToolCount = computed(() =>
+  mcpProbeState.value?.status === "ok" ? mcpProbeState.value.tools?.length ?? 0 : 0,
+);
+const connText = computed(() => {
+  const s = mcpProbeState.value;
+  if (!s || s.status === "probing") return "探测中…";
+  if (s.status === "ok") return "已连接";
+  return s.needsAuth ? "需要认证" : "未连接";
+});
+const connClass = computed(() => {
+  const s = mcpProbeState.value;
+  return s?.status === "ok" ? "on" : s?.needsAuth ? "warn" : "err";
+});
+const detailTools = computed(() => {
+  const s = mcpProbeState.value;
+  if (!s || s.status !== "ok" || !s.tools) return [];
+  const f = toolFilter.value.trim().toLowerCase();
+  return f ? s.tools.filter((t) => `${t.name} ${t.description}`.toLowerCase().includes(f)) : s.tools;
+});
+
+/** 展开了参数面板的工具名集合（详情页切换时重置） */
+const expandedTools = ref<Set<string>>(new Set());
+
+function toggleToolExpand(name: string): void {
+  const next = new Set(expandedTools.value);
+  if (next.has(name)) next.delete(name);
+  else next.add(name);
+  expandedTools.value = next;
+}
+
+interface ToolParam {
+  name: string;
+  type: string;
+  description: string;
+  required: boolean;
+  enums: string[];
+  defaultValue?: string;
+}
+
+const MAX_ENUM_SHOWN = 16;
+
+/** 把 MCP 工具的 JSON Schema inputSchema 摊平成参数行（仅顶层属性；object/array 类型不再下钻） */
+function toolParams(t: { inputSchema?: unknown }): ToolParam[] {
+  const schema = t.inputSchema as Record<string, any> | undefined;
+  const props = schema?.properties;
+  if (!props || typeof props !== "object" || Array.isArray(props)) return [];
+  const required: unknown[] = Array.isArray(schema.required) ? schema.required : [];
+  return Object.entries(props as Record<string, any>).map(([name, s]) => {
+    const type = Array.isArray(s?.type)
+      ? s.type.join("|")
+      : typeof s?.type === "string"
+        ? s.type
+        : s?.anyOf || s?.oneOf
+          ? "any"
+          : "unknown";
+    const rawEnum: unknown[] | undefined = Array.isArray(s?.enum) ? (s.enum as unknown[]) : undefined;
+    const enums = rawEnum ? rawEnum.slice(0, MAX_ENUM_SHOWN).map((v: unknown) => String(v)) : [];
+    const d = s?.default;
+    return {
+      name,
+      type,
+      description: typeof s?.description === "string" ? s.description.slice(0, 300) : "",
+      required: required.includes(name),
+      enums,
+      defaultValue: d === undefined ? undefined : typeof d === "string" ? d : JSON.stringify(d),
+    };
+  });
+}
+
+function openMcpDetail(it: Row): void {
+  mcpDetailName.value = it.name;
+  mcpDetailIsNew.value = false;
+  mcpDetailTab.value = "general";
+  toolFilter.value = "";
+  expandedTools.value = new Set();
+  draftProbe.value = null;
+  detailForm.value = formStateFromEntry(it.name, it.entry);
+  if (!probeCache.value[it.name]) void probeServer(it.name);
+}
+
+function closeMcpDetail(): void {
+  mcpDetailName.value = null;
+  mcpDetailIsNew.value = false;
+}
+
+async function saveDetail(): Promise<void> {
+  const original = mcpDetailIsNew.value ? "" : mcpDetailName.value ?? "";
+  detailSaving.value = true;
+  const err = await saveMcpEntry(detailForm.value, original);
+  detailSaving.value = false;
+  if (err) return flash(err);
+  const newName = detailForm.value.name.trim();
+  if (mcpDetailIsNew.value) {
+    // 新建保存：详情转正为该服务器并直接探测工具
+    mcpDetailName.value = newName;
+    mcpDetailIsNew.value = false;
+    draftProbe.value = null;
+    mcpDetailTab.value = "tools";
+    void probeServer(newName);
+    flash(`已添加「${newName}」，改动对新会话生效`);
+    return;
+  }
+  if (newName !== original) {
+    // 改名后行已重建，详情跟随新名，探测缓存一并迁移
+    const moved: Record<string, ProbeState> = {};
+    for (const [k, v] of Object.entries(probeCache.value)) moved[k === original ? newName : k] = v;
+    probeCache.value = moved;
+    mcpDetailName.value = newName;
+  }
+  flash("已保存，改动对新会话生效");
 }
 
 async function removeServer(it: Row): Promise<void> {
@@ -488,6 +754,7 @@ async function removeServer(it: Row): Promise<void> {
       delete container[it.name];
       await props.bus.request("config.mcp.set", { config: rawConfig.value });
       flash(`已删除「${it.name}」`);
+      if (mcpDetailName.value === it.name) closeMcpDetail();
       await load();
     }
   } catch (err) {
@@ -499,7 +766,7 @@ async function removeServer(it: Row): Promise<void> {
 <template>
   <div class="tools-page">
     <div class="wrap">
-      <header class="head">
+      <header v-if="!mcpDetailOpen" class="head">
         <div class="title-block">
           <h1>
             {{ meta[kind].title }}
@@ -512,7 +779,7 @@ async function removeServer(it: Row): Promise<void> {
           <button class="ghost-btn" title="刷新" @click="load">
             <Icon name="refresh-line" :size="15" />
           </button>
-          <button v-if="kind === 'mcp'" class="dark-btn" @click="openAdd">
+          <button v-if="kind === 'mcp'" class="dark-btn" @click="openMcpAdd">
             <Icon name="add-line" :size="14" />添加
           </button>
           <button v-if="kind === 'plugins' || kind === 'skills'" class="dark-btn" @click="openInstall">
@@ -525,7 +792,7 @@ async function removeServer(it: Row): Promise<void> {
         <button v-for="t in tabs" :key="t" :class="{ on: tab === t }" @click="tab = t">{{ t }}</button>
       </div>
 
-      <div class="search-row">
+      <div v-if="!mcpDetailOpen" class="search-row">
         <Icon name="search-line" :size="15" />
         <input v-model="q" :placeholder="meta[kind].placeholder" />
       </div>
@@ -622,6 +889,167 @@ async function removeServer(it: Row): Promise<void> {
         </div>
       </template>
 
+      <!-- mcp 服务器详情（新建/编辑共用）：通用 / 工具 -->
+      <template v-else-if="kind === 'mcp' && mcpDetailName !== null">
+        <header class="det-head">
+          <button class="back-btn" title="返回" @click="closeMcpDetail">
+            <Icon name="arrow-left-line" :size="16" />
+          </button>
+          <h1 class="det-title">{{ mcpDetailIsNew ? "新建 MCP 服务器" : mcpDetailRow?.name }}</h1>
+          <template v-if="!mcpDetailIsNew && mcpDetailRow">
+            <span v-if="mcpDetailRow.type" class="type-badge">{{ mcpDetailRow.type }}</span>
+            <span v-if="mcpDetailRow.badge" class="badge">{{ mcpDetailRow.badge }}</span>
+            <span class="conn-badge" :class="connClass">{{ connText }}</span>
+            <template v-if="mcpDetailRow.enabled && mcpProbeState?.status === 'ok' && mcpProbeState?.version">
+              <span class="ver-badge">v{{ mcpProbeState?.version }}</span>
+            </template>
+            <label class="switch" :title="mcpDetailRow.enabled ? '点击停用' : '点击启用'" @click.stop>
+              <input type="checkbox" :checked="mcpDetailRow.enabled" @change="toggle(mcpDetailRow)" />
+              <span class="slider"></span>
+            </label>
+          </template>
+        </header>
+        <p v-if="!mcpDetailIsNew && mcpDetailRow?.entry?.description" class="det-desc">{{ mcpDetailRow.entry.description }}</p>
+
+        <div class="tabs">
+          <button :class="{ on: mcpDetailTab === 'general' }" @click="mcpDetailTab = 'general'">通用</button>
+          <button
+            :class="{ on: mcpDetailTab === 'tools' }"
+            :disabled="mcpDetailIsNew"
+            :title="mcpDetailIsNew ? '保存后可连接服务器并预览工具' : undefined"
+            @click="mcpDetailTab = 'tools'"
+          >
+            工具<span v-if="mcpToolCount" class="tab-count">{{ mcpToolCount }}</span>
+          </button>
+        </div>
+
+        <!-- 通用：连接配置 -->
+        <div v-if="mcpDetailTab === 'general'" class="mcp-form-wrap">
+          <McpServerForm v-model="detailForm" />
+          <div v-if="draftProbe" class="probe-row draft">
+            <template v-if="draftProbing || draftProbe.status === 'probing'">
+              <span class="state small inline">探测中…</span>
+            </template>
+            <template v-else-if="draftProbe.status === 'ok'">
+              <span class="conn-badge on">已连接</span>
+              <span class="probe-meta">
+                {{ draftProbe.serverName || "服务器" }}<template v-if="draftProbe.version">
+                  · v{{ draftProbe.version }}</template
+                >
+                · {{ draftProbe.tools?.length ?? 0 }} 个工具
+              </span>
+            </template>
+            <template v-else>
+              <span class="conn-badge err">{{ draftProbe.needsAuth ? "需要认证" : "连接失败" }}</span>
+              <span class="probe-meta err">{{ draftProbe.error }}</span>
+            </template>
+          </div>
+          <div class="form-actions">
+            <button class="ghost-text" :disabled="draftProbing" @click="probeDraft">测试连接</button>
+            <button class="dark-btn" :disabled="detailSaving" @click="saveDetail">
+              {{ detailSaving ? "保存中…" : mcpDetailIsNew ? "添加" : "保存" }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 工具：探测结果 + 每工具自动批准 -->
+        <div v-else class="tools-tab">
+          <template v-if="mcpDetailIsNew || !mcpDetailRow">
+            <p class="hint">先在「通用」中保存配置，保存后会自动连接服务器并预览工具。</p>
+          </template>
+          <template v-else>
+            <div class="probe-row">
+              <button class="ghost-btn" :disabled="!!probeBusyName" title="重新探测" @click="probeServer(mcpDetailRow.name)">
+                <Icon name="refresh-line" :size="14" />
+              </button>
+              <template v-if="!mcpProbeState || mcpProbeState.status === 'probing'">
+                <span class="state small inline">探测中…</span>
+              </template>
+              <template v-else-if="mcpProbeState.status === 'ok'">
+                <span class="conn-badge on">已连接</span>
+                <span class="probe-meta">
+                  {{ mcpProbeState.serverName || mcpDetailRow.name }}<template v-if="mcpProbeState.version">
+                    · v{{ mcpProbeState.version }}</template
+                  >
+                  · {{ mcpProbeState.tools?.length ?? 0 }} 个工具
+                </span>
+              </template>
+              <template v-else>
+                <span class="conn-badge err">{{ mcpProbeState.needsAuth ? "需要认证" : "连接失败" }}</span>
+                <span class="probe-meta err">{{ mcpProbeState.error }}</span>
+              </template>
+            </div>
+
+            <template v-if="mcpProbeState?.status === 'ok'">
+              <div class="search-row tool-search">
+                <Icon name="search-line" :size="15" />
+                <input v-model="toolFilter" placeholder="过滤工具" />
+              </div>
+              <div class="tool-head">
+                <span>可用工具</span>
+                <span>自动批准</span>
+              </div>
+              <div v-for="t in detailTools" :key="t.name" class="tool-item">
+                <div class="tool-row" @click="toggleToolExpand(t.name)">
+                  <span class="tool-chev" :class="{ open: expandedTools.has(t.name) }" title="参数">
+                    <Icon name="arrow-down-s-line" :size="14" />
+                  </span>
+                  <div class="tool-info">
+                    <b>{{ t.name }}</b>
+                    <div v-if="t.description" class="sub-text">{{ t.description }}</div>
+                  </div>
+                  <label
+                    class="switch"
+                    :title="isAutoApproved(mcpDetailRow.name, t.name) ? '自动批准已开启' : '自动批准已关闭，调用时将请求确认'"
+                    @click.stop
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="isAutoApproved(mcpDetailRow.name, t.name)"
+                      @change="setAutoApproved(mcpDetailRow.name, t.name, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+                <div v-if="expandedTools.has(t.name)" class="tool-params">
+                  <template v-if="toolParams(t).length">
+                    <div class="tp-head">参数（{{ toolParams(t).length }}）</div>
+                    <div v-for="p in toolParams(t)" :key="p.name" class="tp-row">
+                      <div class="tp-name">
+                        <b>{{ p.name }}</b>
+                        <i v-if="p.required" title="必填">*</i>
+                        <span class="tp-type">{{ p.type }}</span>
+                      </div>
+                      <div v-if="p.description" class="tp-desc">{{ p.description }}</div>
+                      <div v-if="p.enums.length" class="tp-enum">
+                        <span class="tp-enum-label">允许的值</span>
+                        <code v-for="v in p.enums" :key="v">{{ v }}</code>
+                      </div>
+                      <div v-if="p.defaultValue !== undefined" class="tp-enum">
+                        <span class="tp-enum-label">默认</span>
+                        <code>{{ p.defaultValue }}</code>
+                      </div>
+                    </div>
+                  </template>
+                  <div v-else class="tp-empty">该工具无需参数</div>
+                </div>
+              </div>
+              <div v-if="!detailTools.length" class="state small">
+                {{ toolFilter ? "没有匹配的工具" : "服务器未提供工具" }}
+              </div>
+              <p class="hint">关闭自动批准后，会话内调用该工具会先弹出确认；改动立即对进行中的会话生效。</p>
+            </template>
+            <template v-else-if="mcpProbeState?.status === 'error'">
+              <p class="hint">
+                无法获取工具列表，请检查配置或网络后点击刷新重试。<template v-if="mcpProbeState.needsAuth">
+                  若服务器需要 Bearer token，请在「通用」中填写请求头。</template
+                >
+              </p>
+            </template>
+          </template>
+        </div>
+      </template>
+
       <template v-else>
         <div v-if="loading" class="state">加载中…</div>
         <div v-else class="list">
@@ -631,9 +1059,17 @@ async function removeServer(it: Row): Promise<void> {
             class="row"
             :class="{
               dim: kind === 'mcp' && !it.enabled,
-              clickable: kind === 'skills' || kind === 'plugins',
+              clickable: kind === 'skills' || kind === 'plugins' || kind === 'mcp',
             }"
-            @click="kind === 'skills' ? openDetail(it) : kind === 'plugins' ? openExtDetail(it) : undefined"
+            @click="
+              kind === 'skills'
+                ? openDetail(it)
+                : kind === 'plugins'
+                  ? openExtDetail(it)
+                  : kind === 'mcp'
+                    ? openMcpDetail(it)
+                    : undefined
+            "
           >
             <span class="tile"><Icon :name="meta[kind].icon" :size="18" /></span>
             <div class="info">
@@ -642,6 +1078,9 @@ async function removeServer(it: Row): Promise<void> {
                 <b>{{ it.name }}</b>
                 <span v-if="it.badge" class="badge">{{ it.badge }}</span>
                 <span v-if="it.type" class="type-badge">{{ it.type }}</span>
+                <span v-if="kind === 'mcp' && probeCache[it.name]?.status === 'ok' && probeCache[it.name]?.version" class="ver-badge">
+                  {{ probeCache[it.name]?.version }}
+                </span>
               </div>
               <div class="sub-text" :title="it.sub">{{ it.sub }}</div>
             </div>
@@ -650,7 +1089,7 @@ async function removeServer(it: Row): Promise<void> {
               <span class="slider"></span>
             </label>
             <template v-if="kind === 'mcp'">
-              <button class="row-btn" title="编辑" @click.stop="openEdit(it)">
+              <button class="row-btn" title="编辑" @click.stop="openMcpDetail(it)">
                 <Icon name="edit-2-line" :size="14" />
               </button>
               <button class="row-btn danger" title="删除" @click.stop="removeServer(it)">
@@ -667,61 +1106,6 @@ async function removeServer(it: Row): Promise<void> {
       <div v-if="notice" class="notice">{{ notice }}</div>
     </div>
 
-    <!-- mcp add/edit dialog -->
-    <div v-if="showForm" class="dialog-mask" @click.self="showForm = false">
-      <div class="dialog">
-        <header class="d-head">
-          <h2>{{ formMode === "add" ? "添加 MCP 服务器" : "编辑 MCP 服务器" }}</h2>
-          <button class="d-close" title="关闭" @click="showForm = false">
-            <Icon name="close-line" :size="15" />
-          </button>
-        </header>
-        <p class="d-sub">填写连接信息后保存，内容写入 mcp.json；其余配置可稍后直接编辑该文件调整。</p>
-
-        <div class="field">
-          <label>名称 <i>*</i></label>
-          <input v-model="fName" placeholder="名称" @keydown.enter="saveForm" />
-        </div>
-
-        <div class="field">
-          <label>类型 <i>*</i></label>
-          <select v-model="fType">
-            <option v-for="o in typeOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </select>
-        </div>
-
-        <template v-if="fType === 'stdio'">
-          <div class="field">
-            <label>命令 <i>*</i></label>
-            <input v-model="fCommand" placeholder="uvx or npx" @keydown.enter="saveForm" />
-          </div>
-          <div class="field">
-            <label>参数</label>
-            <textarea v-model="fArgs" rows="3" placeholder="arg1&#10;arg2" spellcheck="false"></textarea>
-          </div>
-          <div class="advanced">
-            <button class="adv-head" @click="advancedOpen = !advancedOpen">
-              高级设置
-              <span class="adv-chev" :class="{ open: advancedOpen }"><Icon name="arrow-down-s-line" :size="13" /></span>
-            </button>
-            <div v-if="advancedOpen" class="field">
-              <label>环境变量</label>
-              <textarea v-model="fEnv" rows="3" placeholder="KEY=value&#10;ANOTHER_KEY=value" spellcheck="false"></textarea>
-            </div>
-          </div>
-        </template>
-
-        <div v-else class="field">
-          <label>URL <i>*</i></label>
-          <input v-model="fUrl" placeholder="http://host:port/mcp" @keydown.enter="saveForm" />
-        </div>
-
-        <footer class="d-foot">
-          <button class="cancel" @click="showForm = false">取消</button>
-          <button class="dark-btn" @click="saveForm">{{ formMode === "add" ? "添加" : "保存" }}</button>
-        </footer>
-      </div>
-    </div>
     <!-- install dialog (skills / plugins) -->
     <div v-if="installOpen" class="dialog-mask" @click.self="installOpen = false">
       <div class="dialog">
@@ -873,6 +1257,10 @@ h1 {
 .tabs button.on {
   color: var(--pd-text);
   border-bottom-color: var(--pd-accent);
+}
+.tabs button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .search-row {
@@ -1340,6 +1728,187 @@ h1 {
   cursor: pointer;
 }
 .cancel:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+
+/* ---- mcp 详情页 / 探测 / 工具列表 ---- */
+.ver-badge {
+  font-family: var(--pd-mono);
+  font-size: calc(10.5px * var(--pd-font-scale));
+  color: var(--pd-text-3);
+  background: var(--pd-bg-hover);
+  border-radius: 5px;
+  padding: 1.5px 7px;
+  flex: none;
+}
+.conn-badge {
+  font-size: calc(11px * var(--pd-font-scale));
+  border-radius: 999px;
+  padding: 2px 10px;
+  flex: none;
+  background: var(--pd-bg-hover);
+  color: var(--pd-text-3);
+  white-space: nowrap;
+}
+.conn-badge.on { background: var(--pd-green-soft); color: var(--pd-green-text); }
+.conn-badge.err { background: var(--pd-red-soft); color: var(--pd-red-text); }
+.conn-badge.warn { background: var(--pd-accent-soft); color: var(--pd-accent-text); }
+.mcp-form-wrap { margin-top: 4px; max-width: 660px; }
+.form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.probe-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.probe-row.draft { margin-top: 4px; }
+.probe-meta {
+  font-size: calc(12.5px * var(--pd-font-scale));
+  color: var(--pd-text-3);
+  word-break: break-all;
+  min-width: 0;
+}
+.probe-meta.err { color: var(--pd-red-text); }
+.state.small.inline { padding: 0; }
+.tab-count {
+  margin-left: 6px;
+  font-size: calc(11px * var(--pd-font-scale));
+  color: var(--pd-text-4);
+}
+.tool-search { margin-top: 16px; }
+.tool-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 0 4px 8px;
+  border-bottom: 1px solid var(--pd-border-soft);
+  color: var(--pd-text-3);
+  font-size: calc(12px * var(--pd-font-scale));
+}
+.tool-item {
+  border-bottom: 1px solid var(--pd-border-soft);
+}
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 4px;
+  cursor: pointer;
+}
+.tool-chev {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--pd-text-4);
+  transform: rotate(-90deg);
+  transition: transform 0.12s, color 0.12s;
+}
+.tool-chev.open {
+  transform: rotate(0);
+  color: var(--pd-text-2);
+}
+.tool-params {
+  padding: 0 4px 12px 32px;
+}
+.tp-head {
+  font-size: calc(12px * var(--pd-font-scale));
+  color: var(--pd-text-4);
+  margin-bottom: 6px;
+}
+.tp-row {
+  border: 1px solid var(--pd-border-soft);
+  border-radius: 8px;
+  padding: 8px 11px;
+  margin-bottom: 6px;
+}
+.tp-row:last-child { margin-bottom: 0; }
+.tp-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.tp-name b {
+  font-family: var(--pd-mono);
+  font-size: calc(12.5px * var(--pd-font-scale));
+  font-weight: 600;
+  color: var(--pd-text);
+  word-break: break-all;
+}
+.tp-name i {
+  color: var(--pd-red);
+  font-style: normal;
+  font-weight: 700;
+}
+.tp-type {
+  font-family: var(--pd-mono);
+  font-size: calc(10.5px * var(--pd-font-scale));
+  color: var(--pd-text-3);
+  background: var(--pd-bg-hover);
+  border-radius: 5px;
+  padding: 1px 7px;
+  flex: none;
+}
+.tp-desc {
+  margin-top: 4px;
+  font-size: calc(12px * var(--pd-font-scale));
+  color: var(--pd-text-3);
+  line-height: 1.55;
+  word-break: break-word;
+}
+.tp-enum {
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.tp-enum-label {
+  font-size: calc(11px * var(--pd-font-scale));
+  color: var(--pd-text-4);
+}
+.tp-enum code {
+  font-family: var(--pd-mono);
+  font-size: calc(11px * var(--pd-font-scale));
+  color: var(--pd-text-2);
+  background: var(--pd-bg-hover);
+  border-radius: 5px;
+  padding: 1px 7px;
+  word-break: break-all;
+}
+.tp-empty {
+  font-size: calc(12px * var(--pd-font-scale));
+  color: var(--pd-text-4);
+}
+.tool-info { flex: 1; min-width: 0; }
+.tool-info b {
+  color: var(--pd-text);
+  font-size: calc(13.5px * var(--pd-font-scale));
+  font-weight: 600;
+  font-family: var(--pd-mono);
+  word-break: break-all;
+}
+.tool-info .sub-text { margin-top: 3px; -webkit-line-clamp: 2; }
+.ghost-text {
+  background: none;
+  border: 1px solid var(--pd-border);
+  color: var(--pd-text-2);
+  border-radius: 9px;
+  padding: 7px 16px;
+  font-size: calc(13px * var(--pd-font-scale));
+  cursor: pointer;
+}
+.ghost-text:hover { background: var(--pd-bg-hover); color: var(--pd-text); }
+.ghost-text:disabled { opacity: 0.5; cursor: default; }
+.hint {
+  margin: 12px 0 0;
+  font-size: calc(12px * var(--pd-font-scale));
+  color: var(--pd-text-4);
+  line-height: 1.6;
+}
 
 /* ---- 手机端（≤480px），置于文件末尾以覆盖上方规则：头部换行、弹窗贴边 ---- */
 @media (max-width: 480px) {

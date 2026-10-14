@@ -213,6 +213,7 @@ pub mod method {
     pub const CONFIG_PROVIDERS_FETCH_MODELS: &str = "config.providers.fetch_models";
     pub const CONFIG_MCP_GET: &str = "config.mcp.get";
     pub const CONFIG_MCP_SET: &str = "config.mcp.set";
+    pub const CONFIG_MCP_PROBE: &str = "config.mcp.probe";
     pub const CONFIG_AGENTS_READ: &str = "config.agents.read";
     pub const CONFIG_AGENTS_WRITE: &str = "config.agents.write";
 

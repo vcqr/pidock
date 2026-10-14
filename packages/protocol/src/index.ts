@@ -431,6 +431,8 @@ export const Method = {
   CONFIG_PROVIDERS_FETCH_MODELS: "config.providers.fetch_models",
   CONFIG_MCP_GET: "config.mcp.get",
   CONFIG_MCP_SET: "config.mcp.set",
+  /** 按名称/草稿连接一次 MCP 服务器，返回 serverInfo 与工具清单（工具预览/测试连接） */
+  CONFIG_MCP_PROBE: "config.mcp.probe",
   CONFIG_AGENTS_READ: "config.agents.read",
   CONFIG_AGENTS_WRITE: "config.agents.write",
   STATS_USAGE: "stats.usage",
