@@ -15,12 +15,18 @@
     "skipLibCheck": true,
     "noEmit": true,
     "paths": {
+      "@earendil-works/pi-coding-agent/dist/cli/setup.js": [
+        "./node_modules/@earendil-works/pi-coding-agent/dist/cli/setup"
+      ],
       "@earendil-works/pi-coding-agent/dist/config.js": [
         "./node_modules/@earendil-works/pi-coding-agent/dist/config.js"
       ],
       "@earendil-works/pi-coding-agent/dist/core/output-guard.js": [
         "./node_modules/@earendil-works/pi-coding-agent/dist/core/output-guard.js"
       ],
+      "@earendil-works/pi-coding-agent/dist/main.js": [
+        "./node_modules/@earendil-works/pi-coding-agent/dist/main"
+      ]
     }
   },
   "include": [

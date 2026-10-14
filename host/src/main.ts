@@ -169,4 +169,16 @@ function main(): void {
   process.stderr.write(`pidock-host ${HOST_VERSION} ready\n`);
 }
 
-main();
+// pi CLI 透传：pidock-host 不定义任何自有命令行参数。带参数被调用时（典型：
+// pi-subagents 检测到 Bun 编译宿主后 spawn `pidock-host --no-extensions … --mode
+// rpc --extension <bootstrap>` 作后台运行器），argv 原样交给内嵌 pi 的 CLI 入口，
+// 与上游编译版 pi（同为 bun --compile 的 cli.js）行为一致；无参数时保持 PiDock
+// 多会话守护进程（sidecar/webhost/`bun src/main.ts` 均无参启动）。
+if (process.argv.slice(2).length > 0) {
+  const { setupCli } = await import("@earendil-works/pi-coding-agent/dist/cli/setup.js");
+  const { main: piMain } = await import("@earendil-works/pi-coding-agent/dist/main.js");
+  setupCli();
+  void piMain(process.argv.slice(2));
+} else {
+  main();
+}
