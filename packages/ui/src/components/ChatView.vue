@@ -5,6 +5,7 @@ import type { AgentStore, ExpertInfo, UiItem } from "../store.js";
 import { REVEAL_PATH } from "../databus.js";
 import { formatSpan, greeting, isInsideDefaultWorkspace } from "../utils/time.js";
 import FileIcon from "./FileIcon.vue";
+import { mediaKindOf } from "../fileIcons.js";
 import FilePreview from "./FilePreview.vue";
 import FilesPanel from "./FilesPanel.vue";
 import MdContent from "./MdContent.vue";
@@ -448,11 +449,16 @@ function artifactsTotalSize(files: Array<{ size: number | null }>): string {
   }
   return total > 0 ? fmtSize(total) : "";
 }
-/** 产出物预览：路径可不在项目 cwd 内，read_file 以父目录为根读文件名即可 */
+/** 产出物预览：路径可不在项目 cwd 内，read_file 以父目录为根读文件名即可；
+ * 图片/音频/视频按扩展名走 b64 读取，FilePreview 以媒体组件渲染 */
 async function openArtifactPreview(path: string): Promise<void> {
   if (!previewTabs.value.some((t) => t.path === path)) {
     try {
-      const r = await props.store.readWorkspaceFile(dirnameOf(path), baseOf(path));
+      const r = await props.store.readWorkspaceFile(
+        dirnameOf(path),
+        baseOf(path),
+        mediaKindOf(path) !== null,
+      );
       previewTabs.value.push({ ...r, path });
       if (previewTabs.value.length > PREVIEW_MAX_TABS) previewTabs.value.shift();
     } catch (err) {

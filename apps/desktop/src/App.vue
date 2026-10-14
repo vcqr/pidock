@@ -182,14 +182,19 @@ function onFolderPickCancel(): void {
   folderPick.value = null;
 }
 
-// 在系统文件管理器中打开目录（会话右键菜单）
-provide(REVEAL_PATH, async (path: string) => {
-  try {
-    await ipc("reveal_path", { path });
-  } catch {
-    // 打开失败时静默（如路径已不存在 / webhost 模式不支持）
-  }
-});
+// 在系统文件管理器中打开/定位（文件卡片与产出物卡的「在目录中打开」）：
+// 仅 Tauri 壳提供，浏览器（webhost）模式不注入——UI 端按 null 隐藏按钮；
+// 失败经标题栏 lastError 上报（如路径已不存在），不静默吞掉
+if (isTauri) {
+  provide(REVEAL_PATH, async (path: string) => {
+    try {
+      await ipc("reveal_path", { path });
+    } catch (err) {
+      const s = store.value;
+      if (s) s.lastError = err instanceof Error ? err.message : String(err);
+    }
+  });
+}
 
 // 外部链接走系统默认浏览器：Tauri 壳经 open_external 命令（Rust 侧只放行 http/https/mailto）；
 // 浏览器模式（webhost / vite dev）新标签页打开

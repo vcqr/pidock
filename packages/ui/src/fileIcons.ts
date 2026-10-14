@@ -295,3 +295,12 @@ export function fileIconName(path: string, isDir = false): string {
   }
   return "file";
 }
+
+/** 预览用多媒体判定：按扩展名归类（与图标分类一致），非多媒体返回 null（走文本预览） */
+export function mediaKindOf(path: string): "image" | "video" | "audio" | null {
+  const base = path.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const kind = EXT_NAMES[base.slice(dot + 1)];
+  return kind === "image" || kind === "video" || kind === "audio" ? kind : null;
+}

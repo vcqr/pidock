@@ -43,6 +43,20 @@ fn open_external(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// reveal 目标解析：路径存在照用；文件已不存在（会话产物被清理、快照滞后等）
+/// 退回其所在目录——目录还在就打开目录，目录也没了才报错，避免直接把
+/// 不存在的路径丢给系统文件管理器弹出「找不到文件」。
+fn resolve_reveal_target(path: &str) -> Result<std::path::PathBuf, String> {
+    let p = std::path::Path::new(path);
+    if p.exists() {
+        return Ok(p.to_path_buf());
+    }
+    p.parent()
+        .filter(|d| !d.as_os_str().is_empty() && d.exists())
+        .map(|d| d.to_path_buf())
+        .ok_or_else(|| format!("路径不存在，无法在目录中打开: {path}"))
+}
+
 /// 在系统文件管理器中打开路径：目录直接打开（Windows: explorer，macOS: Finder，
 /// Linux: xdg-open）；文件则在所在目录中定位（Finder 高亮 / 资源管理器选中，
 /// Linux 打开其父目录）——供审查卡与产出物卡的「在目录中打开」按钮使用。
@@ -52,7 +66,7 @@ fn reveal_path(path: String) -> Result<(), String> {
     {
         use std::os::windows::process::CommandExt;
         // fs_list 返回的路径分隔符归一为 /，explorer（尤其 /select 语法）只认 \
-        let path = path.replace('/', "\\");
+        let path = resolve_reveal_target(&path)?.to_string_lossy().replace('/', "\\");
         if std::path::Path::new(&path).is_dir() {
             std::process::Command::new("explorer")
                 .arg(&path)
@@ -68,26 +82,29 @@ fn reveal_path(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
+        let target = resolve_reveal_target(&path)?;
         let mut cmd = std::process::Command::new("open");
-        if !std::path::Path::new(&path).is_dir() {
+        if !target.is_dir() {
             cmd.arg("-R"); // 文件：Finder 中定位（无 -R 会用默认应用打开文件本身）
         }
-        cmd.arg(&path)
+        cmd.arg(&target)
             .spawn()
             .map_err(|e| format!("failed to open finder: {e}"))?;
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let p = std::path::Path::new(&path);
-        let target = if p.is_dir() {
-            path.clone()
+        let target = resolve_reveal_target(&path)?;
+        // 文件打开其父目录（xdg-open 无「定位」语义）
+        let dir = if target.is_dir() {
+            target
         } else {
-            p.parent()
-                .map(|d| d.to_string_lossy().into_owned())
-                .unwrap_or(path.clone())
+            target
+                .parent()
+                .map(|d| d.to_path_buf())
+                .unwrap_or(target.clone())
         };
         std::process::Command::new("xdg-open")
-            .arg(&target)
+            .arg(&dir)
             .spawn()
             .map_err(|e| format!("failed to open file manager: {e}"))?;
     }

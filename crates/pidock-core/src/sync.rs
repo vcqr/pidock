@@ -477,6 +477,8 @@ async fn execute_command(
             json!({
                 "cwd": payload.get("cwd").and_then(|t| t.as_str()).unwrap_or(""),
                 "path": payload.get("path").and_then(|t| t.as_str()).unwrap_or(""),
+                // 多媒体预览标记：b64=true 时 host 返回 base64+mime 而非文本
+                "b64": payload.get("b64").and_then(|v| v.as_bool()).unwrap_or(false),
             }),
         ),
         // 会话级新命令（上下文用量/压缩/队列/导出/开关/工具/树/prompts/thinking/信任/

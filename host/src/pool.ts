@@ -25,7 +25,7 @@ import { parseAttachments, normalizeImage, type IncomingAttachment } from "./att
 import { createTodoWriteTool, sanitizeTodos } from "./todo.js";
 import { createAskUserQuestionTool, type AskAnswer } from "./ask.js";
 import { buildExpertPromptBlock, ExpertsService, matchExpertCommand, type ExpertSessionConfig } from "./experts.js";
-import { defaultSessionDir, isManagedSessionDir } from "./workspace.js";
+import { defaultSessionDir, isManagedSessionDir, mediaMimeOf } from "./workspace.js";
 import { basename } from "node:path";
 import {
   ATTACHMENT_THRESHOLD_BYTES,
@@ -1198,11 +1198,15 @@ export class SessionPool {
   }
 
   /**
-   * 读取工作区内的文本文件（文件浏览预览用）：路径解析后必须仍落在 cwd 内
+   * 读取工作区内的文件（文件浏览预览用）：路径解析后必须仍落在 cwd 内
    * （防目录穿越），只取前 256KB（超出标记 truncated），头部含 NUL 视为二进制。
+   * b64=true 走多媒体预览（图片/音频/视频按扩展名识别，见 mediaMimeOf）：
+   * 返回 base64 与 mime，上限 32MB（超出抛错——截断的 mp4 无法播放，宁可明确报错）。
    */
-  readWorkspaceFile(params: { cwd: string; path: string }): {
-    text: string;
+  readWorkspaceFile(params: { cwd: string; path: string; b64?: boolean }): {
+    text?: string;
+    data?: string;
+    mime?: string;
     truncated: boolean;
     binary: boolean;
     size: number;
@@ -1223,6 +1227,28 @@ export class SessionPool {
       throw new RpcError("not_found", `no such file: ${rel}`);
     }
     if (!st.isFile()) throw new RpcError("not_found", `not a file: ${rel}`);
+    if (params.b64) {
+      const mime = mediaMimeOf(abs);
+      if (!mime) throw new RpcError("bad_path", "not a previewable media file");
+      const LIMIT = 32 * 1024 * 1024;
+      if (st.size > LIMIT) {
+        throw new RpcError("too_large", `文件超过 32MB，无法预览（${(st.size / 1024 / 1024).toFixed(1)}MB）`);
+      }
+      const buf = Buffer.alloc(st.size);
+      const fd = openSync(abs, "r");
+      try {
+        const got = readSync(fd, buf, 0, buf.length, 0);
+        return {
+          data: buf.subarray(0, got).toString("base64"),
+          mime,
+          truncated: false,
+          binary: false,
+          size: st.size,
+        };
+      } finally {
+        closeSync(fd);
+      }
+    }
     const LIMIT = 256 * 1024;
     const buf = Buffer.alloc(Math.min(st.size, LIMIT));
     const fd = openSync(abs, "r");

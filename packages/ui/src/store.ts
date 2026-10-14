@@ -1278,12 +1278,23 @@ export function createAgentStore(bus: DataBus) {
     }
   }
 
-  /** 读取工作区内文本文件（文件浏览预览）；失败抛错由调用方展示 */
+  /**
+   * 读取工作区内文件（预览用）；失败抛错由调用方展示。
+   * b64=true 读多媒体文件：返回 base64（data）与 mime；缺省读文本。
+   */
   async function readWorkspaceFile(
     cwd: string,
     path: string,
-  ): Promise<{ text: string; truncated: boolean; binary: boolean; size: number }> {
-    return bus.request("workspace.read_file", { cwd, path });
+    b64?: boolean,
+  ): Promise<{
+    text?: string;
+    data?: string;
+    mime?: string;
+    truncated: boolean;
+    binary: boolean;
+    size: number;
+  }> {
+    return bus.request("workspace.read_file", b64 ? { cwd, path, b64: true } : { cwd, path });
   }
 
   /** 设置/清除内置模型覆盖配置（写入 models.json modelOverrides，null 清除） */

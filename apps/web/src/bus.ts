@@ -221,6 +221,7 @@ export function createWebBus(auth: AuthClient): DataBus & {
           const result = await command(params?.session_id ?? "", "workspace.read_file", {
             cwd: params?.cwd,
             path: params?.path,
+            b64: params?.b64 === true,
           });
           return result ?? {};
         }

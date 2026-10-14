@@ -15,6 +15,9 @@ export interface PreviewFileTab {
   truncated?: boolean;
   binary?: boolean;
   size?: number;
+  /** 多媒体预览（b64 读取）：图片/音频/视频按 mime 渲染，优先于文本/binary */
+  data?: string;
+  mime?: string;
   /** 读取失败时的错误信息 */
   error?: string;
 }
@@ -36,14 +39,22 @@ const emit = defineEmits<{
 
 const activeTab = computed(() => props.tabs.find((t) => t.path === props.active) ?? null);
 
+/** 多媒体标签：mime 前缀即类别，data base64 拼 data URL */
+const mediaTab = computed(() => {
+  const t = activeTab.value;
+  if (!t || t.error || !t.data || !t.mime) return null;
+  const kind = t.mime.startsWith("image/") ? "image" : t.mime.startsWith("video/") ? "video" : t.mime.startsWith("audio/") ? "audio" : null;
+  return kind ? { kind, src: `data:${t.mime};base64,${t.data}` } : null;
+});
+
 const highlighted = computed(() => {
   const t = activeTab.value;
-  if (!t || t.binary || t.error) return "";
+  if (!t || t.binary || t.error || t.data) return "";
   return highlightCode(t.path, t.text ?? "");
 });
 const gutterText = computed(() => {
   const t = activeTab.value;
-  if (!t || t.binary || t.error) return "";
+  if (!t || t.binary || t.error || t.data) return "";
   return Array.from({ length: (t.text ?? "").split("\n").length }, (_, i) => i + 1).join("\n");
 });
 const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.split("/") : []));
@@ -88,6 +99,12 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
       <!-- 代码区：行号列（sticky）+ 高亮代码，随容器双向滚动 -->
       <div v-if="activeTab.error" class="pv-note err">
         <Icon name="error-warning-line" :size="14" />{{ activeTab.error }}
+      </div>
+      <!-- 多媒体：图片铺满居中，音频/视频带控件 -->
+      <div v-else-if="mediaTab" class="pv-media" :class="`pv-media-${mediaTab.kind}`">
+        <img v-if="mediaTab.kind === 'image'" :src="mediaTab.src" :alt="activeTab.path" />
+        <video v-else-if="mediaTab.kind === 'video'" :src="mediaTab.src" controls />
+        <audio v-else :src="mediaTab.src" controls />
       </div>
       <div v-else-if="activeTab.binary" class="pv-note">二进制文件，无法预览文本内容</div>
       <div v-else class="pv-scroll">
@@ -251,4 +268,25 @@ const crumbSegments = computed(() => (activeTab.value ? activeTab.value.path.spl
 }
 .pv-note.err { color: var(--pd-red); }
 .pv-foot { flex: none; border-top: 1px solid var(--pd-border-soft); }
+
+/* ---- 多媒体预览区 ---- */
+.pv-media {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pd-bg);
+  overflow: auto;
+  padding: 14px;
+}
+.pv-media img,
+.pv-media video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+}
+.pv-media-audio { display: flex; }
+.pv-media-audio audio { width: min(420px, 90%); }
 </style>
