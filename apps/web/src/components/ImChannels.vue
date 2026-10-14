@@ -85,6 +85,8 @@ const fThink = ref("");
 const fPerm = ref("edit-auto");
 const fWorkspace = ref("");
 const expertsLoading = ref(false);
+/** 敏感字段明文开关（App Secret / Verification Token / Encrypt Key） */
+const reveal = ref({ secret: false, token: false, enc: false });
 
 onMounted(async () => {
   await Promise.all([load(), loadMachines()]);
@@ -332,7 +334,18 @@ function fmtDate(s: string): string {
           </div>
           <div class="f-field">
             <label>App Secret</label>
-            <input v-model="fAppSecret" :placeholder="isFeishu ? '开发者后台「凭证与基础信息」' : 'AppSecret'" spellcheck="false" />
+            <div class="secret-input">
+              <input
+                v-model="fAppSecret"
+                :type="reveal.secret ? 'text' : 'password'"
+                :placeholder="isFeishu ? '开发者后台「凭证与基础信息」' : 'AppSecret'"
+                spellcheck="false"
+                autocomplete="new-password"
+              />
+              <button class="eye" :title="reveal.secret ? '隐藏' : '显示'" tabindex="-1" @click="reveal.secret = !reveal.secret">
+                <Icon :name="reveal.secret ? 'eye-off-line' : 'eye-line'" :size="14" />
+              </button>
+            </div>
           </div>
           <template v-if="isFeishu">
             <div class="f-field">
@@ -345,11 +358,33 @@ function fmtDate(s: string): string {
             <template v-if="fMode === 'push'">
               <div class="f-field">
                 <label>Verification Token</label>
-                <input v-model="fVerifyToken" placeholder="事件与回调 → 加密策略" spellcheck="false" />
+                <div class="secret-input">
+                  <input
+                    v-model="fVerifyToken"
+                    :type="reveal.token ? 'text' : 'password'"
+                    placeholder="事件与回调 → 加密策略"
+                    spellcheck="false"
+                    autocomplete="new-password"
+                  />
+                  <button class="eye" :title="reveal.token ? '隐藏' : '显示'" tabindex="-1" @click="reveal.token = !reveal.token">
+                    <Icon :name="reveal.token ? 'eye-off-line' : 'eye-line'" :size="14" />
+                  </button>
+                </div>
               </div>
               <div class="f-field">
                 <label>Encrypt Key（可选）</label>
-                <input v-model="fEncryptKey" placeholder="配置后事件加密推送，服务端自动解密验签" spellcheck="false" />
+                <div class="secret-input">
+                  <input
+                    v-model="fEncryptKey"
+                    :type="reveal.enc ? 'text' : 'password'"
+                    placeholder="配置后事件加密推送，服务端自动解密验签"
+                    spellcheck="false"
+                    autocomplete="new-password"
+                  />
+                  <button class="eye" :title="reveal.enc ? '隐藏' : '显示'" tabindex="-1" @click="reveal.enc = !reveal.enc">
+                    <Icon :name="reveal.enc ? 'eye-off-line' : 'eye-line'" :size="14" />
+                  </button>
+                </div>
               </div>
             </template>
             <div v-else class="f-field f-wide">
@@ -632,6 +667,28 @@ function fmtDate(s: string): string {
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
+}
+.secret-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.secret-input input {
+  padding-right: 30px;
+}
+.secret-input .eye {
+  position: absolute;
+  right: 6px;
+  background: transparent;
+  border: none;
+  color: var(--pd-text-4);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+}
+.secret-input .eye:hover {
+  color: var(--pd-text-2);
 }
 .f-field input:focus,
 .f-field select:focus {
