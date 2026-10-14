@@ -1463,8 +1463,8 @@ export default { components: { ToolCard, MessageItem } };
 .scroll {
   flex: 1;
   overflow-y: auto;
-  /* 左侧 44px：给用户问题锚点导轨留足显示空间 */
-  padding: 18px 22px 18px 44px;
+  /* 左侧 56px：给用户问题锚点导轨留足显示空间 */
+  padding: 18px 22px 18px 56px;
 }
 
 /* ---- 用户问题锚点导航（左侧紧凑刻度） ---- */
@@ -1495,7 +1495,7 @@ export default { components: { ToolCard, MessageItem } };
   position: absolute;
   left: 4px;
   box-sizing: content-box;
-  width: 11px;
+  width: 10px;
   height: 3px;
   padding: 5px 0; /* 命中区加高到 13px，线本身靠 background-clip 只画 3px */
   transform: translateY(-50%);
@@ -1509,20 +1509,15 @@ export default { components: { ToolCard, MessageItem } };
   /* 波浪全部走 CSS（不经过 Vue 重渲染），缓动用快出收尾的曲线保证丝滑 */
   transition: width 0.2s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.18s ease, background-color 0.18s ease;
 }
-.q-nav-dot:hover { width: 30px; opacity: 0.95; background-color: var(--pd-text-2); }
+.q-nav-dot:hover { width: 24px; opacity: 0.95; background-color: var(--pd-text-2); }
+/* 当前所在问题只用白色高亮区分；静止时所有刻度恢复默认长度，波浪仅在悬停时出现 */
 .q-nav-dot.on { opacity: 1; background-color: var(--pd-text); }
 
-/* 静止波浪：以当前视口所在刻度为中心，长—次长—短 */
-.q-nav:not(:hover) .q-nav-dot.on { width: 30px; }
-.q-nav:not(:hover) .q-nav-dot.on + .q-nav-dot { width: 23px; }
-.q-nav:not(:hover) .q-nav-dot.on + .q-nav-dot + .q-nav-dot { width: 16px; }
-.q-nav:not(:hover) .q-nav-dot:has(+ .on) { width: 23px; }
-.q-nav:not(:hover) .q-nav-dot:has(+ .q-nav-dot + .on) { width: 16px; }
 /* 悬停波浪：随鼠标移动，悬停刻度最长、紧邻次长 */
-.q-nav-dot:hover + .q-nav-dot { width: 23px; }
-.q-nav-dot:hover + .q-nav-dot + .q-nav-dot { width: 16px; }
-.q-nav-dot:has(+ :hover) { width: 23px; }
-.q-nav-dot:has(+ .q-nav-dot + :hover) { width: 16px; }
+.q-nav-dot:hover + .q-nav-dot { width: 18px; }
+.q-nav-dot:hover + .q-nav-dot + .q-nav-dot { width: 13px; }
+.q-nav-dot:has(+ :hover) { width: 18px; }
+.q-nav-dot:has(+ .q-nav-dot + :hover) { width: 13px; }
 .q-nav-tip {
   position: absolute;
   left: calc(100% + 12px);
