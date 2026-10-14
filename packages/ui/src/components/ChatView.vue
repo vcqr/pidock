@@ -699,6 +699,7 @@ watch(
     await nextTick();
     followBottom.value = true;
     scrollTarget();
+    measureQNav();
   },
 );
 let chatRO: ResizeObserver | undefined;
@@ -815,6 +816,7 @@ const followBottom = ref(true);
 const onScroll = () => {
   const el = scroller.value;
   if (el) followBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  updateQNavActive();
 };
 
 // 内容高度增长（流式文本、工具输出、图片/markdown 渲染、卡片展开）统一触发吸底；
@@ -827,6 +829,7 @@ watch(scrollInner, (el) => {
   if (!el || typeof ResizeObserver === "undefined") return;
   innerRO = new ResizeObserver(() => {
     if (followBottom.value) scrollTarget();
+    measureQNav();
   });
   innerRO.observe(el);
 });
@@ -849,6 +852,85 @@ function onSend(
   followBottom.value = true;
   void props.store.send(t, imgs, files);
 }
+
+// ---- 用户问题锚点导航（左侧 minimap）：每条用户提问一个刻度，按内容位置比例排布 ----
+
+const userQuestions = computed<Array<{ key: string; text: string }>>(() => {
+  const out: Array<{ key: string; text: string }> = [];
+  for (const it of props.store.items) {
+    if (it.kind !== "message" || it.role !== "user") continue;
+    const text = (it.text ?? "").replace(/\s+/g, " ").trim();
+    if (text) out.push({ key: it.key, text });
+  }
+  return out;
+});
+/** 紧凑刻度：等距排布（pitch 随条数自适应），宽度以焦点（悬停 ?? 当前所在）为中心梯度衰减 */
+const qAnchors = ref<Array<{ key: string; top: number; text: string }>>([]);
+const qNavActive = ref(-1);
+const qNavPitch = ref(10);
+
+function measureQNav(): void {
+  const el = scroller.value;
+  const inner = scrollInner.value;
+  const reset = (): void => {
+    qAnchors.value = [];
+    qNavActive.value = -1;
+  };
+  if (!el || !inner || home.value || props.store.loadingHistory) return reset();
+  const contentH = el.scrollHeight;
+  // 内容不足一屏半不出导航，避免短对话旁挂个空条
+  if (contentH <= el.clientHeight + 160 || userQuestions.value.length < 2) return reset();
+  const baseY = inner.getBoundingClientRect().top;
+  const topByKey = new Map<string, number>();
+  for (const n of el.querySelectorAll<HTMLElement>("[data-user-q]")) {
+    topByKey.set(n.dataset.userQ ?? "", n.getBoundingClientRect().top - baseY);
+  }
+  const anchors: Array<{ key: string; top: number; text: string }> = [];
+  for (const q of userQuestions.value) {
+    const top = topByKey.get(q.key);
+    if (top == null || top < 0) continue; // 回合折叠等未渲染的问题不出刻度
+    anchors.push({
+      key: q.key,
+      top,
+      text: q.text.length > 160 ? `${[...q.text].slice(0, 160).join("")}…` : q.text,
+    });
+  }
+  if (anchors.length < 2) return reset();
+  // 紧凑排布：刻度间距随条数压缩（5–10px），竖条始终贴合刻度组高度并垂直居中
+  const availH = (el.parentElement?.clientHeight ?? 600) - 190;
+  qNavPitch.value = Math.max(5, Math.min(10, (availH - 12) / anchors.length));
+  qAnchors.value = anchors;
+  updateQNavActive();
+}
+
+/** 视口上缘 1/3 处落在哪个问题区间，即高亮哪个刻度 */
+function updateQNavActive(): void {
+  const el = scroller.value;
+  if (!el || !qAnchors.value.length) {
+    qNavActive.value = -1;
+    return;
+  }
+  const probe = el.scrollTop + el.clientHeight * 0.33;
+  let act = -1;
+  for (let i = 0; i < qAnchors.value.length; i++) {
+    if ((qAnchors.value[i]?.top ?? 0) <= probe) act = i;
+  }
+  qNavActive.value = act;
+}
+
+function jumpToQuestion(a: { top: number }): void {
+  const el = scroller.value;
+  if (!el) return;
+  el.scrollTo({ top: Math.max(0, a.top - 16), behavior: "smooth" });
+}
+
+watch(userQuestions, () => {
+  void nextTick().then(measureQNav);
+});
+// 回合折叠/展开改变可见内容，刻度随之增减
+watch(expandedTurns, () => {
+  void nextTick().then(measureQNav);
+});
 </script>
 
 <template>
@@ -1055,6 +1137,25 @@ function onSend(
         </div>
       </div>
       </div>
+      <!-- 用户问题锚点导航（左侧紧凑刻度）：点击定位，悬停显示问题原文，
+           刻度宽度以悬停/当前所在为中心梯度衰减（长—次长—短波浪） -->
+      <div
+        v-if="qAnchors.length"
+        class="q-nav"
+        :style="{ height: `${qAnchors.length * qNavPitch + 12}px` }"
+      >
+        <button
+          v-for="(a, i) in qAnchors"
+          :key="a.key"
+          class="q-nav-dot"
+          :class="{ on: i === qNavActive }"
+          :style="{ top: `${6 + i * qNavPitch}px` }"
+          :aria-label="a.text"
+          @click="jumpToQuestion(a)"
+        >
+          <span class="q-nav-tip">{{ a.text }}</span>
+        </button>
+      </div>
       <div v-if="store.pendingApproval" class="approval">
         <Icon name="shield-flash-line" :size="15" />
         <div class="approval-info">
@@ -1225,6 +1326,8 @@ export default { components: { ToolCard, MessageItem } };
   flex-direction: column;
   min-width: 360px;
   min-height: 0;
+  /* 用户问题锚点导轨（.q-nav）的定位上下文 */
+  position: relative;
 }
 .chat.home { background: var(--pd-bg); }
 /* 文件树宽度可拖的分栏容器（NSplit）：#1 主内容，#2 文件树面板；窄屏 #2 为浮层 */
@@ -1360,8 +1463,96 @@ export default { components: { ToolCard, MessageItem } };
 .scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 18px 22px;
+  /* 左侧 44px：给用户问题锚点导轨留足显示空间 */
+  padding: 18px 22px 18px 44px;
 }
+
+/* ---- 用户问题锚点导航（左侧紧凑刻度） ---- */
+.q-nav {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  padding: 6px 4px;
+  border-radius: 10px;
+  /* 无底色无边框：只留刻度本身悬浮 */
+  z-index: 6;
+  pointer-events: none; /* 空白处放行给下方内容，仅刻度可点 */
+  animation: qnav-in 0.22s ease;
+}
+@keyframes qnav-in {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%);
+  }
+}
+.q-nav-dot {
+  position: absolute;
+  left: 4px;
+  box-sizing: content-box;
+  width: 11px;
+  height: 3px;
+  padding: 5px 0; /* 命中区加高到 13px，线本身靠 background-clip 只画 3px */
+  transform: translateY(-50%);
+  border: none;
+  border-radius: 2px;
+  background-color: var(--pd-text-4);
+  background-clip: content-box;
+  opacity: 0.55;
+  cursor: pointer;
+  pointer-events: auto;
+  /* 波浪全部走 CSS（不经过 Vue 重渲染），缓动用快出收尾的曲线保证丝滑 */
+  transition: width 0.2s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.18s ease, background-color 0.18s ease;
+}
+.q-nav-dot:hover { width: 30px; opacity: 0.95; background-color: var(--pd-text-2); }
+.q-nav-dot.on { opacity: 1; background-color: var(--pd-text); }
+
+/* 静止波浪：以当前视口所在刻度为中心，长—次长—短 */
+.q-nav:not(:hover) .q-nav-dot.on { width: 30px; }
+.q-nav:not(:hover) .q-nav-dot.on + .q-nav-dot { width: 23px; }
+.q-nav:not(:hover) .q-nav-dot.on + .q-nav-dot + .q-nav-dot { width: 16px; }
+.q-nav:not(:hover) .q-nav-dot:has(+ .on) { width: 23px; }
+.q-nav:not(:hover) .q-nav-dot:has(+ .q-nav-dot + .on) { width: 16px; }
+/* 悬停波浪：随鼠标移动，悬停刻度最长、紧邻次长 */
+.q-nav-dot:hover + .q-nav-dot { width: 23px; }
+.q-nav-dot:hover + .q-nav-dot + .q-nav-dot { width: 16px; }
+.q-nav-dot:has(+ :hover) { width: 23px; }
+.q-nav-dot:has(+ .q-nav-dot + :hover) { width: 16px; }
+.q-nav-tip {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: max-content;
+  max-width: 340px;
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: var(--pd-bg-panel);
+  border: 1px solid var(--pd-border-soft);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  color: var(--pd-text-2);
+  font-family: inherit;
+  font-size: calc(12px * var(--pd-font-scale));
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+  word-break: break-all;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+  will-change: opacity;
+  z-index: 30;
+}
+.q-nav-dot:hover .q-nav-tip { opacity: 1; }
 .hint {
   color: var(--pd-text-4);
   text-align: center;

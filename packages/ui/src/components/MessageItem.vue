@@ -212,8 +212,8 @@ const expertOpen = ref(false);
 </script>
 
 <template>
-  <!-- user message -->
-  <div v-if="item.role === 'user'" class="row user" :class="{ dimmed }">
+  <!-- user message；data-user-q 供 ChatView 的锚点导航测量各问题在内容中的位置 -->
+  <div v-if="item.role === 'user'" class="row user" :class="{ dimmed }" :data-user-q="item.key">
     <div class="user-col">
       <div class="bubble user-bubble" :class="{ pending: item.pending }">
         <template v-if="skillExpansion">
