@@ -218,9 +218,10 @@ async function copyText(text: string): Promise<void> {
 
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase();
-  const list = [...props.sessions].sort(
-    (a, b) => ((b.updated_at ?? b.created_at) > (a.updated_at ?? a.created_at) ? 1 : -1),
-  );
+  // 子代理会话不进侧栏（监控 dock 的领域；父会话移除时由 host 连带清理）
+  const list = props.sessions
+    .filter((s) => s.kind !== "subagent")
+    .sort((a, b) => ((b.updated_at ?? b.created_at) > (a.updated_at ?? a.created_at) ? 1 : -1));
   if (!q) return pinSort(list);
   return pinSort(
     list.filter(

@@ -101,12 +101,34 @@ export interface SessionSummaryUi {
   expert_name?: string;
   /** 分叉来源会话（fork 产生的会话带父会话 id，侧栏出分叉标识） */
   parent_session_id?: string;
+  /** 会话种类："subagent" = task 工具派生的子代理（侧栏过滤，监控 dock 展示） */
+  kind?: string;
   /** 程序化创建来源（automation | webhook | im），人工创建无此字段（侧栏类型徽标） */
   source?: string;
   created_at: string;
   updated_at?: string;
   open: boolean;
   state: string;
+}
+
+/** 子代理运行条目（监控 dock 数据源；事件驱动实时更新，无需轮询） */
+export interface SubagentRunUi {
+  session_id: string;
+  parent_session_id: string;
+  /** 显示名（spawn 的 label，缺省为任务文本截断） */
+  name: string;
+  expert_id?: string;
+  expert_name?: string;
+  model?: string;
+  cwd?: string;
+  /** agent 状态（agent_state_changed 事件实时跟随） */
+  state: string;
+  /** 创建时间（ISO；dock 据此显示已运行时长） */
+  started_at: string;
+  /** 累计 token（message_complete usage 聚合） */
+  tokens: number;
+  /** 最近一次工具活动摘要（tool_execution_start；列表行的一句话进度） */
+  activity?: string;
 }
 
 /** 专家档案（第三栏信息卡 / 雇佣流程共用） */
@@ -215,6 +237,10 @@ export function createAgentStore(bus: DataBus) {
    * activeId 过滤器丢弃，切会话回来时审批卡/问题卡能从中恢复；
    * host 对离开 waiting 状态会补发 agent_state_changed，据此清除 */
   const pendingBySession = ref<Record<string, PendingInteraction>>({});
+  /** 子代理运行索引（session_id → 运行条目），跨会话事件驱动更新，监控 dock 数据源 */
+  const subagentRuns = ref<Record<string, SubagentRunUi>>({});
+  /** 旁路事件订阅：监控 dock 详情视图对子代理会话的独立流水（不经过 activeId 过滤） */
+  const envelopeListeners = new Set<(e: { session_id: string; kind: string; payload: any }) => void>();
   /** 当前回合开始时间；结束后保留并写入 turnEndedAt（「已工作 · 耗时」折叠行用） */
   const turnStartedAt = ref<number | null>(null);
   const turnEndedAt = ref<number | null>(null);
@@ -543,6 +569,8 @@ export function createAgentStore(bus: DataBus) {
   }
 
   function applyEnvelope(e: { session_id: string; kind: string; payload: any }): void {
+    // 旁路订阅先行（dock 详情流需要 todo/context 之外的 kinds，不能被下方 early-return 截走）
+    for (const handler of envelopeListeners) handler(e);
     if (e.kind === "todo_updated") {
       const todos = Array.isArray(e.payload?.todos) ? (e.payload.todos as TodoItem[]) : [];
       todosBySession.value = { ...todosBySession.value, [e.session_id]: todos };
@@ -586,6 +614,10 @@ export function createAgentStore(bus: DataBus) {
       // 会话已从 host 注册表移除（本端或另一端发起）：实时摘除，不等轮询
       const sid = e.session_id;
       sessions.value = sessions.value.filter((s) => s.session_id !== sid);
+      if (subagentRuns.value[sid]) {
+        const { [sid]: _gone, ...restRuns } = subagentRuns.value;
+        subagentRuns.value = restRuns;
+      }
       todosBySession.value = withoutKey(todosBySession.value, sid);
       queueBySession.value = withoutKey(queueBySession.value, sid);
       contextBySession.value = withoutKey(contextBySession.value, sid);
@@ -614,6 +646,78 @@ export function createAgentStore(bus: DataBus) {
         const next = { ...pendingBySession.value };
         delete next[e.session_id];
         pendingBySession.value = next;
+      }
+      // 子代理状态实时跟随（dock 列表行/徽标数据源；不经过 activeId 过滤）
+      const run = subagentRuns.value[e.session_id];
+      if (run && typeof st === "string") {
+        subagentRuns.value = { ...subagentRuns.value, [e.session_id]: { ...run, state: st } };
+        const s = sessions.value.find((x) => x.session_id === e.session_id);
+        if (s) s.state = st;
+      }
+    }
+    if (e.kind === "session_meta" && e.payload?.kind === "subagent" && e.session_id) {
+      // 子代理元数据落地：登记运行条目 + 补一条最小 summary（侧栏过滤与名称展示用）
+      const prev = subagentRuns.value[e.session_id];
+      subagentRuns.value = {
+        ...subagentRuns.value,
+        [e.session_id]: {
+          session_id: e.session_id,
+          parent_session_id: String(e.payload.parent_session_id ?? ""),
+          name: String(e.payload.name ?? e.payload.expert_name ?? "子代理"),
+          ...(e.payload.expert_id ? { expert_id: String(e.payload.expert_id) } : {}),
+          ...(e.payload.expert_name ? { expert_name: String(e.payload.expert_name) } : {}),
+          ...(e.payload.model ? { model: String(e.payload.model) } : {}),
+          ...(e.payload.cwd ? { cwd: String(e.payload.cwd) } : {}),
+          state: prev?.state ?? "thinking",
+          started_at: prev?.started_at ?? new Date().toISOString(),
+          tokens: prev?.tokens ?? 0,
+          ...(prev?.activity ? { activity: prev.activity } : {}),
+        },
+      };
+      if (!sessions.value.some((x) => x.session_id === e.session_id)) {
+        upsertSessionSummary({
+          session_id: e.session_id,
+          kind: "subagent",
+          parent_session_id: e.payload.parent_session_id,
+          name: e.payload.name,
+          expert_id: e.payload.expert_id,
+          expert_name: e.payload.expert_name,
+          model: e.payload.model,
+          cwd: e.payload.cwd,
+          open: true,
+          state: "thinking",
+        });
+      }
+      return;
+    }
+    if (e.kind === "message_complete") {
+      // 子代理用量累计（列表行的 token 消耗；不干扰主消息流——activeId 过滤照常）
+      const run = subagentRuns.value[e.session_id];
+      const usage = e.payload?.usage;
+      if (run && usage && typeof e.payload?.message_id === "string") {
+        subagentRuns.value = {
+          ...subagentRuns.value,
+          [e.session_id]: { ...run, tokens: run.tokens + (Number(usage.totalTokens) || 0) },
+        };
+      }
+    }
+    if (e.kind === "tool_execution_start") {
+      const run = subagentRuns.value[e.session_id];
+      if (run) {
+        let brief = String(e.payload?.tool_name ?? "");
+        if (brief === "bash") {
+          brief = String(e.payload?.args ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+        } else if (brief === "read" || brief === "edit" || brief === "write") {
+          try {
+            brief = `${brief} ${String(JSON.parse(e.payload?.args ?? "{}")?.path ?? "")}`.trim();
+          } catch {
+            // 参数非 JSON：保留工具名
+          }
+        }
+        subagentRuns.value = {
+          ...subagentRuns.value,
+          [e.session_id]: { ...run, activity: brief.slice(0, 80) },
+        };
       }
     }
     if (e.kind === "tool_approval") {
@@ -873,6 +977,7 @@ export function createAgentStore(bus: DataBus) {
       expert_id: summary.expert_id,
       expert_name: summary.expert_name,
       parent_session_id: summary.parent_session_id,
+      kind: summary.kind,
       source: summary.source,
       created_at: summary.created_at ?? new Date().toISOString(),
       open: summary.open ?? true,
@@ -1584,6 +1689,26 @@ export function createAgentStore(bus: DataBus) {
     }
   }
 
+  /** 旁路事件订阅（监控 dock 详情流对子代理会话的独立消费）；返回退订函数 */
+  function onEnvelope(handler: (e: { session_id: string; kind: string; payload: any }) => void): () => void {
+    envelopeListeners.add(handler);
+    return () => envelopeListeners.delete(handler);
+  }
+
+  /** 直连 host RPC（dock 对子代理会话的 abort/审批/历史回放等操作，不经活动会话） */
+  function rpc(method: string, params?: unknown): Promise<any> {
+    return bus.request(method, params);
+  }
+
+  /** 持久化历史回放（子代理详情视图进入时全量拉取一次） */
+  async function loadHistory(sessionId: string, afterSeq?: number): Promise<Array<{ seq: number; ts: string; kind: string; payload: any }>> {
+    try {
+      return (await bus.loadHistory(sessionId, afterSeq)) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   return reactive({
     // state
     sessions,
@@ -1610,11 +1735,15 @@ export function createAgentStore(bus: DataBus) {
     autoRetryBySession,
     compactingBySession,
     compactionBySession,
+    subagentRuns,
     // actions
     start,
     refreshSessions,
     refreshModels,
     upsertSessionSummary,
+    onEnvelope,
+    rpc,
+    loadHistory,
     openSession,
     newSession,
     forkSession,

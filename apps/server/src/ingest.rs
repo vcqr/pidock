@@ -256,7 +256,7 @@ async fn ingest_one(state: &AppState, user_id: &str, machine_id: &str, envelope:
             }
             None => {}
         }
-        for field in ["parent_session_id", "expert_id", "expert_name", "source"] {
+        for field in ["kind", "parent_session_id", "expert_id", "expert_name", "source"] {
             if let Some(v) = payload.get(field).and_then(|t| t.as_str()) {
                 set.insert(field, v.to_string());
             }

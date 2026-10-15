@@ -100,6 +100,12 @@ const info = computed<Info>(() => {
       const done = todos.filter((t) => t?.status === "completed").length;
       return { verb: "任务清单", icon: "check-double-line", target: `更新 ${todos.length} 项 · ${done} 已完成` };
     }
+    case "Task": {
+      // 子代理派生：目标显示 spawn 的 label（缺省任务文本截断）
+      const target = String(a.label ?? a.prompt ?? "").replace(/\s+/g, " ").slice(0, 80);
+      const who = a.expert_id ? `专家 ${a.expert_id} · ${target}` : target;
+      return { verb: "子代理", icon: "git-branch-line", target: who };
+    }
     default:
       return { verb: props.toolName, icon: "tools-line", target: props.args.replace(/\s+/g, " ").slice(0, 120) };
   }

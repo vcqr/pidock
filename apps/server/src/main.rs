@@ -321,6 +321,7 @@ async fn machine_sessions(
                 "expert_id": d.get_str("expert_id").unwrap_or(""),
                 "expert_name": d.get_str("expert_name").unwrap_or(""),
                 "parent_session_id": d.get_str("parent_session_id").unwrap_or(""),
+                "kind": d.get_str("kind").unwrap_or(""),
                 "source": d.get_str("source").unwrap_or(""),
                 "created_at": d.get_str("created_at").unwrap_or(""),
                 "updated_at": d.get_str("updated_at").unwrap_or(""),

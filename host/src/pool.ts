@@ -26,6 +26,7 @@ import { parseAttachments, normalizeImage, type IncomingAttachment } from "./att
 import { createTodoWriteTool, sanitizeTodos } from "./todo.js";
 import { createAskUserQuestionTool, type AskAnswer } from "./ask.js";
 import { buildExpertPromptBlock, ExpertsService, matchExpertCommand, type ExpertSessionConfig } from "./experts.js";
+import { createTaskTool, MAX_SUBAGENTS_PER_PARENT } from "./subagent.js";
 import { defaultSessionDir, isManagedSessionDir, mediaMimeOf } from "./workspace.js";
 import { basename } from "node:path";
 import {
@@ -117,6 +118,8 @@ export interface SessionSummary {
   expert_id?: string;
   expert_name?: string;
   parent_session_id?: string;
+  /** 会话种类："subagent" = task 工具派生的子代理（UI 侧栏过滤、监控 dock 展示） */
+  kind?: "subagent";
   /** 程序化创建来源（automation | webhook | im），人工创建无此字段 */
   source?: string;
   created_at: string;
@@ -158,6 +161,10 @@ export class SessionPool {
   >();
   /** 项目信任决定存储（~/.pi/agent/trust.json，SDK 同源） */
   private trustStore = new ProjectTrustStore(getAgentDir());
+  /** 子代理运行中登记：子会话 id → 父会话 id（深度限制与 abort 级联） */
+  private subagentParent = new Map<string, string>();
+  /** 父会话 id → 运行中子会话 id 集合（并发上限） */
+  private subagentChildren = new Map<string, Set<string>>();
 
   constructor() {
     // 启动时清理 registry 里已不存在会话的快照落盘文件
@@ -288,16 +295,22 @@ export class SessionPool {
     );
     if (!ids.size) return { removed: 0 };
     const all = this.readRegistry();
-    const kept = all.filter((e) => !ids.has(e.session_id));
+    // 父会话移除时连带移除其子代理条目（子代理不出现在侧栏，留下会是看不见的孤儿）
+    const removedIds = new Set(
+      all
+        .filter((e) => ids.has(e.session_id) || (e.parent_session_id && ids.has(e.parent_session_id)))
+        .map((e) => e.session_id),
+    );
+    const kept = all.filter((e) => !removedIds.has(e.session_id));
     const removed = all.length - kept.length;
     if (!removed) return { removed: 0 };
     for (const e of all) {
-      if (ids.has(e.session_id)) this.closeSession({ session_id: e.session_id });
+      if (removedIds.has(e.session_id)) this.closeSession({ session_id: e.session_id });
     }
     writeFileSync(this.registryPath(), JSON.stringify({ sessions: kept }, null, 2));
     // 逐会话广播移除事件：桌面 UI 实时摘除（不等轮询），云端 ingest 删镜像行
     for (const e of all) {
-      if (ids.has(e.session_id)) emitEvent(e.session_id, Event.SESSION_REMOVED, {});
+      if (removedIds.has(e.session_id)) emitEvent(e.session_id, Event.SESSION_REMOVED, {});
     }
     return { removed };
   }
@@ -417,6 +430,12 @@ export class SessionPool {
     expert_id?: string;
     /** 程序化创建来源（automation | webhook | im），人工创建不传 */
     source?: string;
+    /** 子代理：父会话 id（深度 1，子会话不再注册 Task 工具） */
+    parent_session_id?: string;
+    /** 子代理显示名（注册表 name，autoTitle 因 name 已存在而跳过） */
+    subagent_label?: string;
+    /** 权限模式兜底（专家预设优先于此值；子代理继承父会话当前模式时传入） */
+    permission_fallback?: PermissionMode;
   }): Promise<{ session_id: string; file: string; cwd: string; expert_id?: string; expert_name?: string }> {
     // 缺省项目 = 默认工作空间：~/.pidock/<当日日期>/<会话id>/，产出物按会话归档。
     // 预生成会话 id 让目录名与会话 id 一致；空串与缺省同等对待（调度器/端点会传 ""）。
@@ -431,8 +450,11 @@ export class SessionPool {
     // 预生成 id 时经 NewSessionOptions 注入，保证 SDK 会话 id 与目录名一致
     const sessionManager = SessionManager.create(cwd, undefined, preId ? { id: preId } : undefined);
     // 新会话默认计划模式：修改类工具（bash/write/edit）先被拦下，用户可在输入卡切换；
-    // 专家可带建议权限模式（如只读专家保持 plan、自动化场景的 full）
-    const permission = { mode: expertCfg?.expert.permission_mode ?? "plan" };
+    // 专家可带建议权限模式（如只读专家保持 plan、自动化场景的 full）；
+    // 子代理继承父会话当前模式（permission_fallback），专家预设仍然最优先
+    const permission = {
+      mode: expertCfg?.expert.permission_mode ?? params.permission_fallback ?? "plan",
+    };
     const sessionIdRef = { id: "" };
     const trackedRef: { current: TrackedSession | null } = { current: null };
     const loader = new DefaultResourceLoader({
@@ -482,6 +504,14 @@ export class SessionPool {
           }
         }),
         createAskUserQuestionTool((question) => this.askUser(sessionIdRef.id, question)),
+        // Task 工具只挂主会话：子代理深度 1，不能再派生（重开子代理会话同样不挂）
+        ...(params.parent_session_id
+          ? []
+          : [
+              createTaskTool((taskParams) =>
+                this.runTask(sessionIdRef.id, taskParams),
+              ),
+            ]),
       ],
     });
     const sessionId = session.sessionId;
@@ -513,16 +543,22 @@ export class SessionPool {
     }
 
     const file = session.sessionFile ?? "";
+    const isSubagent = !!params.parent_session_id;
     this.writeRegistryEntry({
       session_id: sessionId,
       file,
       cwd,
       model: params.model ?? expertCfg?.expert.model,
       ...(expertCfg ? { expert_id: expertCfg.expert.id } : {}),
-      ...(params.source ? { source: params.source } : {}),
+      ...(params.parent_session_id ? { parent_session_id: params.parent_session_id } : {}),
+      ...(isSubagent ? { source: "subagent" } : params.source ? { source: params.source } : {}),
+      ...(params.subagent_label ? { name: params.subagent_label } : {}),
       created_at: new Date().toISOString(),
     });
 
+    // 子代理的元数据（kind/parent/name）必须落在持久化事件里：云端 ingest 才能建出
+    // 带种类的会话行（普通会话的元数据走 JSONL session_info 条目重放，子代理的
+    // kind 不在其中）。persist 事件无 seq，与重命名同走 seq=0 槽位（后到覆盖，可接受）
     emitEvent(
       sessionId,
       Event.SESSION_META,
@@ -530,10 +566,13 @@ export class SessionPool {
         cwd,
         model: params.model ?? expertCfg?.expert.model,
         ...(expertCfg ? { expert_id: expertCfg.expert.id, expert_name: expertCfg.expert.name } : {}),
-        ...(params.source ? { source: params.source } : {}),
+        ...(params.parent_session_id ? { parent_session_id: params.parent_session_id } : {}),
+        ...(isSubagent ? { kind: "subagent" } : {}),
+        ...(params.subagent_label ? { name: params.subagent_label } : {}),
+        ...(isSubagent ? {} : params.source ? { source: params.source } : {}),
       }),
       {
-        persist: false,
+        ...(isSubagent ? { persist: true } : { persist: false }),
       },
     );
     emitEvent(sessionId, Event.CONTEXT_USAGE, this.contextUsagePayload(tracked), { persist: false });
@@ -664,6 +703,14 @@ export class SessionPool {
   closeSession(params: { session_id: string }): { closed: boolean } {
     const tracked = this.sessions.get(params.session_id);
     if (!tracked) return { closed: false };
+    // 父会话关闭：运行中子代理一并中止并关闭（内部会话，不留给池）
+    if (this.subagentChildren.has(params.session_id)) {
+      this.abortSubagentsOf(params.session_id);
+      for (const childId of [...(this.subagentChildren.get(params.session_id) ?? [])]) {
+        this.closeSession({ session_id: childId });
+      }
+    }
+    if (this.subagentParent.has(params.session_id)) this.unregisterSubagent(params.session_id);
     this.denyApprovals(params.session_id);
     this.denyAsks(params.session_id);
     // 只清内存；落盘快照保留，重新打开会话后文件变更/审查/撤销仍可用
@@ -711,6 +758,7 @@ export class SessionPool {
         ? { expert_id: entry.expert_id, ...(expertNames.get(entry.expert_id) ? { expert_name: expertNames.get(entry.expert_id) } : {}) }
         : {}),
       ...(entry.parent_session_id ? { parent_session_id: entry.parent_session_id } : {}),
+      ...(entry.source === "subagent" ? { kind: "subagent" as const } : {}),
       ...(entry.source ? { source: entry.source } : {}),
       created_at: entry.created_at,
       open: openIds.has(entry.session_id),
@@ -926,6 +974,118 @@ export class SessionPool {
       .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: String(err) }))
       .finally(() => tracked.drain());
     return { accepted: true };
+  }
+
+  // ------------------------------------------------------------- subagents
+
+  /**
+   * Task 工具的执行端：派生池化子代理（同进程多开一个会话，事件走同一管道）
+   * 并阻塞到其回合结束，最终 assistant 文本作为工具结果回传父会话。
+   * 深度 1 与每父并发上限在入口把关；权限模式继承父会话当前模式（专家预设优先）。
+   */
+  private async runTask(
+    parentId: string,
+    taskParams: { prompt: string; label?: string; expert_id?: string; model?: string },
+  ): Promise<{ session_id: string; report: string }> {
+    const parent = this.sessions.get(parentId);
+    if (!parent) throw new RpcError("session_not_found", `unknown session "${parentId}"`);
+    if (this.subagentParent.has(parentId)) {
+      throw new RpcError("subagent_depth", "子代理不能再派生子代理（深度上限 1）");
+    }
+    const running = this.subagentChildren.get(parentId);
+    if (running && running.size >= MAX_SUBAGENTS_PER_PARENT) {
+      throw new RpcError("subagent_limit", `并发子代理已达上限（${MAX_SUBAGENTS_PER_PARENT}），请等待现有子代理完成`);
+    }
+    // 模型缺省继承父会话当前模型；父模型是占位（unknown/unknown）或解析失败时
+    // 回落全局默认（不阻塞派生）。LLM 显式传入的 model 保持报错（参数错了要可见）
+    let modelRef = taskParams.model;
+    if (!modelRef) {
+      const pm = parent.session.model as Record<string, any> | undefined;
+      const inherited = pm?.provider && pm?.id ? `${pm.provider}/${pm.id}` : "";
+      if (inherited && inherited !== "unknown/unknown") modelRef = inherited;
+    }
+    const spawnPayload = (model?: string) => ({
+      cwd: parent.cwd,
+      ...(model ? { model } : {}),
+      ...(taskParams.expert_id ? { expert_id: taskParams.expert_id } : {}),
+      parent_session_id: parentId,
+      ...(taskParams.label ? { subagent_label: taskParams.label } : {}),
+      permission_fallback: this.permissionStates.get(parentId)?.mode,
+    });
+    let created: Awaited<ReturnType<SessionPool["createSession"]>>;
+    try {
+      created = await this.createSession(spawnPayload(modelRef));
+    } catch (err) {
+      if (!taskParams.model && modelRef) {
+        created = await this.createSession(spawnPayload(undefined));
+      } else {
+        throw err;
+      }
+    }
+    const childId = created.session_id;
+    this.subagentParent.set(childId, parentId);
+    if (!this.subagentChildren.has(parentId)) this.subagentChildren.set(parentId, new Set());
+    this.subagentChildren.get(parentId)!.add(childId);
+    const tracked = this.require(childId);
+    let report: string;
+    try {
+      try {
+        // await 回合 promise：正常结束/异常/中止都视为结束，报告从落盘条目提取
+        await tracked.session.prompt(taskParams.prompt);
+      } catch {
+        // 中止或模型错误：按已落盘内容提取报告
+      }
+      report = this.lastAssistantText(tracked);
+    } finally {
+      this.unregisterSubagent(childId);
+      // 子代理回合结束即关闭：结果已落盘，dock 详情视图经注册表回放，
+      // 不在池内为已完成任务保留内存（重开场景无——子代理不出现在侧栏）
+      this.closeSession({ session_id: childId });
+    }
+    return { session_id: childId, report };
+  }
+
+  /** 提取最后一条 assistant 消息的文本块（Task 工具回传给父会话的报告） */
+  private lastAssistantText(tracked: TrackedSession): string {
+    const entries = tracked.session.sessionManager.getEntries() as unknown as Record<string, any>[];
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const msg = (entries[i] as any)?.message;
+      if ((entries[i] as any)?.type === "message" && msg?.role === "assistant" && Array.isArray(msg.content)) {
+        const text = msg.content
+          .filter((p: any) => p?.type === "text" && typeof p.text === "string" && p.text.trim())
+          .map((p: any) => p.text)
+          .join("\n\n")
+          .trim();
+        if (text) return text;
+      }
+    }
+    return "（子代理已结束但没有产出文本报告）";
+  }
+
+  /** 解除子代理父子登记（回合结束/中止/关闭共用） */
+  private unregisterSubagent(childId: string): void {
+    const parentId = this.subagentParent.get(childId);
+    this.subagentParent.delete(childId);
+    if (parentId) {
+      const set = this.subagentChildren.get(parentId);
+      if (set) {
+        set.delete(childId);
+        if (!set.size) this.subagentChildren.delete(parentId);
+      }
+    }
+  }
+
+  /** 级联中止某会话的全部运行中子代理（父 abort/close 时调用；挂起审批按拒绝结算） */
+  private abortSubagentsOf(parentId: string): void {
+    const children = this.subagentChildren.get(parentId);
+    if (!children) return;
+    for (const childId of [...children]) {
+      const tracked = this.sessions.get(childId);
+      if (!tracked) continue;
+      this.denyApprovals(childId);
+      this.denyAsks(childId);
+      void tracked.session.abort().catch(() => {});
+    }
   }
 
   /**
@@ -1889,6 +2049,8 @@ export class SessionPool {
   async abort(params: { session_id: string }): Promise<{ aborted: boolean }> {
     await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
+    // 运行中子代理级联中止（父回合被打断后其 Task 工具结果无人消费）
+    this.abortSubagentsOf(params.session_id);
     // 中断时挂起的工具审批全部按拒绝处理，避免工具卡在等待状态
     this.denyApprovals(params.session_id);
     // 挂起的提问按用户取消处理（工具返回 interrupted，模型自行收尾）
@@ -2368,6 +2530,8 @@ export class SessionPool {
       }
       this.sessions.delete(id);
     }
+    this.subagentParent.clear();
+    this.subagentChildren.clear();
   }
 }
 

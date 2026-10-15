@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { TodoItem } from "@pidock/protocol";
-import type { AgentStore, ExpertInfo } from "../store.js";
+import type { AgentStore, ExpertInfo, SubagentRunUi } from "../store.js";
 import Icon from "./Icon.vue";
+import SubagentDetail from "./SubagentDetail.vue";
 
 /**
  * 任务进度第三栏（对话区右侧停靠，压缩对话流宽度而非遮挡）：
  * 专家段（绑定的专家头像/描述/角色提示词摘要/资源标签）+
- * 项目段（名称/路径/模型/权限）+ 进度段（TodoWrite 任务清单）。
- * TodoWrite 首次推送或会话绑定专家时自动展开；收起后缩成悬浮小圆标（专家会话显示头像），点击恢复；
- * 收起状态按会话记忆（localStorage）。
+ * 项目段（名称/路径/模型/权限）+ 进度段（TodoWrite 任务清单）+
+ * 子代理段（task 工具派生的运行条目；点行进入工作流详情视图）。
+ * TodoWrite 首次推送或会话绑定专家或子代理派生时自动展开；
+ * 收起后缩成悬浮小圆标，点击恢复；收起状态按会话记忆（localStorage）。
  */
 
 const props = defineProps<{ store: AgentStore; expert?: ExpertInfo | null }>();
@@ -19,6 +21,115 @@ const todos = computed<TodoItem[]>(() =>
 );
 const summary = computed(() => props.store.sessions.find((s) => s.session_id === props.store.activeId));
 const done = computed(() => todos.value.filter((t) => t.status === "completed").length);
+
+// ---- 子代理运行段 ----
+const runs = computed<SubagentRunUi[]>(() => {
+  const pid = props.store.activeId;
+  if (!pid) return [];
+  return Object.values(props.store.subagentRuns).filter((r) => r.parent_session_id === pid);
+});
+const runningCount = computed(() => runs.value.filter((r) => !["idle", "waiting_approval", "waiting_ask"].includes(r.state)).length);
+const waitingCount = computed(() => runs.value.filter((r) => ["waiting_approval", "waiting_ask"].includes(r.state)).length);
+/** 详情导航：选中的子代理（会话结束后条目消失时自动回列表） */
+const selectedChild = ref<string | null>(null);
+const detailRun = computed(() => (selectedChild.value ? runs.value.find((r) => r.session_id === selectedChild.value) ?? null : null));
+watch(runs, (list) => {
+  if (selectedChild.value && !list.some((r) => r.session_id === selectedChild.value)) selectedChild.value = null;
+});
+// 首个子代理派生时自动停靠展开（用户手动收起后不反复打扰）
+watch(
+  () => runs.value.map((r) => r.session_id).join(","),
+  (nowIds, prevIds) => {
+    if (nowIds && !prevIds) expand();
+  },
+);
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+/** 行内终止子代理（与详情视图的中止同一 RPC；挂起审批由 host 按拒绝结算） */
+async function abortRun(r: SubagentRunUi): Promise<void> {
+  try {
+    await props.store.rpc("agent.abort", { session_id: r.session_id });
+  } catch {
+    // 已结束/已关闭的子代理中止报错可忽略
+  }
+}
+
+// ---- dock 拖拽调宽（按对话区宽度的百分比记忆，窗口缩放保持同比例；窄屏浮层固定宽不拖拽） ----
+// 实际渲染 width: clamp(260px, N%, min(1280px, 100% - 420px))——下限/聊天区保底/绝对上限
+// 全部交给 CSS clamp 动态裁决，窗口变化无需 JS 重算。
+const PCT_KEY = "pidock.dockWidthPct";
+/** 旧版 px 记忆键（迁移用） */
+const LEGACY_PX_KEY = "pidock.dockWidth";
+const PCT_DEFAULT = 24;
+function readDockPct(): number {
+  try {
+    const v = Number(localStorage.getItem(PCT_KEY));
+    if (Number.isFinite(v) && v >= 8 && v <= 92) return v;
+  } catch {
+    // localStorage 不可用时用缺省
+  }
+  return PCT_DEFAULT;
+}
+const dockEl = ref<HTMLElement | null>(null);
+const dockPct = ref(readDockPct());
+let dragState: { startX: number; startPct: number; rowWidth: number } | null = null;
+function onResizeStart(e: MouseEvent): void {
+  const row = dockEl.value?.parentElement;
+  dragState = {
+    startX: e.clientX,
+    startPct: dockPct.value,
+    rowWidth: row?.clientWidth || window.innerWidth,
+  };
+  window.addEventListener("mousemove", onResizeMove);
+  window.addEventListener("mouseup", onResizeEnd);
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+  e.preventDefault();
+}
+function onResizeMove(e: MouseEvent): void {
+  if (!dragState) return;
+  // 手柄在 dock 左缘：向左拖 = 变宽；实时换算成对话区百分比（越界由 CSS clamp 收敛）
+  const deltaPx = dragState.startX - e.clientX;
+  const pct = dragState.startPct + (deltaPx / dragState.rowWidth) * 100;
+  dockPct.value = Math.min(95, Math.max(5, pct));
+}
+function onResizeEnd(): void {
+  dragState = null;
+  window.removeEventListener("mousemove", onResizeMove);
+  window.removeEventListener("mouseup", onResizeEnd);
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+  try {
+    localStorage.setItem(PCT_KEY, String(Math.round(dockPct.value * 10) / 10));
+  } catch {
+    // localStorage 不可用时忽略
+  }
+}
+onMounted(() => {
+  // 旧版 px 记忆迁移成百分比（读一次即弃）
+  if (dockPct.value === PCT_DEFAULT) {
+    try {
+      const px = Number(localStorage.getItem(LEGACY_PX_KEY));
+      const row = dockEl.value?.parentElement;
+      if (Number.isFinite(px) && px >= 260 && row?.clientWidth) {
+        dockPct.value = Math.min(92, Math.max(8, (px / row.clientWidth) * 100));
+      }
+      localStorage.removeItem(LEGACY_PX_KEY);
+    } catch {
+      // 忽略迁移失败
+    }
+  }
+});
+const dockStyle = computed(() =>
+  isNarrow.value
+    ? undefined
+    : { width: `clamp(260px, ${dockPct.value}%, min(1280px, calc(100% - 420px)))` },
+);
 
 const isHome = computed(() => !!summary.value && !!props.store.homeDir && summary.value.cwd === props.store.homeDir);
 const projectName = computed(() => {
@@ -71,7 +182,7 @@ const expanded = computed(
   () =>
     !!props.store.activeId &&
     !chips.value.has(props.store.activeId) &&
-    (todos.value.length > 0 || !!props.expert) &&
+    (todos.value.length > 0 || !!props.expert || runs.value.length > 0) &&
     // 窄屏：停靠第三栏会挤没聊天区，默认收起为小圆标，点圆标以浮层展开
     (!isNarrow.value || userExpanded.value),
 );
@@ -111,9 +222,15 @@ function copyPath(): void {
 <template>
   <!-- 停靠态：第三栏，占布局不遮挡内容（窄屏为右侧浮层，遮罩点击收起） -->
   <div v-if="expanded && isNarrow" class="pcol-scrim" @click="collapse" />
-  <aside v-if="expanded" class="pcol">
+  <aside v-if="expanded" ref="dockEl" class="pcol" :style="dockStyle">
+    <!-- 左缘拖拽手柄：调 dock 宽度（260–560，localStorage 记忆；窄屏浮层不显示） -->
+    <span v-if="!isNarrow" class="rz-grip" title="拖动调整宽度" @mousedown="onResizeStart"></span>
     <header class="head">
-      <template v-if="expert">
+      <template v-if="detailRun">
+        <Icon name="git-branch-line" :size="14" />
+        <span class="title">子代理</span>
+      </template>
+      <template v-else-if="expert">
         <Icon name="user-star-line" :size="14" />
         <span class="title">专家</span>
       </template>
@@ -121,13 +238,17 @@ function copyPath(): void {
         <Icon name="check-double-line" :size="14" />
         <span class="title">任务清单</span>
       </template>
-      <span v-if="todos.length" class="count" :class="{ all: done === todos.length }">{{ done }}/{{ todos.length }}</span>
+      <span v-if="todos.length && !detailRun" class="count" :class="{ all: done === todos.length }">{{ done }}/{{ todos.length }}</span>
       <span class="flex-sp"></span>
       <button class="hbtn" title="收起为小圆标" @click="collapse">
         <Icon name="arrow-right-line" :size="13" />
       </button>
     </header>
 
+    <!-- 子代理工作流详情（第二层：列表行点击进入） -->
+    <SubagentDetail v-if="detailRun" :store="store" :run="detailRun" @back="selectedChild = null" />
+
+    <template v-else>
     <!-- 专家档案卡：人物介绍式排版（居中头像 + 名称/简介 + 角色提示词 + 资源标签） -->
     <div v-if="expert" class="expert-card">
       <div class="e-hero">
@@ -182,9 +303,61 @@ function copyPath(): void {
         <span class="txt">{{ t.status === 'in_progress' ? (t.active_form ?? t.content) : t.content }}</span>
       </li>
     </ol>
+
+    <!-- 子代理运行段：task 工具派生的会话条目，点击进入工作流详情 -->
+    <div v-if="runs.length" class="sa-sec">
+      <div class="sa-head">
+        <Icon name="git-branch-line" :size="12" />
+        <span>子代理</span>
+        <span v-if="runningCount" class="sa-live">{{ runningCount }} 运行中</span>
+        <span v-if="waitingCount" class="sa-wait">{{ waitingCount }} 待处理</span>
+      </div>
+      <div
+        v-for="r in runs"
+        :key="r.session_id"
+        class="sa-row"
+        role="button"
+        tabindex="0"
+        :title="r.activity || r.name"
+        @click="selectedChild = r.session_id"
+        @keydown.enter="selectedChild = r.session_id"
+      >
+        <span class="st">
+          <Icon v-if="r.state === 'idle'" name="checkbox-circle-fill" :size="13" />
+          <span v-else-if="['waiting_approval', 'waiting_ask'].includes(r.state)" class="warn-dot"></span>
+          <span v-else class="spin"></span>
+        </span>
+        <span class="sa-col">
+          <span class="sa-name">{{ r.expert_name || r.name }}</span>
+          <span v-if="r.activity && r.state !== 'idle'" class="sa-activity">{{ r.activity }}</span>
+        </span>
+        <span v-if="r.tokens" class="sa-tok">{{ fmtTokens(r.tokens) }}</span>
+        <!-- 行内终止：未完成的子代理可直接中止（审批/提问等待中同样可终止） -->
+        <button
+          v-if="r.state !== 'idle'"
+          class="sa-stop"
+          title="终止子代理"
+          @click.stop="abortRun(r)"
+        >
+          <Icon name="close-circle-line" :size="13" />
+        </button>
+      </div>
+    </div>
+    </template>
   </aside>
   <!-- 收起态：小圆标悬浮在对话区右上（绝对定位，不占布局）；专家会话显示专家头像 -->
-  <div v-else-if="(todos.length || expert) && store.activeId" class="chip-float">
+  <div v-else-if="(todos.length || expert || runs.length) && store.activeId" class="chip-float">
+    <button
+      v-if="runs.length"
+      class="chip sub-chip"
+      :class="{ wait: waitingCount > 0 }"
+      :title="runningCount ? `${runningCount} 个子代理运行中` : `${runs.length} 个子代理已结束`"
+      @click="expand"
+    >
+      <Icon name="git-branch-line" :size="13" />
+      <span v-if="waitingCount">{{ waitingCount }} 待</span>
+      <span v-else>{{ runningCount || runs.length }}</span>
+    </button>
     <button v-if="expert" class="chip expert-chip" :title="`专家 · ${expert.name}`" @click="expand">
       <span
         class="chip-avatar"
@@ -196,7 +369,7 @@ function copyPath(): void {
       <span>{{ expert.name }}</span>
       <span v-if="todos.length" class="chip-count">{{ done }}/{{ todos.length }}</span>
     </button>
-    <button v-else class="chip" :title="`${projectName} · ${done}/${todos.length} 已完成`" @click="expand">
+    <button v-else-if="todos.length" class="chip" :title="`${projectName} · ${done}/${todos.length} 已完成`" @click="expand">
       <Icon name="checkbox-circle-fill" :size="13" />
       <span>{{ done }}/{{ todos.length }}</span>
     </button>
@@ -204,17 +377,34 @@ function copyPath(): void {
 </template>
 
 <style scoped>
-/* 停靠第三栏：作为 .conv-row 的 flex 子项 */
+/* 停靠第三栏：作为 .conv-row 的 flex 子项（宽度 = clamp(260px, N%, min(1280px, 100%-420px))，
+ * 由拖拽以对话区百分比控制；此处的 320px 仅为内联回退） */
 .pcol {
-  width: 300px;
+  width: 320px;
   flex: none;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   background: var(--pd-bg-panel);
   border-left: 1px solid var(--pd-border);
   padding: 12px 14px 16px;
+  position: relative;
+}
+/* 左缘拖拽手柄：热区落在 dock 左内缘（滚动容器负偏移会被裁剪），悬停亮起 */
+.rz-grip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 5;
+}
+.rz-grip:hover,
+.rz-grip:active {
+  background: color-mix(in srgb, var(--pd-accent) 45%, transparent);
 }
 /* 窄屏：第三栏改浮层（.conv-row 为定位上下文），不挤占聊天区宽度；
  * 点头部按钮或遮罩收起为悬浮小圆标 */
@@ -236,6 +426,7 @@ function copyPath(): void {
     width: min(84vw, 300px);
     box-shadow: 0 10px 32px rgba(0, 0, 0, 0.4);
   }
+  .rz-grip { display: none; }
 }
 .head {
   display: flex;
@@ -424,12 +615,16 @@ li.in_progress .st { color: var(--pd-accent); }
 }
 .txt { min-width: 0; word-break: break-word; }
 
-/* 收起态小圆标：悬浮于对话区右上角（.conv-row 上） */
+/* 收起态小圆标：悬浮于对话区右上角（.conv-row 上）；多枚时纵向堆叠 */
 .chip-float {
   position: absolute;
   top: 12px;
   right: 16px;
   z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
 }
 .chip {
   display: inline-flex;
@@ -447,6 +642,89 @@ li.in_progress .st { color: var(--pd-accent); }
 }
 .chip:hover { border-color: var(--pd-accent); }
 .chip.expert-chip { color: var(--pd-text-2); }
+.chip.sub-chip { color: var(--pd-accent); }
+.chip.sub-chip.wait { color: var(--pd-orange, #e08a3c); }
+
+/* 子代理运行段（dock 内列表） */
+.sa-sec {
+  margin-top: 12px;
+  border-top: 1px dashed var(--pd-border-soft);
+  padding-top: 10px;
+}
+.sa-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: calc(10.5px * var(--pd-font-scale));
+  color: var(--pd-text-4);
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+.sa-live { color: var(--pd-accent); letter-spacing: 0; }
+.sa-wait { color: var(--pd-orange, #e08a3c); letter-spacing: 0; }
+.sa-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.sa-row:hover { background: var(--pd-bg-hover); }
+.sa-row .st { flex: none; display: grid; place-items: center; color: var(--pd-text-4); }
+.sa-row .st :deep(svg) { color: var(--pd-green); }
+.sa-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sa-name {
+  font-size: calc(12px * var(--pd-font-scale));
+  color: var(--pd-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sa-activity {
+  font-size: calc(10.5px * var(--pd-font-scale));
+  color: var(--pd-text-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sa-tok {
+  flex: none;
+  font-size: calc(10px * var(--pd-font-scale));
+  color: var(--pd-text-4);
+  font-variant-numeric: tabular-nums;
+}
+.sa-stop {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--pd-text-4);
+  cursor: pointer;
+  padding: 0;
+}
+.sa-stop:hover {
+  background: color-mix(in srgb, var(--pd-red) 12%, transparent);
+  color: var(--pd-red);
+}
+.warn-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--pd-orange, #e08a3c);
+  animation: sa-pulse 1.2s ease-in-out infinite;
+}
+@keyframes sa-pulse {
+  50% { opacity: 0.35; }
+}
 .chip-avatar {
   width: 18px;
   height: 18px;
