@@ -208,21 +208,57 @@ function pickImages(): void {
   plusOpen.value = false;
 }
 
-function onFilesPicked(e: Event): void {
-  const input = e.target as HTMLInputElement;
-  const slots = Math.max(0, MAX_IMAGES - pendingImages.value.length);
-  for (const f of [...(input.files ?? [])].slice(0, slots)) {
-    if (!f.type.startsWith("image/") || f.size > MAX_IMAGE_BYTES) continue;
+function readAsBase64(f: File): Promise<string> {
+  return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = String(reader.result ?? "");
-      const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-      if (base64) {
-        pendingImages.value.push({ data: base64, mime_type: f.type || "image/png", name: f.name });
-      }
+      resolve(dataUrl.slice(dataUrl.indexOf(",") + 1));
     };
+    reader.onerror = () => resolve("");
     reader.readAsDataURL(f);
+  });
+}
+
+/**
+ * 把一批文件加入待发附件：图片进图片行，其余进附件行（+ 菜单与粘贴共用，
+ * 数量/大小限制与超限提示同一条通道）。草稿模式只收图片（表单不消费文档附件）。
+ */
+async function addPickedFiles(files: File[]): Promise<void> {
+  const warns: string[] = [];
+  for (const f of files) {
+    const isImage = f.type.startsWith("image/");
+    if (isImage) {
+      if (pendingImages.value.length >= MAX_IMAGES) {
+        warns.push(`最多 ${MAX_IMAGES} 张图片，多余已忽略`);
+        continue;
+      }
+      if (f.size > MAX_IMAGE_BYTES) {
+        warns.push(`${f.name} 超过 8 MB，已跳过`);
+        continue;
+      }
+      const data = await readAsBase64(f);
+      if (data) pendingImages.value.push({ data, mime_type: f.type || "image/png", name: f.name });
+    } else {
+      if (props.draft) continue;
+      if (pendingFiles.value.length >= MAX_FILES) {
+        warns.push(`最多 ${MAX_FILES} 个附件，多余文件已忽略`);
+        continue;
+      }
+      if (f.size > MAX_FILE_BYTES) {
+        warns.push(`${f.name} 超过 20 MB，已跳过`);
+        continue;
+      }
+      const data = await readAsBase64(f);
+      if (data) pendingFiles.value.push({ name: f.name, mime_type: f.type || "", size: f.size, data });
+    }
   }
+  if (warns.length) docWarn.value = warns[0]!;
+}
+
+function onFilesPicked(e: Event): void {
+  const input = e.target as HTMLInputElement;
+  void addPickedFiles([...(input.files ?? [])]);
   input.value = "";
 }
 
@@ -230,37 +266,68 @@ function removeImage(i: number): void {
   pendingImages.value.splice(i, 1);
 }
 
+function onDocsPicked(e: Event): void {
+  docWarn.value = "";
+  const input = e.target as HTMLInputElement;
+  void addPickedFiles([...(input.files ?? [])]);
+  input.value = "";
+}
+
+/**
+ * 粘贴附件：剪贴板里有文件/图片（截图、访达复制的文件、网页复制的图）时直接
+ * 加入待发区并拦截默认粘贴；纯文本/富文本放行走默认插入。单次上限 12 个防误粘爆量。
+ */
+async function onPaste(e: ClipboardEvent): Promise<void> {
+  const dt = e.clipboardData;
+  if (!dt || props.disabled) return;
+  const files: File[] = [];
+  for (const item of Array.from(dt.items ?? [])) {
+    if (item.kind !== "file") continue;
+    const f = item.getAsFile();
+    if (f) files.push(f);
+  }
+  if (!files.length && dt.files?.length) files.push(...Array.from(dt.files));
+  if (!files.length) return; // 无文件：文本粘贴走默认
+  e.preventDefault();
+  docWarn.value = "";
+  await addPickedFiles(files.slice(0, 12));
+}
+
+// ---- 拖放附件：文件/图片拖到输入卡上直接加入待发区（与粘贴共用限制通道） ----
+let dragDepth = 0;
+const dropping = ref(false);
+
+function hasFiles(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes("Files");
+}
+function onDragEnter(e: DragEvent): void {
+  if (props.disabled || !hasFiles(e)) return;
+  dragDepth++;
+  dropping.value = true;
+}
+function onDragOver(e: DragEvent): void {
+  if (!hasFiles(e)) return; // 文本拖放不拦截，保持默认插入
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+}
+function onDragLeave(): void {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropping.value = false;
+}
+async function onDrop(e: DragEvent): Promise<void> {
+  dragDepth = 0;
+  dropping.value = false;
+  const files = Array.from(e.dataTransfer?.files ?? []);
+  if (!files.length || props.disabled) return;
+  e.preventDefault();
+  docWarn.value = "";
+  await addPickedFiles(files.slice(0, 12));
+}
+
 function pickFiles(): void {
   docWarn.value = "";
   docInput.value?.click();
   plusOpen.value = false;
-}
-
-function onDocsPicked(e: Event): void {
-  const input = e.target as HTMLInputElement;
-  const slots = Math.max(0, MAX_FILES - pendingFiles.value.length);
-  let picked = 0;
-  for (const f of input.files ?? []) {
-    if (picked >= slots) {
-      docWarn.value = `最多 ${MAX_FILES} 个附件，多余文件已忽略`;
-      break;
-    }
-    if (f.size > MAX_FILE_BYTES) {
-      docWarn.value = `${f.name} 超过 20 MB，已跳过`;
-      continue;
-    }
-    picked++;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result ?? "");
-      const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-      if (base64) {
-        pendingFiles.value.push({ name: f.name, mime_type: f.type || "", size: f.size, data: base64 });
-      }
-    };
-    reader.readAsDataURL(f);
-  }
-  input.value = "";
 }
 
 function removeFile(i: number): void {
@@ -967,7 +1034,17 @@ function onKeydown(e: KeyboardEvent): void {
 </script>
 
 <template>
-  <div ref="rootEl" class="composer" :class="{ centered }" :style="{ '--menu-cap': menuCap }" :title="disabled ? disabledHint : ''">
+  <div
+    ref="rootEl"
+    class="composer"
+    :class="{ centered, dropping }"
+    :style="{ '--menu-cap': menuCap }"
+    :title="disabled ? disabledHint : ''"
+    @dragenter="onDragEnter"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
     <div v-if="centered" class="c-chips">
       <div class="c-folder" @click="toggleProjectMenu">
         <template v-if="selected">
@@ -1120,6 +1197,7 @@ function onKeydown(e: KeyboardEvent): void {
       :placeholder="taPlaceholder"
       @keydown="onKeydown"
       @input="onTextInput"
+      @paste="onPaste"
     />
     <!-- @ 文件提及弹层 -->
     <div v-if="mention && mentionMatches.length" class="mention-menu">
@@ -1392,6 +1470,8 @@ function onKeydown(e: KeyboardEvent): void {
   transition: border-color 0.15s;
 }
 .composer:focus-within { border-color: #4a4a4a; }
+/* 文件拖入悬停提示：边框主题色高亮 */
+.composer.dropping { border-color: var(--pd-accent); }
 .composer.centered { box-shadow: var(--pd-shadow); }
 .flex-sp { flex: 1; }
 
