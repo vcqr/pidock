@@ -127,7 +127,7 @@ try {
   const finalTextOf = (sid: string): string => {
     const msgs = events.filter((e) => e.session_id === sid && e.kind === "message_complete" && e.payload?.role === "assistant");
     for (let i = msgs.length - 1; i >= 0; i--) {
-      const text = (msgs[i].payload.blocks ?? [])
+      const text = (msgs[i]!.payload.blocks ?? [])
         .filter((b: any) => b.type === "text")
         .map((b: any) => b.text ?? "")
         .join("\n")
@@ -158,7 +158,7 @@ try {
   const valid = spans.filter((s): s is { start: number; end: number } => !!s);
   if (valid.length === childIds.length && valid.length >= 2) {
     const sorted = [...valid].sort((a, b) => a.start - b.start);
-    const overlapWidest = sorted[sorted.length - 1].start < sorted[0].end;
+    const overlapWidest = sorted[sorted.length - 1]!.start < sorted[0]!.end;
     const span = Math.max(...valid.map((s) => s.end)) - Math.min(...valid.map((s) => s.start));
     const sum = valid.reduce((n, s) => n + (s.end - s.start), 0);
     const ratio = span / Math.max(1, sum);

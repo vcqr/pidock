@@ -310,10 +310,16 @@ export function createWebBus(auth: AuthClient): DataBus & {
         case "session.set_model":
         case "session.file_diff":
         case "session.revert_files":
-        case "session.pending": {
+        case "session.pending":
+        case "subagent.spawn": {
           // 会话级命令：桌面端按同名 method 透传给 host
           const { session_id, ...payload } = params ?? {};
           const result = await command(session_id ?? "", method, payload);
+          return result ?? {};
+        }
+        case "subagent.usage": {
+          // 非会话级命令：桌面端按同名 method 透传给 host（子代理用量回填）
+          const result = await command("", method, params ?? {});
           return result ?? {};
         }
         case "config.get":

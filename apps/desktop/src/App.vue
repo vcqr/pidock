@@ -86,6 +86,15 @@ async function testExpert(e: { id: string; name: string }): Promise<void> {
   }
 }
 
+/** 专家页「试运行」：以该专家身份在当前父会话下派发独立子代理（subagent.spawn，
+ * 后台执行立即返回——进度与中止走父会话的监控 dock） */
+async function spawnExpertSubagent(args: { expert_id: string; prompt: string; label?: string }): Promise<void> {
+  const s = store.value;
+  if (!s) throw new Error("应用尚未就绪");
+  if (!s.activeId) throw new Error("请先打开或新建一个会话（子代理需要一个父会话承载）");
+  await s.rpc("subagent.spawn", { session_id: s.activeId, ...args });
+}
+
 function openSettings(tab?: string): void {
   settingsPane.value = tab ?? "general";
   showSettings.value = true;
@@ -419,6 +428,7 @@ onMounted(async () => {
         <ExpertsView
           v-if="showExperts"
           :bus="bus"
+          :spawn-subagent="spawnExpertSubagent"
           @close="showExperts = false"
           @open-providers="() => openSettings('providers')"
           @hire="(expert) => { showExperts = false; startNewTask(undefined, expert); }"

@@ -416,6 +416,15 @@ async function testExpert(e: { id: string; name: string }): Promise<void> {
   }
 }
 
+/** 专家页「试运行」：以该专家身份在当前父会话下派发独立子代理（云端经命令回传到
+ * 桌面端执行；进度与中止走父会话的监控 dock） */
+async function spawnExpertSubagent(args: { expert_id: string; prompt: string; label?: string }): Promise<void> {
+  const s = store.value;
+  if (!s) throw new Error("应用尚未就绪");
+  if (!s.activeId) throw new Error("请先打开或新建一个会话（子代理需要一个父会话承载）");
+  await s.rpc("subagent.spawn", { session_id: s.activeId, ...args });
+}
+
 // 新建会话（首条消息创建）后退出新建任务模式；侧栏点选在 @select 里直接退出
 // ——重选同一会话时 activeId 不变，watch 不会触发；手机端同时收起抽屉
 watch(
@@ -1011,6 +1020,7 @@ onBeforeUnmount(() => {
       <ExpertsView
         v-if="showExperts"
         :bus="bus!"
+        :spawn-subagent="spawnExpertSubagent"
         @close="showExperts = false"
         @open-providers="() => openSettings('providers')"
         @hire="(expert) => { showExperts = false; startNewTask(undefined, expert); }"

@@ -401,6 +401,10 @@ export const Method = {
   SESSION_TREE: "session.tree",
   /** 就地切换到树中某节点（SDK navigateTree，UI 事后重开会话刷新视图） */
   SESSION_NAVIGATE_TREE: "session.navigate_tree",
+  /** 独立派生子代理（ ExpertsView 试运行等）：后台执行，立即返回子会话 id */
+  SUBAGENT_SPAWN: "subagent.spawn",
+  /** 子代理用量回填（UI 重启/刷新后 hydration）：按会话 id 扫描落盘 JSONL 汇总 */
+  SUBAGENT_USAGE: "subagent.usage",
   /** 当前会话的 prompts 模板（slash 弹窗与技能合并展示） */
   CONFIG_PROMPTS_LIST: "config.prompts.list",
   /** 模型思考能力/可用档位（supportsThinking/getAvailableThinkingLevels） */

@@ -506,7 +506,8 @@ async fn execute_command(
         | "session.file_changes"
         | "session.file_diff"
         | "session.revert_files"
-        | "session.pending") => {
+        | "session.pending"
+        | "subagent.spawn") => {
             let mut p = payload.clone();
             p["session_id"] = json!(session_id);
             (passthrough, p)
@@ -550,7 +551,8 @@ async fn execute_command(
         | "experts.private_list"
         | "experts.read_avatar_file"
         | "experts.install_resource"
-        | "experts.remove_resource") => (passthrough, payload.clone()),
+        | "experts.remove_resource"
+        | "subagent.usage") => (passthrough, payload.clone()),
         // 本地定时任务管理：调度器在核心 Rust 侧，不经 host —— 直连 SchedulerManager
         automation @ ("automation.list"
         | "automation.save"

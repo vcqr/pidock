@@ -85,6 +85,19 @@ try {
   const summary = (list.sessions ?? []).find((s: any) => s.session_id === created.session_id);
   check("normal session has no kind", !!summary && summary.kind === undefined);
   check("normal session has no parent", !!summary && summary.parent_session_id === undefined);
+
+  // 独立派生 RPC：立即返回子会话 id，后台回合收尾后注册表可查（kind/关闭）
+  const spawned = await request("subagent.spawn", {
+    session_id: created.session_id,
+    prompt: "结构冒烟任务",
+    label: "smoke 子代理",
+  });
+  check("subagent.spawn 立即返回", !!spawned.session_id);
+  await new Promise((r) => setTimeout(r, 2500));
+  const list2 = await request("session.list");
+  const spawnedSummary = (list2.sessions ?? []).find((s: any) => s.session_id === spawned.session_id);
+  check("独立派生登记 kind=subagent", spawnedSummary?.kind === "subagent", spawnedSummary?.name);
+  check("独立派生已收尾关闭", spawnedSummary?.open === false);
 } catch (err) {
   failures++;
   console.log(`(FAIL) smoke aborted: ${err instanceof Error ? err.message : err}`);

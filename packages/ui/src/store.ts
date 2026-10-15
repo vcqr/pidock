@@ -953,6 +953,49 @@ export function createAgentStore(bus: DataBus) {
     sessions.value = r.sessions ?? [];
     // host 主目录：用于区分「不在项目中」的会话（web 端服务器快照无此信息，保持 null）
     homeDir.value = typeof r.home === "string" && r.home ? r.home : null;
+    void hydrateSubagentRuns();
+  }
+
+  /**
+   * 重启/刷新后用注册表快照回填子代理索引——live 事件只覆盖增量，没有这一步
+   * dock 的子代理段在重开应用后会整段消失。live 已有的条目不覆盖（数据更新）；
+   * 历史累计 token 经 subagent.usage 回填（旧 host 无此 RPC 时显示 0）。
+   */
+  async function hydrateSubagentRuns(): Promise<void> {
+    const children = sessions.value.filter((s) => s.kind === "subagent" && s.parent_session_id);
+    if (!children.length) return;
+    const next = { ...subagentRuns.value };
+    let added = false;
+    for (const s of children) {
+      if (next[s.session_id]) continue;
+      next[s.session_id] = {
+        session_id: s.session_id,
+        parent_session_id: s.parent_session_id!,
+        name: s.name ?? s.expert_name ?? "子代理",
+        ...(s.expert_id ? { expert_id: s.expert_id } : {}),
+        ...(s.expert_name ? { expert_name: s.expert_name } : {}),
+        ...(s.model ? { model: s.model } : {}),
+        ...(s.cwd ? { cwd: s.cwd } : {}),
+        state: s.state ?? "idle",
+        started_at: s.created_at ?? new Date().toISOString(),
+        tokens: 0,
+      };
+      added = true;
+    }
+    subagentRuns.value = next;
+    if (!added) return;
+    try {
+      const u = await bus.request("subagent.usage", { session_ids: children.map((c) => c.session_id) });
+      const usage = u?.usage ?? {};
+      const merged = { ...subagentRuns.value };
+      for (const [sid, v] of Object.entries(usage)) {
+        const tokens = Number((v as any)?.tokens) || 0;
+        if (merged[sid] && tokens > 0) merged[sid] = { ...merged[sid], tokens };
+      }
+      subagentRuns.value = merged;
+    } catch {
+      // 旧 host 无此 RPC：token 显示 0，不影响列表
+    }
   }
 
   /** 拉取全量可用模型（失败静默，下拉退回会话历史模型） */

@@ -13,7 +13,14 @@ import { appConfirm } from "../confirm.js";
  * 雇佣 = 新建任务时绑定（host 在会话创建时应用全部配置）。
  */
 
-const props = defineProps<{ bus: DataBus }>();
+const props = withDefaults(
+  defineProps<{
+    bus: DataBus;
+    /** 子代理试运行派发器（App 注入：当前活动会话为父会话，缺失时报错） */
+    spawnSubagent?: (args: { expert_id: string; prompt: string; label?: string }) => Promise<void>;
+  }>(),
+  { spawnSubagent: undefined },
+);
 const emit = defineEmits<{
   close: [];
   "open-providers": [];
@@ -211,6 +218,41 @@ function hire(e: Expert): void {
 /** 对话测试：立即开一个绑定该专家的会话 */
 function test(e: Expert): void {
   emit("test", { id: e.id, name: e.name });
+}
+
+// ---- 子代理试运行：以该专家身份在当前父会话下派发独立子代理（后台跑，dock 看进度） ----
+const showSpawn = ref(false);
+const spawnExpert = ref<Expert | null>(null);
+const spawnPrompt = ref("");
+const spawnLabel = ref("");
+const spawnBusy = ref(false);
+function openSpawn(e: Expert): void {
+  spawnExpert.value = e;
+  spawnPrompt.value = "";
+  spawnLabel.value = "";
+  showSpawn.value = true;
+}
+async function submitSpawn(): Promise<void> {
+  if (!spawnExpert.value || !props.spawnSubagent) return;
+  const prompt = spawnPrompt.value.trim();
+  if (!prompt) {
+    flash("请填写试运行任务", true);
+    return;
+  }
+  spawnBusy.value = true;
+  try {
+    await props.spawnSubagent({
+      expert_id: spawnExpert.value.id,
+      prompt,
+      ...(spawnLabel.value.trim() ? { label: spawnLabel.value.trim() } : {}),
+    });
+    showSpawn.value = false;
+    flash(`已派发子代理，切到父会话的监控栏查看实时进度`);
+  } catch (err) {
+    flash(errText(err), true);
+  } finally {
+    spawnBusy.value = false;
+  }
 }
 
 // ---------------------------------------------------------------- 选择数据
@@ -452,6 +494,9 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
           <button class="btn sm" title="回到新任务页，可选项目/模型后再开始" @click="hire(e)">
             <Icon name="user-star-line" :size="14" />雇佣
           </button>
+          <button class="btn sm" title="以该专家身份派发子代理，在当前父会话下后台试运行" @click="openSpawn(e)">
+            <Icon name="robot-2-line" :size="13" />试运行
+          </button>
           <button class="icon-btn sm" title="编辑" @click="openEdit(e)">
             <Icon name="edit-2-line" :size="15" />
           </button>
@@ -650,6 +695,38 @@ async function removePrivate(kind: "skill" | "extension", name: string): Promise
           <button class="btn" @click="showEditor = false">取消</button>
           <button class="btn primary" :disabled="saving" @click="save">
             {{ saving ? "保存中…" : editingId ? "保存" : "创建" }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 子代理试运行对话框：以该专家身份在当前父会话下派发独立子代理 -->
+    <div v-if="showSpawn" class="dialog-mask">
+      <div class="dialog narrow">
+        <div class="d-head">
+          <h2>子代理试运行 · {{ spawnExpert?.name }}</h2>
+          <button class="icon-btn" title="关闭" @click="showSpawn = false">
+            <Icon name="close-line" :size="17" />
+          </button>
+        </div>
+        <p class="d-sub">以该专家的完整配置（角色提示词/技能/工具白名单）派发一个<b>独立子代理</b>，在当前父会话下后台执行；切到父会话的监控栏可看实时工作流并可中止。父会话权限模式决定子代理可执行的操作范围。</p>
+        <div class="field">
+          <label>显示名（可选，监控栏列表用）</label>
+          <input v-model="spawnLabel" placeholder="缺省用专家名" maxlength="60" />
+        </div>
+        <div class="field">
+          <label>试运行任务<i>*</i></label>
+          <textarea
+            v-model="spawnPrompt"
+            rows="5"
+            placeholder="给这个子代理的完整任务描述——它看不到当前对话，请把上下文写全"
+            maxlength="20000"
+          ></textarea>
+        </div>
+        <div class="d-foot">
+          <button class="btn" @click="showSpawn = false">取消</button>
+          <button class="btn primary" :disabled="spawnBusy || !props.spawnSubagent" @click="submitSpawn">
+            {{ spawnBusy ? "派发中…" : "派发" }}
           </button>
         </div>
       </div>

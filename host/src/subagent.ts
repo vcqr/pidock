@@ -23,6 +23,8 @@ export interface TaskSpawnParams {
   label?: string;
   expert_id?: string;
   model?: string;
+  /** 回合预算（assistant 消息段数），超限自动中止；缺省走 settings 的全局默认 */
+  maxTurns?: number;
 }
 
 export interface TaskSpawnResult {
@@ -36,15 +38,23 @@ export function sanitizeTaskParams(raw: Record<string, unknown>): TaskSpawnParam
   const label = typeof raw.label === "string" && raw.label.trim() ? raw.label.trim().slice(0, MAX_LABEL_CHARS) : undefined;
   const expertId = typeof raw.expert_id === "string" && raw.expert_id.trim() ? raw.expert_id.trim() : undefined;
   const model = typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined;
+  // 回合预算：1–500 防呆，非法值丢弃（走 settings 全局默认）
+  const rawTurns = Number(raw.maxTurns);
+  const maxTurns = Number.isFinite(rawTurns) && rawTurns >= 1 ? Math.min(Math.floor(rawTurns), 500) : undefined;
   return {
     prompt,
     ...(label ? { label } : {}),
     ...(expertId ? { expert_id: expertId } : {}),
     ...(model ? { model } : {}),
+    ...(maxTurns ? { maxTurns } : {}),
   };
 }
 
-export function createTaskTool(spawn: (params: TaskSpawnParams) => Promise<TaskSpawnResult>) {
+export function createTaskTool(
+  spawn: (params: TaskSpawnParams) => Promise<TaskSpawnResult>,
+  /** 可选：可用专家清单注入描述尾部，模型据此自主传 expert_id */
+  expertsSuffix = "",
+) {
   return defineTool({
     name: "Task",
     label: "Subagent",
@@ -53,7 +63,7 @@ export function createTaskTool(spawn: (params: TaskSpawnParams) => Promise<TaskS
       "in the background) and wait for its final report. " +
       "Use it for isolated sub-jobs: code review, research, long file analysis, bulk edits in a sandbox. " +
       "Give a complete, unambiguous prompt — the subagent shares your workspace and permissions but has " +
-      "no access to this conversation. Subagents cannot spawn further subagents.",
+      "no access to this conversation. Subagents cannot spawn further subagents." + expertsSuffix,
     parameters: Type.Object({
       prompt: Type.String({ description: "Full task instructions for the subagent, including context it needs and the expected deliverable." }),
       label: Type.Optional(
@@ -64,6 +74,13 @@ export function createTaskTool(spawn: (params: TaskSpawnParams) => Promise<TaskS
       ),
       model: Type.Optional(
         Type.String({ description: "Optional model override in 'provider/model-id' form. Omit to inherit the current model." }),
+      ),
+      maxTurns: Type.Optional(
+        Type.Number({
+          description:
+            "Optional work budget: abort the subagent after this many assistant message segments (1-500). " +
+            "Omit to use the global default.",
+        }),
       ),
     }),
     // 允许同一回合多个 Task 调用并行执行（真正的子代理并发由这里产生）

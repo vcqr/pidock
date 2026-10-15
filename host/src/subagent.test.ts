@@ -32,4 +32,14 @@ describe("sanitizeTaskParams", () => {
   test("空对象返回空 prompt", () => {
     expect(sanitizeTaskParams({}).prompt).toBe("");
   });
+
+  test("maxTurns 防呆：合法取整、越界钳制、非法丢弃", () => {
+    expect(sanitizeTaskParams({ prompt: "x", maxTurns: 50 }).maxTurns).toBe(50);
+    expect(sanitizeTaskParams({ prompt: "x", maxTurns: 9999 }).maxTurns).toBe(500);
+    expect(sanitizeTaskParams({ prompt: "x", maxTurns: 3.7 }).maxTurns).toBe(3);
+    expect(sanitizeTaskParams({ prompt: "x", maxTurns: 0 }).maxTurns).toBeUndefined();
+    expect(sanitizeTaskParams({ prompt: "x", maxTurns: -5 }).maxTurns).toBeUndefined();
+    expect(sanitizeTaskParams({ prompt: "x", maxTurns: "abc" }).maxTurns).toBeUndefined();
+    expect(sanitizeTaskParams({ prompt: "x" }).maxTurns).toBeUndefined();
+  });
 });

@@ -135,6 +135,10 @@ try {
     !!taskResult && String(taskResult.output ?? "").includes(MARKER),
     String(taskResult?.output ?? "").slice(0, 120),
   );
+  check(
+    "报告带结构化尾注（状态/用时）",
+    !!taskResult && /（子代理 · .+ · 用时 \d+[ms]/.test(String(taskResult.output ?? "")),
+  );
 
   // 5) 注册表投影：kind/parent/name/关闭
   const list = await request("session.list");

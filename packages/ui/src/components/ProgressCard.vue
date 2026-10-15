@@ -30,6 +30,8 @@ const runs = computed<SubagentRunUi[]>(() => {
 });
 const runningCount = computed(() => runs.value.filter((r) => !["idle", "waiting_approval", "waiting_ask"].includes(r.state)).length);
 const waitingCount = computed(() => runs.value.filter((r) => ["waiting_approval", "waiting_ask"].includes(r.state)).length);
+/** 本会话全部子代理的 token 消耗汇总（列表头部展示） */
+const totalTokens = computed(() => runs.value.reduce((n, r) => n + r.tokens, 0));
 /** 详情导航：选中的子代理（会话结束后条目消失时自动回列表） */
 const selectedChild = ref<string | null>(null);
 const detailRun = computed(() => (selectedChild.value ? runs.value.find((r) => r.session_id === selectedChild.value) ?? null : null));
@@ -227,15 +229,15 @@ function copyPath(): void {
     <span v-if="!isNarrow" class="rz-grip" title="拖动调整宽度" @mousedown="onResizeStart"></span>
     <header class="head">
       <template v-if="detailRun">
-        <Icon name="git-branch-line" :size="14" />
+        <Icon name="robot-2-fill" :size="18" />
         <span class="title">子代理</span>
       </template>
       <template v-else-if="expert">
-        <Icon name="user-star-line" :size="14" />
+        <Icon name="user-star-line" :size="18" />
         <span class="title">专家</span>
       </template>
       <template v-else>
-        <Icon name="check-double-line" :size="14" />
+        <Icon name="check-double-line" :size="18" />
         <span class="title">任务清单</span>
       </template>
       <span v-if="todos.length && !detailRun" class="count" :class="{ all: done === todos.length }">{{ done }}/{{ todos.length }}</span>
@@ -307,10 +309,12 @@ function copyPath(): void {
     <!-- 子代理运行段：task 工具派生的会话条目，点击进入工作流详情 -->
     <div v-if="runs.length" class="sa-sec">
       <div class="sa-head">
-        <Icon name="git-branch-line" :size="12" />
+        <Icon name="robot-2-fill" :size="18" />
         <span>子代理</span>
         <span v-if="runningCount" class="sa-live">{{ runningCount }} 运行中</span>
         <span v-if="waitingCount" class="sa-wait">{{ waitingCount }} 待处理</span>
+        <span class="flex-sp"></span>
+        <span v-if="totalTokens" class="sa-sum" title="本会话子代理累计 token">Σ {{ fmtTokens(totalTokens) }}</span>
       </div>
       <div
         v-for="r in runs"
@@ -323,9 +327,9 @@ function copyPath(): void {
         @keydown.enter="selectedChild = r.session_id"
       >
         <span class="st">
-          <Icon v-if="r.state === 'idle'" name="checkbox-circle-fill" :size="13" />
+          <Icon v-if="r.state === 'idle'" name="checkbox-circle-fill" :size="18" />
           <span v-else-if="['waiting_approval', 'waiting_ask'].includes(r.state)" class="warn-dot"></span>
-          <span v-else class="spin"></span>
+          <span v-else class="spin sa-spin"></span>
         </span>
         <span class="sa-col">
           <span class="sa-name">{{ r.expert_name || r.name }}</span>
@@ -339,7 +343,7 @@ function copyPath(): void {
           title="终止子代理"
           @click.stop="abortRun(r)"
         >
-          <Icon name="close-circle-line" :size="13" />
+          <Icon name="close-circle-line" :size="17" />
         </button>
       </div>
     </div>
@@ -354,7 +358,7 @@ function copyPath(): void {
       :title="runningCount ? `${runningCount} 个子代理运行中` : `${runs.length} 个子代理已结束`"
       @click="expand"
     >
-      <Icon name="git-branch-line" :size="13" />
+      <Icon name="robot-2-fill" :size="16" />
       <span v-if="waitingCount">{{ waitingCount }} 待</span>
       <span v-else>{{ runningCount || runs.length }}</span>
     </button>
@@ -431,9 +435,9 @@ function copyPath(): void {
 .head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   color: var(--pd-text-2);
-  font-size: calc(12.5px * var(--pd-font-scale));
+  font-size: calc(14px * var(--pd-font-scale));
   font-weight: 600;
   flex: none;
 }
@@ -492,9 +496,9 @@ function copyPath(): void {
 }
 .e-sec { border-top: 1px dashed var(--pd-border-soft); margin-top: 14px; padding-top: 10px; }
 .e-label {
-  font-size: calc(10.5px * var(--pd-font-scale));
-  color: var(--pd-text-4);
-  letter-spacing: 1px;
+  font-size: calc(11.5px * var(--pd-font-scale));
+  color: var(--pd-text-3);
+  letter-spacing: 0.5px;
   margin-bottom: 5px;
 }
 .e-prompt {
@@ -654,14 +658,20 @@ li.in_progress .st { color: var(--pd-accent); }
 .sa-head {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: calc(10.5px * var(--pd-font-scale));
-  color: var(--pd-text-4);
-  letter-spacing: 1px;
+  gap: 6px;
+  font-size: calc(12px * var(--pd-font-scale));
+  color: var(--pd-text-3);
+  font-weight: 600;
   margin-bottom: 6px;
 }
 .sa-live { color: var(--pd-accent); letter-spacing: 0; }
 .sa-wait { color: var(--pd-orange, #e08a3c); letter-spacing: 0; }
+.sa-sum {
+  color: var(--pd-text-4);
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.sa-head .flex-sp { flex: 1; }
 .sa-row {
   display: flex;
   align-items: center;
@@ -716,11 +726,17 @@ li.in_progress .st { color: var(--pd-accent); }
   color: var(--pd-red);
 }
 .warn-dot {
-  width: 9px;
-  height: 9px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: var(--pd-orange, #e08a3c);
   animation: sa-pulse 1.2s ease-in-out infinite;
+}
+/* 子代理行内的运行 spinner 比任务清单的稍大（行高与 18px 状态图标对齐） */
+.sa-spin {
+  width: 15px;
+  height: 15px;
+  border-width: 2px;
 }
 @keyframes sa-pulse {
   50% { opacity: 0.35; }

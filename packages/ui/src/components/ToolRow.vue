@@ -104,7 +104,7 @@ const info = computed<Info>(() => {
       // 子代理派生：目标显示 spawn 的 label（缺省任务文本截断）
       const target = String(a.label ?? a.prompt ?? "").replace(/\s+/g, " ").slice(0, 80);
       const who = a.expert_id ? `专家 ${a.expert_id} · ${target}` : target;
-      return { verb: "子代理", icon: "git-branch-line", target: who };
+      return { verb: "子代理", icon: "robot-2-line", target: who };
     }
     default:
       return { verb: props.toolName, icon: "tools-line", target: props.args.replace(/\s+/g, " ").slice(0, 120) };

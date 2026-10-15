@@ -180,6 +180,10 @@ pub mod method {
     pub const SESSION_SET_ACTIVE_TOOLS: &str = "session.set_active_tools";
     pub const SESSION_TREE: &str = "session.tree";
     pub const SESSION_NAVIGATE_TREE: &str = "session.navigate_tree";
+    /// 独立派生子代理（ExpertsView 试运行等）：后台执行，立即返回子会话 id
+    pub const SUBAGENT_SPAWN: &str = "subagent.spawn";
+    /// 子代理用量回填（UI 重启/刷新后 hydration）：按会话 id 扫描落盘 JSONL 汇总
+    pub const SUBAGENT_USAGE: &str = "subagent.usage";
 
     // ---- CONFIG ----
     pub const CONFIG_PROMPTS_LIST: &str = "config.prompts.list";

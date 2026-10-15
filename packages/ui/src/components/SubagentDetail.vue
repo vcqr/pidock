@@ -285,6 +285,31 @@ async function abortChild(): Promise<void> {
   }
 }
 
+/** 以完整会话在主区打开（子代理本就是池化会话——重开可回放历史并继续对话） */
+async function openFull(): Promise<void> {
+  try {
+    // 事件先行 upsert 的最小摘要没有 file，先刷新注册表补全
+    await props.store.refreshSessions();
+    await props.store.openSession(props.run.session_id);
+  } catch {
+    // 打开失败经 lastError 通道可见
+  }
+}
+
+const steerText = ref("");
+
+/** 插话（steer）：运行中的子代理会在当前回合内消化这条消息 */
+async function sendSteer(): Promise<void> {
+  const text = steerText.value.trim();
+  if (!text) return;
+  steerText.value = "";
+  try {
+    await props.store.rpc("agent.steer", { session_id: props.run.session_id, text });
+  } catch {
+    // 会话已结束等错误忽略（输入框仅运行中显示）
+  }
+}
+
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
@@ -304,6 +329,9 @@ function fmtTokens(n: number): string {
         {{ stateLabel }}
       </span>
       <span class="flex-sp"></span>
+      <button class="hbtn" title="以完整会话在主区打开（可继续追问/steer）" @click="openFull">
+        <Icon name="arrow-right-line" :size="14" />
+      </button>
       <button v-if="isRunning" class="hbtn danger" title="中止子代理" @click="abortChild">
         <Icon name="close-circle-line" :size="15" />
       </button>
@@ -344,6 +372,20 @@ function fmtTokens(n: number): string {
         :output="t.output"
       />
     </div>
+    <!-- 插话（steer）：运行中引导子代理调整方向，不必中止重来 -->
+    <div v-if="isRunning" class="steer">
+      <input
+        v-model="steerText"
+        class="steer-input"
+        placeholder="插话引导子代理（它会带着这条调整后续工作）…"
+        maxlength="8000"
+        @keydown.enter="sendSteer"
+      />
+      <button class="steer-send" :disabled="!steerText.trim()" title="发送插话" @click="sendSteer">
+        <Icon name="arrow-up-line" :size="14" />
+      </button>
+    </div>
+
     <!-- 上翻阅读时的回底入口：流式输出继续也不打扰 -->
     <button v-if="!atBottom && isRunning" class="jump-bottom" @click="atBottom = true; scrollToEnd(true)">
       <Icon name="arrow-down-line" :size="13" />回到底部
@@ -523,6 +565,44 @@ function fmtTokens(n: number): string {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 .jump-bottom:hover { border-color: var(--pd-accent); color: var(--pd-text); }
+
+/* 插话输入条：dock 底部一行，运行中显示 */
+.steer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--pd-border-soft);
+  flex: none;
+}
+.steer-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid var(--pd-border);
+  border-radius: 14px;
+  background: var(--pd-bg-panel);
+  color: var(--pd-text);
+  font-size: calc(12px * var(--pd-font-scale));
+  padding: 0 12px;
+  outline: none;
+}
+.steer-input::placeholder { color: var(--pd-text-4); }
+.steer-input:focus { border-color: var(--pd-accent); }
+.steer-send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: var(--pd-accent);
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+}
+.steer-send:disabled { opacity: 0.4; cursor: default; }
 .empty {
   margin: auto;
   color: var(--pd-text-4);

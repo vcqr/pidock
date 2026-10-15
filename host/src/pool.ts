@@ -26,7 +26,7 @@ import { parseAttachments, normalizeImage, type IncomingAttachment } from "./att
 import { createTodoWriteTool, sanitizeTodos } from "./todo.js";
 import { createAskUserQuestionTool, type AskAnswer } from "./ask.js";
 import { buildExpertPromptBlock, ExpertsService, matchExpertCommand, type ExpertSessionConfig } from "./experts.js";
-import { createTaskTool, MAX_SUBAGENTS_PER_PARENT } from "./subagent.js";
+import { createTaskTool, MAX_SUBAGENTS_PER_PARENT, sanitizeTaskParams } from "./subagent.js";
 import { defaultSessionDir, isManagedSessionDir, mediaMimeOf } from "./workspace.js";
 import { basename } from "node:path";
 import {
@@ -508,8 +508,9 @@ export class SessionPool {
         ...(params.parent_session_id
           ? []
           : [
-              createTaskTool((taskParams) =>
-                this.runTask(sessionIdRef.id, taskParams),
+              createTaskTool(
+                (taskParams) => this.runTask(sessionIdRef.id, taskParams),
+                this.taskExpertsSuffix(),
               ),
             ]),
       ],
@@ -979,14 +980,34 @@ export class SessionPool {
   // ------------------------------------------------------------- subagents
 
   /**
-   * Task 工具的执行端：派生池化子代理（同进程多开一个会话，事件走同一管道）
-   * 并阻塞到其回合结束，最终 assistant 文本作为工具结果回传父会话。
-   * 深度 1 与每父并发上限在入口把关；权限模式继承父会话当前模式（专家预设优先）。
+   * Task 工具描述尾部的专家清单：模型据此自主传 expert_id（否则它无从知道
+   * 有哪些专家）。上限 20 个防描述爆炸，单条描述截断 80 字符。
    */
-  private async runTask(
+  private taskExpertsSuffix(): string {
+    try {
+      const { experts } = this.experts.list();
+      const lines = experts
+        .slice(0, 20)
+        .map((e) => `- ${e.id}｜${e.name}${e.description ? `：${e.description.slice(0, 80)}` : ""}`);
+      if (!lines.length) return "";
+      return (
+        "\n\nAvailable expert profiles (pass one as expert_id to run the subagent as that specialist; " +
+        "omit expert_id for a general-purpose subagent):\n" +
+        lines.join("\n")
+      );
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Task 工具与独立派生（spawnSubagentStandalone）共用的前半段：
+   * 守卫（深度/并发）→ 建子会话 → 父子登记。
+   */
+  private async doSpawn(
     parentId: string,
     taskParams: { prompt: string; label?: string; expert_id?: string; model?: string },
-  ): Promise<{ session_id: string; report: string }> {
+  ): Promise<{ childId: string; tracked: TrackedSession }> {
     const parent = this.sessions.get(parentId);
     if (!parent) throw new RpcError("session_not_found", `unknown session "${parentId}"`);
     if (this.subagentParent.has(parentId)) {
@@ -1026,40 +1047,187 @@ export class SessionPool {
     this.subagentParent.set(childId, parentId);
     if (!this.subagentChildren.has(parentId)) this.subagentChildren.set(parentId, new Set());
     this.subagentChildren.get(parentId)!.add(childId);
-    const tracked = this.require(childId);
-    let report: string;
+    return { childId, tracked: this.require(childId) };
+  }
+
+  /** spawn 后半段：跑完任务回合并收尾（解除登记 + 关闭会话），返回最终报告文本。
+   *  maxTurns > 0 时轮询 turn 计数（wire() 在每个 assistant 消息开始时 +1），
+   *  超限即中止子会话——防失控烧 token 的硬保险。 */
+  private async runChildTurn(
+    childId: string,
+    tracked: TrackedSession,
+    prompt: string,
+    opts: { startedAt: number; withFooter: boolean; maxTurns: number },
+  ): Promise<string> {
+    let budgetHit = false;
+    let budgetTimer: ReturnType<typeof setInterval> | null = null;
+    if (opts.maxTurns > 0) {
+      budgetTimer = setInterval(() => {
+        if (budgetHit || tracked.turnCounter < opts.maxTurns) return;
+        budgetHit = true;
+        this.denyApprovals(childId);
+        this.denyAsks(childId);
+        void tracked.session.abort().catch(() => {});
+      }, 3000);
+    }
     try {
       try {
         // await 回合 promise：正常结束/异常/中止都视为结束，报告从落盘条目提取
-        await tracked.session.prompt(taskParams.prompt);
+        await tracked.session.prompt(prompt);
       } catch {
         // 中止或模型错误：按已落盘内容提取报告
       }
-      report = this.lastAssistantText(tracked);
+      return this.childReport(tracked, {
+        startedAt: opts.startedAt,
+        budgetHit,
+        withFooter: opts.withFooter,
+      });
     } finally {
+      if (budgetTimer) clearInterval(budgetTimer);
       this.unregisterSubagent(childId);
       // 子代理回合结束即关闭：结果已落盘，dock 详情视图经注册表回放，
       // 不在池内为已完成任务保留内存（重开场景无——子代理不出现在侧栏）
       this.closeSession({ session_id: childId });
     }
+  }
+
+  /** 子代理回合预算缺省（settings.json subagent.maxTurns）：默认 100（按 assistant
+   *  消息段计），0/负 = 不限量，硬上限 500 防呆。Task 工具的 maxTurns 参数优先。 */
+  private subagentMaxTurnsDefault(): number {
+    try {
+      const raw = readFileSync(join(getAgentDir(), "pidock", "settings.json"), "utf8");
+      const n = Number(JSON.parse(raw)?.subagent?.maxTurns);
+      if (!Number.isFinite(n)) return 100;
+      if (n <= 0) return 0;
+      return Math.min(n, 500);
+    } catch {
+      return 100;
+    }
+  }
+
+  /**
+   * Task 工具的执行端：派生池化子代理（同进程多开一个会话，事件走同一管道）
+   * 并阻塞到其回合结束，最终 assistant 文本 + 状态元信息尾注作为工具结果回传父会话。
+   * 深度 1 与每父并发上限在入口把关；权限模式继承父会话当前模式（专家预设优先）。
+   */
+  private async runTask(
+    parentId: string,
+    taskParams: { prompt: string; label?: string; expert_id?: string; model?: string; maxTurns?: number },
+  ): Promise<{ session_id: string; report: string }> {
+    const { childId, tracked } = await this.doSpawn(parentId, taskParams);
+    const maxTurns = taskParams.maxTurns ?? this.subagentMaxTurnsDefault();
+    const report = await this.runChildTurn(childId, tracked, taskParams.prompt, {
+      startedAt: Date.now(),
+      withFooter: true,
+      maxTurns,
+    });
     return { session_id: childId, report };
   }
 
-  /** 提取最后一条 assistant 消息的文本块（Task 工具回传给父会话的报告） */
-  private lastAssistantText(tracked: TrackedSession): string {
+  /**
+   * 独立派生（ExpertsView 试运行、后续自动化等 UI 发起）：立即返回子会话 id，
+   * 回合在后台执行，最终报告不回传调用方——在监控 dock 详情看完整产出。
+   * 守卫与 Task 工具一致（深度/并发/权限继承）。
+   */
+  async spawnSubagentStandalone(params: {
+    session_id: string;
+    prompt: string;
+    expert_id?: string;
+    label?: string;
+  }): Promise<{ session_id: string }> {
+    const clean = sanitizeTaskParams({
+      prompt: params.prompt,
+      label: params.label,
+      expert_id: params.expert_id,
+    });
+    if (!clean.prompt) throw new RpcError("bad_request", "prompt 不能为空");
+    const { childId, tracked } = await this.doSpawn(params.session_id, clean);
+    void this.runChildTurn(childId, tracked, clean.prompt, {
+      startedAt: Date.now(),
+      withFooter: false,
+      maxTurns: this.subagentMaxTurnsDefault(),
+    }).catch(() => {
+      // 后台回合失败不影响调用方（事件流里可见错误）
+    });
+    return { session_id: childId };
+  }
+
+  /**
+   * 子代理报告：最后一段 assistant 文本；withFooter 时追加状态/文件改动/耗时
+   * 元信息尾注（Task 工具回传父会话用）——中止或达预算的半成品报告不再有误导性。
+   * 文件清单取自回合文件快照（read/write/edit/bash 落盘记录）。
+   */
+  private childReport(
+    tracked: TrackedSession,
+    meta: { startedAt: number; budgetHit: boolean; withFooter: boolean },
+  ): string {
     const entries = tracked.session.sessionManager.getEntries() as unknown as Record<string, any>[];
+    let text = "";
+    let aborted = false;
     for (let i = entries.length - 1; i >= 0; i--) {
       const msg = (entries[i] as any)?.message;
       if ((entries[i] as any)?.type === "message" && msg?.role === "assistant" && Array.isArray(msg.content)) {
-        const text = msg.content
+        const t = msg.content
           .filter((p: any) => p?.type === "text" && typeof p.text === "string" && p.text.trim())
           .map((p: any) => p.text)
           .join("\n\n")
           .trim();
-        if (text) return text;
+        if (t) {
+          text = t;
+          aborted = msg.stopReason === "aborted";
+          break;
+        }
       }
     }
-    return "（子代理已结束但没有产出文本报告）";
+    if (!text) text = "（子代理已结束但没有产出文本报告）";
+    if (!meta.withFooter) return text;
+    const files = new Set<string>();
+    for (const turns of this.fileSnapshots.get(tracked.session.sessionId)?.values() ?? []) {
+      for (const p of turns.keys()) files.add(p);
+    }
+    const sec = Math.max(1, Math.round((Date.now() - meta.startedAt) / 1000));
+    const dur = sec >= 60 ? `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, "0")}s` : `${sec}s`;
+    const status = meta.budgetHit ? "已达回合预算自动停止" : aborted ? "已中止" : "已完成";
+    const filePart = files.size
+      ? ` · 改动 ${files.size} 个文件：${[...files].slice(0, 8).map((p) => basename(p)).join("、")}${files.size > 8 ? " 等" : ""}`
+      : " · 无文件改动";
+    return `${text}\n\n---\n（子代理 · ${status} · 用时 ${dur}${filePart}）`;
+  }
+
+  /**
+   * 子代理用量回填（UI 重启/刷新后 hydration 用）：按会话 id 扫描落盘 JSONL，
+   * 汇总 assistant 消息的 usage（token/成本）。file 缺失或解析失败的条目跳过。
+   */
+  async subagentUsage(params: { session_ids: string[] }): Promise<{
+    usage: Record<string, { tokens: number; cost: number }>;
+  }> {
+    const ids = Array.isArray(params.session_ids)
+      ? params.session_ids.filter((x) => typeof x === "string").slice(0, 200)
+      : [];
+    const usage: Record<string, { tokens: number; cost: number }> = {};
+    if (!ids.length) return { usage };
+    const registry = this.readRegistry();
+    const { parseSessionEntries } = await import("@earendil-works/pi-coding-agent");
+    for (const sid of ids) {
+      const entry = registry.find((e) => e.session_id === sid);
+      if (!entry?.file || !existsSync(entry.file)) continue;
+      try {
+        const raw = parseSessionEntries(readFileSync(entry.file, "utf8")) as unknown as Record<string, any>[];
+        let tokens = 0;
+        let cost = 0;
+        for (const e of raw) {
+          const msg = e?.message;
+          if (e?.type === "message" && msg?.role === "assistant" && msg?.usage) {
+            tokens += num(msg.usage.totalTokens);
+            cost += num(msg.usage.cost?.total);
+          }
+        }
+        usage[sid] = { tokens, cost };
+      } catch {
+        // 单文件解析失败跳过
+      }
+    }
+    return { usage };
   }
 
   /** 解除子代理父子登记（回合结束/中止/关闭共用） */
@@ -1134,14 +1302,18 @@ export class SessionPool {
     return this.requestToolApproval(sessionId, toolName, input);
   }
 
-  /** 弹审批卡并等待用户裁决（resolve_approval 回传） */
+  /** 弹审批卡并等待用户裁决（resolve_approval 回传）。
+   *  子代理的审批带超时自动拒绝（settings subagent.approvalTimeoutSec，默认 300s，
+   *  0 = 不限时）——自主运行的子代理不允许无限期挂住父回合。 */
   private async requestToolApproval(
     sessionId: string,
     toolName: string,
     input: unknown,
   ): Promise<{ block: true; reason: string } | undefined> {
     const approvalId = randomUUID();
+    let resolvePending!: (approved: boolean) => void;
     const pending = new Promise<boolean>((resolve) => {
+      resolvePending = resolve;
       this.pendingApprovals.set(approvalId, { sessionId, toolName, args: JSON.stringify(input ?? {}), resolve });
     });
     emitEvent(
@@ -1151,9 +1323,45 @@ export class SessionPool {
       { persist: false },
     );
     emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "waiting_approval" }, { persist: false });
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let timedOut = false;
+    const timeoutSec = this.subagentParent.has(sessionId) ? this.subagentApprovalTimeoutSec() : 0;
+    if (timeoutSec > 0) {
+      timer = setTimeout(() => {
+        // 超时按拒绝结算：清挂起表 + 发空载荷结算信号清 UI 卡；
+        // 状态回 thinking 与拒绝理由由下方 await 之后的公共路径补发
+        if (!this.pendingApprovals.has(approvalId)) return;
+        this.pendingApprovals.delete(approvalId);
+        timedOut = true;
+        resolvePending(false);
+        emitEvent(sessionId, Event.TOOL_APPROVAL, {}, { persist: false });
+      }, timeoutSec * 1000);
+    }
     const approved = await pending;
+    if (timer) clearTimeout(timer);
     emitEvent(sessionId, Event.AGENT_STATE_CHANGED, { state: "thinking" }, { persist: false });
-    return approved ? undefined : { block: true, reason: "用户拒绝了本次工具调用" };
+    return approved
+      ? undefined
+      : {
+          block: true,
+          reason: timedOut
+            ? `子代理审批等待超时（${timeoutSec}s），已自动拒绝。如需此操作请改用无需审批的方式，或在用户在场时重试`
+            : "用户拒绝了本次工具调用",
+        };
+  }
+
+  /** 子代理审批超时（秒）：settings.json subagent.approvalTimeoutSec，默认 300，0/负 = 不限时，上限 24h 防呆 */
+  private subagentApprovalTimeoutSec(): number {
+    const DEFAULT_SEC = 300;
+    try {
+      const raw = readFileSync(join(getAgentDir(), "pidock", "settings.json"), "utf8");
+      const sec = Number(JSON.parse(raw)?.subagent?.approvalTimeoutSec);
+      if (!Number.isFinite(sec)) return DEFAULT_SEC;
+      if (sec <= 0) return 0;
+      return Math.min(sec, 86400);
+    } catch {
+      return DEFAULT_SEC;
+    }
   }
 
   /**
