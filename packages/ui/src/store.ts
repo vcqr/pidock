@@ -507,16 +507,30 @@ export function createAgentStore(bus: DataBus) {
       return;
     }
     if (role === "user") {
-      // confirm the optimistic copy if present (same text, still pending)
+      // confirm the optimistic copy if present. host 会把附件提取成 <attachment> 块
+      // （图片规整说明亦然）追加在原文之后，投递文本比输入原文长：除原文精确匹配外，
+      // 再按"剥离注入块后的基文本"与"原文前缀"匹配，否则乐观气泡永远停在「发送中」
+      // 并被事件里的同一条消息复制成第二条
+      const delivered = firstText(p) ?? "";
+      const deliveredBase = delivered
+        .replace(/<attachment name="[^"]*" size="[^"]*">\n[\s\S]*?\n<\/attachment>/g, "")
+        .trim();
       const pendingUser = items.value.find(
         (it): it is UiMessageItem =>
-          it.kind === "message" && it.role === "user" && it.pending === true && it.text === firstText(p),
+          it.kind === "message" &&
+          it.role === "user" &&
+          it.pending === true &&
+          (it.text === delivered ||
+            (deliveredBase !== "" && it.text === deliveredBase) ||
+            (it.text !== "" && delivered.startsWith(`${it.text}\n\n`))),
       );
       const imageUrls = asBlocks(p)
         .filter((b) => b.type === "image")
         .map((b) => `data:${(b as any).mime || "image/png"};base64,${(b as any).data}`);
       if (pendingUser) {
         pendingUser.pending = false;
+        // 以投递文本为准（含注入的附件块），确认后的气泡才能渲染出可展开正文的附件 chip
+        if (delivered && delivered !== pendingUser.text) pendingUser.text = delivered;
         pendingUser.turnId = p.entry_id || pendingUser.turnId;
         pendingUser.entryId = p.entry_id || pendingUser.entryId;
         if (imageUrls.length) pendingUser.imageUrls = imageUrls;
