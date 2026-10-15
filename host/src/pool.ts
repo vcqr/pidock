@@ -943,6 +943,23 @@ export class SessionPool {
     await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     this.autoTitle(params.session_id, params.text);
+    const { text, images } = await this.preparePromptParts(params);
+    tracked.session
+      .prompt(text, images.length ? { images } : undefined)
+      .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: String(err) }))
+      .finally(() => tracked.drain());
+    return { accepted: true };
+  }
+
+  /**
+   * prompt/steer/followUp 共用的发送准备：直发图片规整、/expert 命令替换、
+   * 附件文本提取与 <attachment> 块拼装。排队/插队发送与直发保持同构。
+   */
+  private async preparePromptParts(params: {
+    text: string;
+    images?: Array<{ data: string; mime_type: string }>;
+    attachments?: IncomingAttachment[];
+  }): Promise<{ text: string; images: Array<{ type: "image"; data: string; mimeType: string }> }> {
     const rawImages = (params.images ?? []).slice(0, 6).filter((img) => img?.data);
     // 直发图片同样规整（非通用格式转 PNG、大图缩放），与附件图片同一通道
     const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
@@ -970,11 +987,7 @@ export class SessionPool {
     const notes = [...directNotes, ...parsed.notes];
     const textParts = [promptText, ...notes, ...parsed.blocks].filter(Boolean);
     const fullText = textParts.length > 1 ? textParts.join("\n\n") : promptText;
-    tracked.session
-      .prompt(fullText, allImages.length ? { images: allImages } : undefined)
-      .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: String(err) }))
-      .finally(() => tracked.drain());
-    return { accepted: true };
+    return { text: fullText, images: allImages };
   }
 
   // ------------------------------------------------------------- subagents
@@ -2236,20 +2249,34 @@ export class SessionPool {
     emitEvent(sessionId, Event.SESSION_META, { name: title });
   }
 
-  async steer(params: { session_id: string; text: string }): Promise<{ accepted: boolean }> {
+  /** steering：把消息插入运行中的回合（下一次 LLM 调用前送达）；图片/附件与 prompt 同构 */
+  async steer(params: {
+    session_id: string;
+    text: string;
+    images?: Array<{ data: string; mime_type: string }>;
+    attachments?: IncomingAttachment[];
+  }): Promise<{ accepted: boolean }> {
     await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
+    const { text, images } = await this.preparePromptParts(params);
     tracked.session
-      .steer(params.text)
+      .steer(text, images.length ? images : undefined)
       .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: String(err) }));
     return { accepted: true };
   }
 
-  async followUp(params: { session_id: string; text: string }): Promise<{ accepted: boolean }> {
+  /** followUp：排队到当前回合结束后自动发出（不打断任务）；图片/附件与 prompt 同构 */
+  async followUp(params: {
+    session_id: string;
+    text: string;
+    images?: Array<{ data: string; mime_type: string }>;
+    attachments?: IncomingAttachment[];
+  }): Promise<{ accepted: boolean }> {
     await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
+    const { text, images } = await this.preparePromptParts(params);
     tracked.session
-      .followUp(params.text)
+      .followUp(text, images.length ? images : undefined)
       .catch((err) => emitEvent(params.session_id, Event.ERROR, { message: String(err) }));
     return { accepted: true };
   }

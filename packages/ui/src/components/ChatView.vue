@@ -157,7 +157,7 @@ const compactionSummary = computed(() => {
   return sid ? props.store.compactionBySession[sid] ?? null : null;
 });
 const csOpen = ref(false);
-/** 清空排队消息；被清的文本回填输入框（preset 是 Composer 的受控草稿通道） */
+/** 清空排队消息（host 侧 steering/followUp 残留，如另一端排入的）；原文回填输入框 */
 async function clearQueueToComposer(): Promise<void> {
   const texts = await props.store.clearQueue();
   if (texts.length) preset.value = texts.join("\n\n");
@@ -853,6 +853,41 @@ function onSend(
   void props.store.send(t, imgs, files);
 }
 
+/** 立即发送（忙时插队进入当前回合；空闲时等同普通发送） */
+function onSendNow(
+  t: string,
+  _cwd: unknown,
+  imgs?: Array<{ data: string; mime_type: string }>,
+  files?: Array<{ name: string; mime_type: string; size: number; data: string }>,
+): void {
+  followBottom.value = true;
+  void props.store.steerNow(t, imgs, files);
+}
+
+// ---- 发送队列面板（Composer 上方的待发列表；store 本地持有，回合结束自动续发） ----
+const activeQueueRows = computed(() => {
+  const sid = props.store.activeId;
+  const list = sid ? props.store.msgQueueBySession[sid] : undefined;
+  return (list ?? []).map((q) => ({
+    id: q.id,
+    text: q.text,
+    media: (q.images?.length ?? 0) + (q.attachments?.length ?? 0),
+  }));
+});
+/** 「立即」：结束当前任务（abort），空闲后立即把该条作为新回合发出；其余队列照常续发 */
+function onQueueNow(id: string): void {
+  void props.store.runQueuedNow(id);
+}
+function onQueueEdit(id: string, text: string): void {
+  props.store.editQueuedMsg(id, text);
+}
+function onQueueDelete(id: string): void {
+  props.store.unqueueMsg(id);
+}
+function onQueueReorder(from: number, to: number): void {
+  props.store.reorderQueue(from, to);
+}
+
 // ---- 用户问题锚点导航（左侧 minimap）：每条用户提问一个刻度，按内容位置比例排布 ----
 
 const userQuestions = computed<Array<{ key: string; text: string }>>(() => {
@@ -1213,8 +1248,14 @@ watch(expandedTurns, () => {
           :prompts-loader="promptsLoader"
           :model-images-ok="modelSupportsImages"
           :models="modelOptions"
+          :queue="activeQueueRows"
           :preset="preset"
           @send="onSend"
+          @send-now="onSendNow"
+          @queue-now="onQueueNow"
+          @queue-edit="onQueueEdit"
+          @queue-delete="onQueueDelete"
+          @queue-reorder="onQueueReorder"
           @abort="store.abort()"
           @set-permission-mode="setPermissionMode"
           @set-thinking-level="setThinkingLevel"

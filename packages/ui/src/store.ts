@@ -614,6 +614,7 @@ export function createAgentStore(bus: DataBus) {
       // 会话已从 host 注册表移除（本端或另一端发起）：实时摘除，不等轮询
       const sid = e.session_id;
       sessions.value = sessions.value.filter((s) => s.session_id !== sid);
+      msgQueueBySession.value = withoutKey(msgQueueBySession.value, sid);
       if (subagentRuns.value[sid]) {
         const { [sid]: _gone, ...restRuns } = subagentRuns.value;
         subagentRuns.value = restRuns;
@@ -642,6 +643,11 @@ export function createAgentStore(bus: DataBus) {
     // ---- 全局层：不依赖活动会话（后台会话等待确认不再丢失） ----
     if (e.kind === "agent_state_changed") {
       const st = e.payload?.state;
+      // 全部会话的状态实时跟随（侧栏徽标 + 切回会话时 openSession 以此恢复忙/闲）
+      if (typeof st === "string") {
+        const s = sessions.value.find((x) => x.session_id === e.session_id);
+        if (s) s.state = st;
+      }
       if (st !== "waiting_approval" && st !== "waiting_ask" && pendingBySession.value[e.session_id]) {
         const next = { ...pendingBySession.value };
         delete next[e.session_id];
@@ -944,6 +950,10 @@ export function createAgentStore(bus: DataBus) {
       turnEndedAt.value = null;
     }
   });
+  // 队列续发：回合结束转空闲 / 切换会话时检查一次（活动会话空闲且队列非空才发出）
+  watch([agentState, activeId], () => {
+    void flushQueue();
+  });
   await refreshSessions();
   void refreshModels();
   }
@@ -1117,7 +1127,8 @@ export function createAgentStore(bus: DataBus) {
     items.value = [];
     liveTools = new Map();
     streaming = null;
-    agentState.value = "idle";
+    // 以侧栏维护的会话状态同步忙/闲（后台会话可能仍在运行；事件只在活动会话上到达）
+    agentState.value = summary?.state ?? "idle";
     lastError.value = null;
     pendingApproval.value = null;
     pendingAsk.value = null;
@@ -1152,6 +1163,8 @@ export function createAgentStore(bus: DataBus) {
     }
     // 以 host 实际挂起状态对账兜底（web 刷新后内存 stash 为空；后台可能已解决/超时）
     void fetchPending();
+    // 切回的会话可能带着排队消息且已空闲（后台回合已结束）：补一次续发检查
+    void flushQueue();
   }
 
   /**
@@ -1243,10 +1256,40 @@ export function createAgentStore(bus: DataBus) {
     images?: Array<{ data: string; mime_type: string }>,
     attachments?: Array<{ name: string; mime_type: string; size: number; data: string }>,
   ): Promise<void> {
-    if (!activeId.value || !text.trim()) return;
-    if (!turnStartedAt.value || turnEndedAt.value) {
-      turnStartedAt.value = Date.now();
-      turnEndedAt.value = null;
+    // 任务进行中（或队列正在发出）= 排入本地队列：当前回合结束后自动按序发出
+    if (agentState.value !== "idle" || flushing) {
+      queueMsg(text, images, attachments);
+      return;
+    }
+    await dispatchSend(text, images, attachments, "prompt");
+  }
+
+  /**
+   * 立即发送（steering）：忙时把消息直接插入当前回合，模型在下一个 LLM 调用即可看到；
+   * 空闲时退化为普通发送。队列面板的「立即」先取出条目再走这里。
+   */
+  async function steerNow(
+    text: string,
+    images?: Array<{ data: string; mime_type: string }>,
+    attachments?: Array<{ name: string; mime_type: string; size: number; data: string }>,
+  ): Promise<void> {
+    await dispatchSend(text, images, attachments, agentState.value === "idle" ? "prompt" : "steer");
+  }
+
+  async function dispatchSend(
+    text: string,
+    images: Array<{ data: string; mime_type: string }> | undefined,
+    attachments: Array<{ name: string; mime_type: string; size: number; data: string }> | undefined,
+    method: "prompt" | "steer",
+  ): Promise<boolean> {
+    if (!activeId.value || !text.trim()) return false;
+    if (method === "prompt") {
+      // 真实发送重新武装队列续发（abort 置的 skip 旗到此为止）；回合计时只在新回合重置
+      skipFlush = false;
+      if (!turnStartedAt.value || turnEndedAt.value) {
+        turnStartedAt.value = Date.now();
+        turnEndedAt.value = null;
+      }
     }
     items.value.push({
       kind: "message",
@@ -1264,13 +1307,14 @@ export function createAgentStore(bus: DataBus) {
         : {}),
     });
     try {
-      await bus.request("agent.prompt", {
+      await bus.request(`agent.${method}`, {
         session_id: activeId.value,
         text,
         ...(images?.length ? { images } : {}),
         ...(attachments?.length ? { attachments } : {}),
       });
       lastError.value = null;
+      return true;
     } catch (err) {
       // remove the optimistic bubble and surface the failure
       const idx = items.value.findIndex(
@@ -1278,11 +1322,117 @@ export function createAgentStore(bus: DataBus) {
       );
       if (idx >= 0) items.value.splice(idx, 1);
       lastError.value = err instanceof Error ? err.message : String(err);
+      return false;
+    }
+  }
+
+  // ----------------------- 本地发送队列（忙时 Enter 入队，回合结束自动续发） -----------------------
+  // 队列由 UI 持有：host 队列没有单条出队 RPC，编辑/删除/拖拽排序只能在本地做。
+  // 每个排队条目在当前回合结束后按序发出（一条一个回合）；「立即」= 取出后走 steer 插入当前回合。
+
+  interface QueuedSend {
+    id: string;
+    text: string;
+    images?: Array<{ data: string; mime_type: string }>;
+    attachments?: Array<{ name: string; mime_type: string; size: number; data: string }>;
+  }
+  const msgQueueBySession = ref<Record<string, QueuedSend[]>>({});
+  /** flush 进行中（prompt 已受理、busy 事件未落地）：期间的新发送一律入队，避免双发 */
+  let flushing = false;
+  /** 用户刚点过停止：这次 idle 不自动续发（与 pi 一致，队列保留在面板待手动处理） */
+  let skipFlush = false;
+
+  function queueMsg(
+    text: string,
+    images?: Array<{ data: string; mime_type: string }>,
+    attachments?: Array<{ name: string; mime_type: string; size: number; data: string }>,
+  ): void {
+    const sid = activeId.value;
+    if (!sid || !text.trim()) return;
+    const list = msgQueueBySession.value[sid] ?? [];
+    list.push({
+      id: nextKey(),
+      text,
+      ...(images?.length ? { images } : {}),
+      ...(attachments?.length ? { attachments } : {}),
+    });
+    msgQueueBySession.value = { ...msgQueueBySession.value, [sid]: list };
+  }
+
+  /** 取出一条排队消息（「立即」/「删除」共用）；找不到返回 null */
+  function unqueueMsg(id: string): QueuedSend | null {
+    const sid = activeId.value;
+    const list = sid ? msgQueueBySession.value[sid] : undefined;
+    if (!sid || !list) return null;
+    const idx = list.findIndex((q) => q.id === id);
+    if (idx < 0) return null;
+    const [item] = list.splice(idx, 1);
+    msgQueueBySession.value = { ...msgQueueBySession.value, [sid]: list };
+    return item ?? null;
+  }
+
+  /** 行内编辑排队消息文本（保持位置与图片/附件不变） */
+  function editQueuedMsg(id: string, text: string): void {
+    const sid = activeId.value;
+    const list = sid ? msgQueueBySession.value[sid] : undefined;
+    const item = list?.find((q) => q.id === id);
+    if (item && text.trim()) item.text = text.trim();
+  }
+
+  /** 拖拽排序（面板上按住把手拖动行） */
+  function reorderQueue(from: number, to: number): void {
+    const sid = activeId.value;
+    if (!sid) return;
+    const list = msgQueueBySession.value[sid];
+    if (!list || from === to) return;
+    if (from < 0 || to < 0 || from >= list.length || to >= list.length) return;
+    const [item] = list.splice(from, 1);
+    if (item) list.splice(to, 0, item);
+    msgQueueBySession.value = { ...msgQueueBySession.value, [sid]: [...list] };
+  }
+
+  /**
+   * 「立即」执行排队条目：结束当前任务（abort，等待真正空闲）后把该条作为新回合发出，
+   * 其余队列条目在该回合结束后照常续发。空闲时直接发送。
+   */
+  async function runQueuedNow(id: string): Promise<void> {
+    const sid = activeId.value;
+    if (!sid) return;
+    const item = unqueueMsg(id);
+    if (!item) return;
+    if (agentState.value !== "idle" || flushing) {
+      await abort();
+      // abort 内部置的 skipFlush 拦下 idle 事件触发的自动续发；下面的手动发送会清掉它，
+      // 该回合结束后队列照常续发。abort 在 host 侧等会话空闲后才返回，随后立即发送。
+      skipFlush = false;
+    }
+    await dispatchSend(item.text, item.images, item.attachments, "prompt");
+  }
+
+  /** 活动会话空闲且队列非空时发出队首（由 agentState/activeId 变化与 openSession 触发） */
+  async function flushQueue(): Promise<void> {
+    const sid = activeId.value;
+    if (!sid || loadingHistory.value || flushing || agentState.value !== "idle") return;
+    const q = msgQueueBySession.value[sid];
+    if (!q?.length) return;
+    if (skipFlush) {
+      skipFlush = false;
+      return;
+    }
+    const first = q[0]!;
+    flushing = true;
+    try {
+      const ok = await dispatchSend(first.text, first.images, first.attachments, "prompt");
+      if (ok) unqueueMsg(first.id);
+    } finally {
+      flushing = false;
     }
   }
 
   async function abort(): Promise<void> {
     if (!activeId.value) return;
+    // 中止后不自动续发队列（这次 idle 由 skipFlush 拦下），队列留在面板待手动处理
+    if (agentState.value !== "idle") skipFlush = true;
     await bus.request("agent.abort", { session_id: activeId.value });
   }
 
@@ -1317,6 +1467,9 @@ export function createAgentStore(bus: DataBus) {
     const cwds = new Set(
       sessions.value.filter((s) => valid.includes(s.session_id)).map((s) => s.cwd).filter(Boolean),
     );
+    for (const id of valid) {
+      msgQueueBySession.value = withoutKey(msgQueueBySession.value, id);
+    }
     try {
       await bus.request("session.remove", { session_ids: valid });
     } catch (err) {
@@ -1812,6 +1965,12 @@ export function createAgentStore(bus: DataBus) {
     fetchContextUsage,
     compactSession,
     clearQueue,
+    msgQueueBySession,
+    unqueueMsg,
+    editQueuedMsg,
+    reorderQueue,
+    runQueuedNow,
+    steerNow,
     setAutoCompaction,
     setAutoRetry,
     exportSession,

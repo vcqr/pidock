@@ -42,11 +42,20 @@ const props = withDefaults(
     modelImagesOk?: boolean | null;
     /** 草稿模式（表单内嵌）：send 只上报不清空，Enter/发送由父级决定语义（如保存） */
     draft?: boolean;
+    /** 发送队列（任务进行中排入的消息），渲染为输入框上方的待发列表 */
+    queue?: Array<{ id: string; text: string; media: number }>;
   }>(),
   { placeholder: "输入消息，Enter 发送，Shift+Enter 换行" },
 );
 const emit = defineEmits<{
   send: [
+    text: string,
+    cwd?: string | null,
+    images?: Array<{ data: string; mime_type: string }>,
+    files?: Array<{ name: string; mime_type: string; size: number; data: string }>,
+  ];
+  /** 立即发送（任务进行中插队进入当前回合；空闲时等同 send） */
+  sendNow: [
     text: string,
     cwd?: string | null,
     images?: Array<{ data: string; mime_type: string }>,
@@ -61,6 +70,14 @@ const emit = defineEmits<{
   hire: [expert: { id: string; name: string }];
   /** 取消雇佣 */
   unhire: [];
+  /** 队列条目「立即」：取出该条，结束当前任务后作为新回合发出 */
+  queueNow: [id: string];
+  /** 队列条目行内编辑保存（保持排队位置） */
+  queueEdit: [id: string, text: string];
+  /** 从队列移除该条 */
+  queueDelete: [id: string];
+  /** 拖拽排序：from 位置的行移到 to */
+  queueReorder: [from: number, to: number];
 }>();
 
 const I = {
@@ -75,6 +92,7 @@ const I = {
   plus: "add-line",
   up: "arrow-up-line",
   stop: "stop-line",
+  now: "flashlight-line",
   bulb: "lightbulb-line",
   hand: "chat-check-line",
   shieldCheck: "shield-check-line",
@@ -781,11 +799,12 @@ onMounted(() => document.addEventListener("click", onDocClick));
 onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
 
 /** 供表单父级（如定时任务弹窗的「创建」按钮）触发草稿提交 */
-defineExpose({ submit });
+defineExpose({ submit, submitNow });
 
-function submit(): boolean {
+/** 组装并发送载荷；busy 不拦——任务进行中由父级/store 决定入队语义 */
+function emitPayload(mode: "send" | "sendNow"): boolean {
   const value = text.value.trim();
-  if (!value || props.busy || props.disabled) return false;
+  if (!value || props.disabled) return false;
   const cwd = props.centered ? selected.value : undefined;
   const images = pendingImages.value.map((p) => ({ data: p.data, mime_type: p.mime_type }));
   const files = pendingFiles.value.map((p) => ({
@@ -794,7 +813,11 @@ function submit(): boolean {
     size: p.size,
     data: p.data,
   }));
-  emit("send", value, cwd === null ? null : cwd || undefined, images.length ? images : undefined, files.length ? files : undefined);
+  const cwdArg = cwd === null ? null : cwd || undefined;
+  const imgsArg = images.length ? images : undefined;
+  const filesArg = files.length ? files : undefined;
+  if (mode === "send") emit("send", value, cwdArg, imgsArg, filesArg);
+  else emit("sendNow", value, cwdArg, imgsArg, filesArg);
   if (props.draft) return true; // 草稿模式：内容归父级表单所有，成功与否由父级决定
   text.value = "";
   pendingImages.value = [];
@@ -802,6 +825,82 @@ function submit(): boolean {
   docWarn.value = "";
   slash.value = null;
   return true;
+}
+
+function submit(): boolean {
+  return emitPayload("send");
+}
+
+function submitNow(): boolean {
+  return emitPayload("sendNow");
+}
+
+/** 占位提示：任务进行中说明排队语义（回车入队，回合结束自动发出） */
+const taPlaceholder = computed(() =>
+  props.disabled
+    ? props.disabledHint
+    : props.busy
+      ? "继续输入以排队后续修改"
+      : props.placeholder,
+);
+
+// ---- 发送队列面板：行内编辑 / 指针拖拽排序 ----
+const editingId = ref<string | null>(null);
+const editText = ref("");
+const editInput = ref<HTMLInputElement | null>(null);
+/** 指针拖拽：按住把手期间只更新指示，松手一次性换位。
+ * 不用 HTML5 拖拽——拖动中换位会移动 v-for 节点导致浏览器取消拖拽，WKWebView 下也不可靠 */
+const dragIndex = ref(-1);
+const dragOver = ref(-1);
+
+function startEdit(q: { id: string; text: string }): void {
+  editingId.value = q.id;
+  editText.value = q.text;
+  void nextTick(() => editInput.value?.focus());
+}
+function saveEdit(): void {
+  const id = editingId.value;
+  if (!id) return;
+  editingId.value = null; // 先清（Esc 取消后尾随的 blur 不应再保存）
+  const t = editText.value.trim();
+  if (t) emit("queueEdit", id, t);
+}
+function cancelEdit(): void {
+  editingId.value = null;
+}
+/** 行在 v-for 内，模板 ref 需用函数形式（否则收集为数组） */
+function setEditInput(el: unknown): void {
+  editInput.value = (el as HTMLInputElement | null) ?? null;
+}
+
+function onGripDown(i: number, e: PointerEvent): void {
+  if (e.button !== 0 || editingId.value) return;
+  dragIndex.value = i;
+  dragOver.value = i;
+  e.preventDefault(); // 按住把手拖动时不触发选词/选中
+  window.addEventListener("pointermove", onDragMove);
+  window.addEventListener("pointerup", onDragUp, { once: true });
+  window.addEventListener("pointercancel", onDragUp, { once: true });
+}
+function onDragMove(e: PointerEvent): void {
+  if (dragIndex.value < 0) return;
+  const rows = rootEl.value?.querySelectorAll<HTMLElement>(".msg-queue .q-row:not(.q-editing)") ?? [];
+  let over = -1;
+  rows.forEach((r, idx) => {
+    const rect = r.getBoundingClientRect();
+    if (over < 0 && e.clientY >= rect.top && e.clientY <= rect.bottom) over = idx;
+  });
+  if (over >= 0) dragOver.value = over;
+}
+function onDragUp(): void {
+  window.removeEventListener("pointermove", onDragMove);
+  window.removeEventListener("pointerup", onDragUp);
+  window.removeEventListener("pointercancel", onDragUp);
+  if (dragIndex.value >= 0 && dragOver.value >= 0 && dragOver.value !== dragIndex.value) {
+    emit("queueReorder", dragIndex.value, dragOver.value);
+  }
+  dragIndex.value = -1;
+  dragOver.value = -1;
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -852,6 +951,12 @@ function onKeydown(e: KeyboardEvent): void {
       slash.value = null;
       return;
     }
+  }
+  // Ctrl/Cmd+Enter：立即发送（忙时插队进入当前回合，不排队）
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+    e.preventDefault();
+    submitNow();
+    return;
   }
   // 输入法组词中的 Enter 是"确认候选词"，不是发送/保存
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
@@ -968,12 +1073,51 @@ function onKeydown(e: KeyboardEvent): void {
       </div>
     </div>
 
+    <!-- 发送队列（忙时排入的消息）：立即 / 编辑 / 删除 / 拖拽排序 -->
+    <div v-if="queue?.length" class="msg-queue">
+      <template v-for="(q, i) in queue" :key="q.id">
+        <div v-if="editingId === q.id" class="q-row q-editing">
+          <input
+            :ref="setEditInput"
+            v-model="editText"
+            class="q-input"
+            title="Enter 保存，Esc 取消"
+            @keydown.enter.prevent="saveEdit"
+            @keydown.esc.prevent="cancelEdit"
+            @blur="saveEdit"
+          />
+        </div>
+        <div
+          v-else
+          class="q-row"
+          :class="{ dragging: dragIndex === i, 'drop-into': dragOver === i && dragIndex !== i }"
+        >
+          <span class="q-grip" title="拖动排序" @pointerdown="onGripDown(i, $event)">
+            <Icon name="draggable-line" :size="14" />
+          </span>
+          <span class="q-text" :title="q.text">{{ q.text }}</span>
+          <span v-if="q.media" class="q-media" :title="`${q.media} 个图片/附件`">
+            <Icon name="file-line" :size="12" />{{ q.media }}
+          </span>
+          <span class="flex-sp"></span>
+          <button class="q-act now" title="结束当前任务，立即执行这条" @click="emit('queueNow', q.id)">
+            <Icon :name="I.up" :size="13" />立即
+          </button>
+          <button class="q-act" title="编辑（保持排队位置）" @click="startEdit(q)">
+            <Icon name="edit-line" :size="14" />
+          </button>
+          <button class="q-act" title="从队列移除" @click="emit('queueDelete', q.id)">
+            <Icon name="delete-bin-line" :size="14" />
+          </button>
+        </div>
+      </template>
+    </div>
     <textarea
       ref="ta"
       v-model="text"
       rows="2"
       :disabled="disabled"
-      :placeholder="disabled ? disabledHint : placeholder"
+      :placeholder="taPlaceholder"
       @keydown="onKeydown"
       @input="onTextInput"
     />
@@ -1219,11 +1363,18 @@ function onKeydown(e: KeyboardEvent): void {
         </div>
       </div>
 
+      <!-- 忙时三键：立即发送（插队进入当前回合）/ 停止 / 加入队列（与 Enter 同义） -->
+      <button v-if="busy" class="send send-now" :disabled="disabled || !text.trim()" title="立即发送：插入当前任务，模型马上看到" @click="submitNow">
+        <Icon :name="I.now" :size="15" />
+      </button>
       <button v-if="busy" class="abort" title="停止" @click="emit('abort')">
         <Icon :name="I.stop" :size="14" />
       </button>
+      <button v-if="busy && !draft" class="send queue" :disabled="disabled || !text.trim()" title="加入队列 · 当前任务结束后自动发送" @click="submit">
+        <Icon :name="I.up" :size="15" />
+      </button>
       <!-- 草稿模式：保存动作由父级表单底部的按钮承担，这里不再显示发送键 -->
-      <button v-else-if="!draft" class="send" :disabled="disabled || !text.trim()" @click="submit">
+      <button v-if="!busy && !draft" class="send" :disabled="disabled || !text.trim()" @click="submit">
         <Icon :name="I.up" :size="15" />
       </button>
     </div>
@@ -1458,6 +1609,87 @@ textarea:focus { outline: none; }
 textarea::placeholder { color: var(--pd-text-4); }
 textarea:disabled { opacity: 0.45; }
 
+/* ---- 发送队列面板（忙时排入的消息） ---- */
+.msg-queue {
+  margin-bottom: 10px;
+  border: 1px solid var(--pd-border-soft);
+  border-radius: 10px;
+  background: var(--pd-bg-panel);
+  overflow: hidden;
+}
+.q-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: calc(13px * var(--pd-font-scale));
+  border-bottom: 1px solid var(--pd-border-soft);
+  background: transparent;
+}
+.q-row:last-child { border-bottom: none; }
+.q-row.dragging { opacity: 0.45; }
+/* 松手落点指示：目标行上沿主题色线 */
+.q-row.drop-into { box-shadow: inset 0 2px 0 var(--pd-accent); }
+.q-grip {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--pd-text-4);
+  cursor: grab;
+  touch-action: none;
+}
+.q-row:active .q-grip { cursor: grabbing; }
+.q-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--pd-text-2);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-word;
+}
+.q-media {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--pd-border);
+  color: var(--pd-text-4);
+  font-size: calc(11px * var(--pd-font-scale));
+}
+.q-act {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--pd-border);
+  border-radius: 7px;
+  background: none;
+  color: var(--pd-text-3);
+  padding: 3px 8px;
+  font-size: calc(12px * var(--pd-font-scale));
+  cursor: pointer;
+}
+.q-act:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
+.q-act.now { color: var(--pd-text-2); }
+.q-act.now:hover { color: var(--pd-text); border-color: var(--pd-accent); }
+.q-editing { padding: 5px 8px; }
+.q-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--pd-bg-card);
+  border: 1px solid var(--pd-accent);
+  border-radius: 7px;
+  color: var(--pd-text);
+  font-size: calc(13px * var(--pd-font-scale));
+  font-family: inherit;
+  padding: 5px 9px;
+}
+.q-input:focus { outline: none; }
+
 .bar {
   display: flex;
   align-items: center;
@@ -1689,6 +1921,7 @@ textarea:disabled { opacity: 0.45; }
 }
 
 button.send,
+button.send-now,
 button.abort {
   width: 32px;
   height: 32px;
@@ -1706,6 +1939,20 @@ button.abort {
 }
 .send:hover:not(:disabled) { background: #565656; }
 .send:disabled { opacity: 0.35; cursor: default; }
+/* 忙时的主发送键 = 加入队列：琥珀底色与普通发送区分 */
+.send.queue {
+  background: var(--pd-yellow-soft);
+  color: var(--pd-yellow-text);
+}
+.send.queue:hover:not(:disabled) { filter: brightness(1.08); }
+/* 立即发送（插队）：描边按钮，紧邻停止键 */
+.send-now {
+  background: none;
+  border: 1px solid var(--pd-border);
+  color: var(--pd-text-2);
+}
+.send-now:hover:not(:disabled) { background: var(--pd-bg-hover); color: var(--pd-text); }
+.send-now:disabled { opacity: 0.35; cursor: default; }
 .abort {
   background: var(--pd-red-soft);
   color: var(--pd-red-text);
