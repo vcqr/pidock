@@ -360,6 +360,32 @@ process.stdin.on("end", () => process.exit(0));
     const appCleared = await request("pidock.settings.get");
     check("pidock.settings mcpApprovals empty clears key", appCleared.settings?.mcpApprovals === undefined);
 
+    // ---- pidock 自有设置（注入 pi-host 的环境变量） ----
+    await request("pidock.settings.set", { env: { PIDOCK_SMOKE: "1", LOWER_case9: "x", EMPTY_VAR: "" } });
+    const appEnv = await request("pidock.settings.get");
+    check(
+      "pidock.settings env roundtrip",
+      appEnv.settings?.env?.PIDOCK_SMOKE === "1" &&
+        appEnv.settings?.env?.LOWER_case9 === "x" &&
+        appEnv.settings?.env?.EMPTY_VAR === "",
+      JSON.stringify(appEnv.settings?.env),
+    );
+    try {
+      await request("pidock.settings.set", { env: { "bad-key": "1" } });
+      check("pidock.settings.set rejects bad env key", false);
+    } catch (e) {
+      check("pidock.settings.set rejects bad env key", String(e).includes("bad_request"));
+    }
+    try {
+      await request("pidock.settings.set", { env: { OK: 1 } });
+      check("pidock.settings.set rejects non-string env value", false);
+    } catch (e) {
+      check("pidock.settings.set rejects non-string env value", String(e).includes("bad_request"));
+    }
+    await request("pidock.settings.set", { env: {} });
+    const appEnvEmpty = await request("pidock.settings.get");
+    check("pidock.settings env empty clears key", appEnvEmpty.settings?.env === undefined);
+
     // ---- 安装：本地导入（插件单文件 + 技能压缩包） ----
     const importDir = mkdtempSync(join(tmpdir(), "pidock-import-"));
     const pluginSrc = join(importDir, "smoke-plug.ts");

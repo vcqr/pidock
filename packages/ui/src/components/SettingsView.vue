@@ -234,7 +234,7 @@ const PROXY_MODE_HINT: Record<ProxyMode, string> = {
   http: "手动指定 HTTP 代理地址",
 };
 
-async function ensureProxy(force = false): Promise<void> {
+async function ensureGeneral(force = false): Promise<void> {
   if (proxyLoaded.value && !force) return;
   try {
     const r = await props.bus.request("pidock.settings.get");
@@ -248,6 +248,12 @@ async function ensureProxy(force = false): Promise<void> {
     // AskUserQuestion 等待超时（settings.json ask.timeoutSec，秒 → 分钟展示）
     const sec = Number(r.settings?.ask?.timeoutSec);
     askTimeoutMin.value = Number.isFinite(sec) && sec >= 0 ? sec / 60 : 3;
+    // 注入 pi-host 的环境变量表（settings.json env，对象 → 行编辑）
+    const env = r.settings?.env ?? {};
+    envRows.value = Object.entries(env).map(([k, v]) => ({
+      key: k,
+      value: typeof v === "string" ? v : String(v ?? ""),
+    }));
     proxyLoaded.value = true;
   } catch (err) {
     flash(String(err));
@@ -267,6 +273,44 @@ async function saveProxy(): Promise<void> {
     flash(String(err));
   } finally {
     proxySaving.value = false;
+  }
+}
+
+// ------------------------------------------------------------- 主机环境变量
+
+/** 注入 pi-host 进程的环境变量表（settings.json env），行编辑、保存时写回对象 */
+interface EnvRow {
+  key: string;
+  value: string;
+}
+const envRows = ref<EnvRow[]>([]);
+const envSaving = ref(false);
+
+async function saveEnv(): Promise<void> {
+  const table: Record<string, string> = {};
+  const seen = new Set<string>();
+  for (const row of envRows.value) {
+    const key = row.key.trim();
+    if (!key && !row.value) continue; // 整行为空：忽略
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      flash(`变量名不合法（字母或下划线开头）：${key || "(空)"}`);
+      return;
+    }
+    if (seen.has(key)) {
+      flash(`变量名重复：${key}`);
+      return;
+    }
+    seen.add(key);
+    table[key] = row.value;
+  }
+  envSaving.value = true;
+  try {
+    await props.bus.request("pidock.settings.set", { env: table });
+    flash("环境变量已保存，重启 PiDock 后生效");
+  } catch (err) {
+    flash(String(err));
+  } finally {
+    envSaving.value = false;
   }
 }
 
@@ -506,7 +550,7 @@ watch(
     if (p === "models" || p === "guide") void ensureModels(true);
     else if (p === "memory") void ensureMemory();
     else if (p === "usage") void ensureUsage();
-    else if (p === "general") void ensureProxy();
+    else if (p === "general") void ensureGeneral();
   },
   { immediate: true },
 );
@@ -723,6 +767,36 @@ function openFolder(): void {
               </div>
               <button class="dark-btn" :disabled="proxySaving" @click="saveProxy">
                 {{ proxySaving ? "保存中…" : "保存" }}
+              </button>
+            </div>
+          </div>
+
+          <h3 class="grp-title">环境变量</h3>
+          <div class="group">
+            <div class="row col">
+              <div class="row-text">
+                <b>注入 pi-host 进程的环境变量</b>
+                <span>扩展 / MCP 服务 / 模型 API 均可读取；与代理设置派生的变量同名时以此处为准</span>
+              </div>
+              <div class="env-list">
+                <div v-for="(row, i) in envRows" :key="i" class="env-row">
+                  <input v-model="row.key" class="txt env-key" placeholder="变量名" spellcheck="false" />
+                  <input v-model="row.value" class="txt env-value" placeholder="值（可为空）" spellcheck="false" />
+                  <button class="ghost-btn env-del" title="删除" @click="envRows.splice(i, 1)">
+                    <Icon name="delete-bin-line" :size="14" />
+                  </button>
+                </div>
+                <button class="ghost-btn" @click="envRows.push({ key: '', value: '' })">
+                  <Icon name="add-line" :size="14" />添加变量
+                </button>
+              </div>
+            </div>
+            <div class="row">
+              <div class="row-text">
+                <span>进程级配置，保存后重启 PiDock 生效</span>
+              </div>
+              <button class="dark-btn" :disabled="envSaving" @click="saveEnv">
+                {{ envSaving ? "保存中…" : "保存" }}
               </button>
             </div>
           </div>
@@ -1364,6 +1438,20 @@ function openFolder(): void {
   flex: none;
 }
 .ghost-btn:hover { color: var(--pd-text); background: var(--pd-bg-hover); }
+
+/* 环境变量表（常规页）：变量名固定宽 + 值占满 + 行内删除 */
+.env-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.env-row {
+  display: grid;
+  grid-template-columns: 240px 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+.env-del { padding: 6px 8px; }
 .dark-btn {
   display: inline-flex;
   align-items: center;

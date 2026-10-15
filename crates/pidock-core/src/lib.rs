@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod ctx;
+pub mod envs;
 pub mod fs;
 pub mod git;
 pub mod proxy;

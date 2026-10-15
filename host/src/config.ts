@@ -490,9 +490,10 @@ export class ConfigService {
   }
 
   // -------------------------------------------------------- pidock settings
-  // PiDock 自己的设置（区别于 pi 的 settings.json），目前只有代理配置。
+  // PiDock 自己的设置（区别于 pi 的 settings.json），目前有代理配置与环境变量。
   // 代理在 supervisor 启动 host 时转成 HTTP(S)_PROXY/NO_PROXY/NODE_EXTRA_CA_CERTS
-  // 环境变量，因此修改后需要重启应用生效。
+  // 环境变量；env 表在其之后原样注入（同名的用户配置覆盖代理派生值），
+  // 两者均为进程级配置，修改后需要重启应用生效。
 
   static pidockSettingsPath(): string {
     return join(getAgentDir(), "pidock", "settings.json");
@@ -503,9 +504,14 @@ export class ConfigService {
     return { settings: readJson(path) ?? {}, path };
   }
 
-  appSettingsSet(params: { proxy?: Json; ask?: Json; mcpApprovals?: Json }): { ok: true; path: string } {
-    if (params.proxy === undefined && params.ask === undefined && params.mcpApprovals === undefined) {
-      throw new RpcError("bad_request", "nothing to set (expect proxy, ask and/or mcpApprovals)");
+  appSettingsSet(params: { proxy?: Json; ask?: Json; mcpApprovals?: Json; env?: Json }): { ok: true; path: string } {
+    if (
+      params.proxy === undefined &&
+      params.ask === undefined &&
+      params.mcpApprovals === undefined &&
+      params.env === undefined
+    ) {
+      throw new RpcError("bad_request", "nothing to set (expect proxy, ask, mcpApprovals and/or env)");
     }
     const path = ConfigService.pidockSettingsPath();
     mkdirSync(dirname(path), { recursive: true });
@@ -570,6 +576,30 @@ export class ConfigService {
       // 空表直接删键，保持 settings.json 干净
       if (Object.keys(table as object).length === 0) delete settings.mcpApprovals;
       else settings.mcpApprovals = table;
+    }
+    if (params.env !== undefined) {
+      const table = params.env;
+      if (!table || typeof table !== "object" || Array.isArray(table)) {
+        throw new RpcError("bad_request", "env must be an object");
+      }
+      const entries = Object.entries(table as Record<string, unknown>);
+      if (entries.length > 64) {
+        throw new RpcError("bad_request", "env too many entries (max 64)");
+      }
+      for (const [key, value] of entries) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+          throw new RpcError("bad_request", `env.${key}: key must match [A-Za-z_][A-Za-z0-9_]*`);
+        }
+        if (typeof value !== "string") {
+          throw new RpcError("bad_request", `env.${key} must be a string`);
+        }
+        if (value.length > 65536) {
+          throw new RpcError("bad_request", `env.${key} too long`);
+        }
+      }
+      // 空表直接删键，保持 settings.json 干净
+      if (entries.length === 0) delete settings.env;
+      else settings.env = table;
     }
     writeJson(path, settings);
     return { ok: true, path };

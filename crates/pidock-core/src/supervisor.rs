@@ -124,6 +124,11 @@ impl Supervisor {
         for (key, value) in proxy_env_overrides() {
             command.env(key, value);
         }
+        // 设置中心「常规 · 环境变量」：在代理派生变量之后写入，
+        // 同名的用户显式配置覆盖代理派生值
+        for (key, value) in crate::envs::env_overrides() {
+            command.env(key, value);
+        }
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
