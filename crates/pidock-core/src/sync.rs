@@ -460,6 +460,11 @@ async fn execute_command(
             "session.remove",
             json!({"session_ids": payload.get("session_ids").cloned().unwrap_or(json!([]))}),
         ),
+        // 永久删除会话（host 删注册表条目 + 磁盘 JSONL）：session_ids 原样透传
+        "session.delete" => (
+            "session.delete",
+            json!({"session_ids": payload.get("session_ids").cloned().unwrap_or(json!([]))}),
+        ),
         // 文件浏览（@ 提及与文件面板共用）
         "workspace.files" => (
             "workspace.files",

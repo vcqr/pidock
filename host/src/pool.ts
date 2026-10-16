@@ -315,6 +315,62 @@ export class SessionPool {
     return { removed };
   }
 
+  /**
+   * 永久删除会话：注册表条目与磁盘 JSONL 一并清除，不可恢复。
+   * 在内存中打开的会话先关闭；子代理条目随父级联删除；落盘文件变更快照
+   * 一并清理；cwd 为托管会话目录且目录名与会话 id 同名时（~/.pidock/<日期>/<id>/，
+   * 为该会话惰性创建的缺省工作区），其产出目录整个移除。未知 id 幂等跳过。
+   */
+  deleteSessions(params: { session_ids: string[] }): { deleted: number; missing_files: number } {
+    const ids = new Set(
+      Array.isArray(params.session_ids) ? params.session_ids.filter((x) => typeof x === "string") : [],
+    );
+    if (!ids.size) return { deleted: 0, missing_files: 0 };
+    const all = this.readRegistry();
+    // 父会话删除时连带删除其子代理条目（与 removeSessions 的级联一致）
+    const removedIds = new Set(
+      all
+        .filter((e) => ids.has(e.session_id) || (e.parent_session_id && ids.has(e.parent_session_id)))
+        .map((e) => e.session_id),
+    );
+    const targets = all.filter((e) => removedIds.has(e.session_id));
+    if (!targets.length) return { deleted: 0, missing_files: 0 };
+    // 先摘注册表再逐个删文件：中途失败不会留下「列表还在但文件已没了一半」的半删态
+    writeFileSync(this.registryPath(), JSON.stringify({ sessions: all.filter((e) => !removedIds.has(e.session_id)) }, null, 2));
+    let deleted = 0;
+    let missingFiles = 0;
+    for (const e of targets) {
+      this.closeSession({ session_id: e.session_id });
+      // 快照落盘文件直接清掉（不等下次启动 pruneSnapshots）
+      try {
+        rmSync(this.snapshotPath(e.session_id), { force: true });
+      } catch {
+        // 清理失败不阻塞删除
+      }
+      if (e.file && existsSync(e.file)) {
+        try {
+          rmSync(e.file, { force: true });
+          deleted++;
+        } catch {
+          missingFiles++;
+        }
+      } else {
+        missingFiles++;
+      }
+      // 缺省工作区的会话产出目录：目录名与会话 id 同名才删（防误删用户自选目录）
+      try {
+        if (e.cwd && isManagedSessionDir(e.cwd) && basename(e.cwd) === e.session_id) {
+          rmSync(e.cwd, { recursive: true, force: true });
+        }
+      } catch {
+        // 目录清理失败不阻塞删除
+      }
+      // 广播移除事件：桌面 UI 实时摘除，云端 ingest 删镜像行
+      emitEvent(e.session_id, Event.SESSION_REMOVED, {});
+    }
+    return { deleted, missing_files: missingFiles };
+  }
+
   // ---------------------------------------------------------------- state
 
   private setState(tracked: TrackedSession, sessionId: string, state: AgentState): void {

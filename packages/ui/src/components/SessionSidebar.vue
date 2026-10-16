@@ -36,6 +36,8 @@ const emit = defineEmits<{
   "remove-project": [cwd: string];
   /** 会话右键「删除会话」：移除该会话的列表记录（已确认过） */
   "remove-session": [sessionId: string];
+  /** 会话右键「永久删除」：host 删注册表条目 + 磁盘 JSONL，不可恢复（已确认过） */
+  "delete-session": [sessionId: string];
   /** 重命名会话（host 写注册表 name） */
   rename: [sessionId: string, name: string];
   "open-settings": [tab?: string];
@@ -66,10 +68,10 @@ function openCtxMenu(e: MouseEvent, s: SessionSummaryUi): void {
   openCtxAt(e.clientX, e.clientY, s);
 }
 function openCtxAt(x: number, y: number, s: SessionSummaryUi): void {
-  // 菜单尺寸约 224×370，贴边时向内收
+  // 菜单尺寸约 224×412，贴边时向内收
   ctxMenu.value = {
     x: Math.min(x, window.innerWidth - 232),
-    y: Math.min(y, window.innerHeight - 378),
+    y: Math.min(y, window.innerHeight - 420),
     s,
   };
 }
@@ -139,6 +141,15 @@ async function confirmRemoveSession(s: SessionSummaryUi): Promise<void> {
     danger: true,
   });
   if (ok) emit("remove-session", s.session_id);
+}
+async function confirmDeleteSession(s: SessionSummaryUi): Promise<void> {
+  ctxMenu.value = null;
+  const ok = await appConfirm({
+    title: `永久删除会话「${s.name || basename(s.cwd)}」？`,
+    message: "将删除注册表条目与磁盘上的会话记录文件，不可恢复；缺省工作区里该会话的产出目录也会一并移除。",
+    danger: true,
+  });
+  if (ok) emit("delete-session", s.session_id);
 }
 
 // ---- 置顶（UI 本地偏好，localStorage 持久化） ----
@@ -671,6 +682,7 @@ onBeforeUnmount(() => {
       </template>
       <div class="ctx-sep"></div>
       <button class="ctx-item danger" @click="confirmRemoveSession(ctxMenu!.s)">删除会话</button>
+      <button class="ctx-item danger" @click="confirmDeleteSession(ctxMenu!.s)">永久删除…</button>
     </div>
 
     <!-- 项目右键菜单 -->

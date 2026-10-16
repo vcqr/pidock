@@ -957,6 +957,7 @@ onBeforeUnmount(() => {
         @browse-project="(cwd) => { wsSideOpen = false; browseCwd = { cwd, seq: (browseCwd?.seq ?? 0) + 1 }; }"
         @remove-project="removeProject"
         @remove-session="(id) => store?.removeSessions([id])"
+        @delete-session="(id) => store?.deleteSessions([id])"
         @rename="(id, name) => store?.renameSession(id, name)"
         @open-settings="(tab) => { wsSideOpen = false; openSettings(tab); }"
         @open-automation="() => { wsSideOpen = false; showAutomation = !showAutomation; if (showAutomation) showExperts = false; }"

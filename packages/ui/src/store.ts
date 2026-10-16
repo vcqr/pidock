@@ -1476,6 +1476,16 @@ export function createAgentStore(bus: DataBus) {
    * 活动会话在删除之列时复位回首页。
    */
   async function removeSessions(ids: string[]): Promise<void> {
+    await purgeSessions(ids, "session.remove");
+  }
+
+  /** 永久删除会话（host 删注册表条目 + 磁盘 JSONL，不可恢复）；UI 收尾与移除一致 */
+  async function deleteSessions(ids: string[]): Promise<void> {
+    await purgeSessions(ids, "session.delete");
+  }
+
+  /** remove/delete 共用主体：method 区分 host 侧删除深度，收尾逻辑完全一致 */
+  async function purgeSessions(ids: string[], method: "session.remove" | "session.delete"): Promise<void> {
     const valid = [...new Set(ids.filter((x) => typeof x === "string" && x))];
     if (!valid.length) return;
     const cwds = new Set(
@@ -1485,7 +1495,7 @@ export function createAgentStore(bus: DataBus) {
       msgQueueBySession.value = withoutKey(msgQueueBySession.value, id);
     }
     try {
-      await bus.request("session.remove", { session_ids: valid });
+      await bus.request(method, { session_ids: valid });
     } catch (err) {
       lastError.value = err instanceof Error ? err.message : String(err);
       return;
@@ -1963,6 +1973,7 @@ export function createAgentStore(bus: DataBus) {
     setPermissionMode,
     renameSession,
     removeSessions,
+    deleteSessions,
     listSkills,
     listExperts,
     getExpert,

@@ -361,6 +361,8 @@ export const Method = {
   SESSION_FORK: "session.fork",
   /** 从注册表移除会话（UI 列表消失；磁盘 JSONL 保留） */
   SESSION_REMOVE: "session.remove",
+  /** 永久删除会话（注册表条目 + 磁盘 JSONL 一并清除，不可恢复） */
+  SESSION_DELETE: "session.delete",
   MODEL_OVERRIDE_SET: "config.model_override.set",
   WORKSPACE_FILES: "workspace.files",
   /** 读取工作区内文本文件（路径安全校验 + 大小上限 + 二进制检测），文件浏览预览用 */

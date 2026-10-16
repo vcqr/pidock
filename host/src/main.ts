@@ -26,6 +26,7 @@ const handlers: Record<string, Handler> = {
   [Method.SESSION_RENAME]: (p) => pool.renameSession(p),
   [Method.SESSION_FORK]: (p) => pool.forkSession(p),
   [Method.SESSION_REMOVE]: (p) => pool.removeSessions(p),
+  [Method.SESSION_DELETE]: (p) => pool.deleteSessions(p),
   [Method.WORKSPACE_FILES]: (p) => pool.listWorkspaceFiles(p),  [Method.WORKSPACE_READ_FILE]: (p) => pool.readWorkspaceFile(p),
   [Method.FS_STAT]: (p) => pool.statFile(p),
   [Method.SESSION_EVENTS]: (p) => pool.replayEvents(p),

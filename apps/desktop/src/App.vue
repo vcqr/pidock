@@ -359,6 +359,7 @@ onMounted(async () => {
         @browse-project="(cwd) => { showAutomation = false; showExperts = false; browseCwd = { cwd, seq: (browseCwd?.seq ?? 0) + 1 }; }"
         @remove-project="removeProject"
         @remove-session="(id) => store?.removeSessions([id])"
+        @delete-session="(id) => store?.deleteSessions([id])"
         @rename="(id, name) => store?.renameSession(id, name)"
         @open-settings="(tab) => openSettings(tab)"
         @open-automation="() => { showAutomation = !showAutomation; if (showAutomation) showExperts = false; }"

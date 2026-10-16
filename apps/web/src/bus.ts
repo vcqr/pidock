@@ -247,10 +247,12 @@ export function createWebBus(auth: AuthClient): DataBus & {
           });
           return result ?? {};
         }
-        case "session.remove": {
-          // 先命令桌面端删 host 注册表条目（权威数据），再清 server 侧镜像；机器离线时整体拒绝
+        case "session.remove":
+        case "session.delete": {
+          // 先命令桌面端删 host 注册表条目（session.delete 连磁盘 JSONL 一并清除），
+          // 再清 server 侧镜像；机器离线时整体拒绝
           const ids: string[] = Array.isArray(params?.session_ids) ? params.session_ids : [];
-          const result = await command(params?.session_id ?? "", "session.remove", { session_ids: ids });
+          const result = await command(params?.session_id ?? "", method, { session_ids: ids });
           if (activeMachine && ids.length) {
             await Promise.allSettled(
               ids.map((sid) =>

@@ -144,6 +144,8 @@ pub mod method {
     pub const SESSION_RENAME: &str = "session.rename";
     pub const SESSION_FORK: &str = "session.fork";
     pub const SESSION_REMOVE: &str = "session.remove";
+    /// 永久删除会话（注册表条目 + 磁盘 JSONL 一并清除，不可恢复）
+    pub const SESSION_DELETE: &str = "session.delete";
 
     // ---- MODEL ----
     pub const MODEL_OVERRIDE_SET: &str = "config.model_override.set";
