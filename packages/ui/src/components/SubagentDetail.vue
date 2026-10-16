@@ -97,7 +97,9 @@ function pushMessage(item: UiMessageItem): void {
 
 /** 持久化 message_complete → 消息条目；先收掉末尾流式占位条目（与主消息流同语义） */
 function applyComplete(p: any): void {
-  while (messages.value.length && messages.value[messages.value.length - 1].streaming) {
+  while (messages.value.length) {
+    const last = messages.value[messages.value.length - 1];
+    if (!last?.streaming) break;
     messages.value.pop();
   }
   const blocks: UiBlock[] = (Array.isArray(p?.blocks) ? p.blocks : [])
