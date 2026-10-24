@@ -22,7 +22,7 @@
     "e2e:server": "bun run ../server/scripts/fake-desktop.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@earendil-works/pi-codemode": "1.1.0",
     "@earendil-works/pi-mcp": "1.1.0",
     "@pidock/protocol": "workspace:*",
