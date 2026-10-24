@@ -1,9 +1,10 @@
 /**
  * 文档附件解析：把用户上传的附件（base64）提取为纯文本，注入 prompt。
  *
- * pi SDK 0.80 的 prompt 只支持 text/image 内容，agent 的 read 工具也读不了
- * pdf/docx 等二进制格式，所以文档必须在 host 侧先提取成文本。图片附件直接
- * 路由到 prompt 的 images 数组，与「添加图片」同一通道。
+ * pi SDK 的 prompt 内容面只有 text/image（1.4.0 核实，PromptOptions.images 是唯一的
+ * 多模态入口），agent 的 read 工具也读不了 pdf/docx 等二进制格式，所以文档必须在
+ * host 侧先提取成文本。图片附件直接路由到 prompt 的 images 数组，与「添加图片」
+ * 同一通道。
  *
  * 提取结果以 <attachment> 块追加在用户文本之后（随会话落盘，历史回放可见）。
  * UI 端 MessageItem 按同名规则解析并折叠为 chip，两侧格式需保持一致：
