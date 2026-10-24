@@ -681,8 +681,8 @@ onBeforeUnmount(() => {
         <button class="ctx-item" @click="emit('open-settings'); closeCtxMenu()">前往配置</button>
       </template>
       <div class="ctx-sep"></div>
-      <button class="ctx-item danger" @click="confirmRemoveSession(ctxMenu!.s)">删除会话</button>
-      <button class="ctx-item danger" @click="confirmDeleteSession(ctxMenu!.s)">永久删除…</button>
+      <button class="ctx-item" @click="confirmRemoveSession(ctxMenu!.s)">删除会话</button>
+      <button class="ctx-item danger" @click="confirmDeleteSession(ctxMenu!.s)">永久删除</button>
     </div>
 
     <!-- 项目右键菜单 -->
