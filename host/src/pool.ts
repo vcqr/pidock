@@ -2436,6 +2436,7 @@ export class SessionPool {
     format?: string;
     output_path?: string;
   }): Promise<{ path: string }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     const format = params.format === "jsonl" ? "jsonl" : "html";
     const desktop = join(homedir(), "Desktop");
@@ -2453,7 +2454,7 @@ export class SessionPool {
   // --------------------------------------------------------------- tools
 
   /** 会话工具清单（含启用状态与来源），供工具管理对话框渲染 */
-  listTools(params: { session_id: string }): {
+  async listTools(params: { session_id: string }): Promise<{
     tools: Array<{
       name: string;
       description: string;
@@ -2461,7 +2462,8 @@ export class SessionPool {
       namespace: string | null;
       source: string;
     }>;
-  } {
+  }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     const active = new Set(tracked.session.getActiveToolNames());
     const tools = tracked.session.getAllTools().map((t) => ({
@@ -2475,7 +2477,8 @@ export class SessionPool {
   }
 
   /** 设置启用工具子集（setActiveToolsByName；被排除的工具从系统提示中移除） */
-  setActiveTools(params: { session_id: string; active_names: string[] }): { ok: true; active: string[] } {
+  async setActiveTools(params: { session_id: string; active_names: string[] }): Promise<{ ok: true; active: string[] }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     const names = (Array.isArray(params.active_names) ? params.active_names : []).filter(
       (n): n is string => typeof n === "string" && !!n.trim(),
@@ -2492,10 +2495,11 @@ export class SessionPool {
   // ----------------------------------------------------------------- tree
 
   /** 会话分支树的用户消息节点（树导航：就地切换到某条消息继续） */
-  sessionTree(params: { session_id: string }): {
+  async sessionTree(params: { session_id: string }): Promise<{
     nodes: Array<{ id: string; parent_id: string | null; text: string; ts: string }>;
     leaf_id: string | null;
-  } {
+  }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     const sm = tracked.session.sessionManager;
     const nodes = (sm.getEntries() as unknown as Record<string, any>[])
@@ -2518,6 +2522,7 @@ export class SessionPool {
     cancelled: boolean;
     editor_text?: string;
   }> {
+    await this.ensureOpen(params.session_id);
     const tracked = this.require(params.session_id);
     if (this.stateOf(params.session_id) !== "idle") {
       throw new RpcError("busy", "会话正在运行中，请先中止再切换分支");
@@ -2573,8 +2578,8 @@ export class SessionPool {
   }
 
   /**
-   * 交互命令（prompt/steer/follow_up/abort/compact/context_usage）前确保会话在
-   * 本 host 进程内打开：web/云中继可能命中一个本进程从未打开过的会话（桌面
+   * 会话面 RPC（交互命令 + 工具集/分支树/导出等设置读取面）前确保会话在本
+   * host 进程内打开：web/云中继可能命中一个本进程从未打开过的会话（桌面
    * 重启后尤其如此），按注册表兜底重开，避免 session_not_found。
    * 聊过天的会话文件在盘上、头里就是原 id，直接 open；从未聊过的会话 pi 首条
    * 消息才落盘（无文件），open 会翻新 id —— 用 newSession({id}) 强制沿用注册表
