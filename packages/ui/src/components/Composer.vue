@@ -193,13 +193,38 @@ function ensureSkills(): void {
   }
 }
 
+/**
+ * 弹层互斥总闸：关闭除 except 外的全部弹层（含 @ 提及与 / 技能浮层）。
+ * 打开任一弹层、点击输入框、点击 composer 外部、按 Esc 都走这里，保证
+ * 任何时刻最多只有一个弹层，且所有弹层都有一致的退出路径。
+ */
+function closeAllPopups(
+  except?: "project" | "branch" | "plus" | "perm" | "think" | "model",
+): void {
+  if (except !== "project") {
+    menuOpen.value = false;
+    adding.value = false;
+    menuQuery.value = "";
+  }
+  if (except !== "branch") {
+    branchOpen.value = false;
+    creatingBranch.value = false;
+    branchErr.value = "";
+  }
+  if (except !== "plus") plusOpen.value = false;
+  if (except !== "perm") permOpen.value = false;
+  if (except !== "think") thinkOpen.value = false;
+  if (except !== "model") {
+    modelOpen.value = false;
+    modelQuery.value = "";
+  }
+  mention.value = null;
+  slash.value = null;
+}
+
 function togglePlus(): void {
+  closeAllPopups("plus");
   plusOpen.value = !plusOpen.value;
-  permOpen.value = false;
-  thinkOpen.value = false;
-  modelOpen.value = false;
-  mention.value = null; // + 菜单与提及弹层互斥
-  slash.value = null; // 与 / 技能弹层互斥
   if (plusOpen.value) ensureSkills();
 }
 
@@ -400,6 +425,14 @@ const thinkLabel = computed(() => {
   return hit?.label ?? (props.thinkingLevel ? String(props.thinkingLevel) : "中");
 });
 
+function togglePerm(): void {
+  closeAllPopups("perm");
+  permOpen.value = !permOpen.value;
+}
+function toggleThink(): void {
+  closeAllPopups("think");
+  thinkOpen.value = !thinkOpen.value;
+}
 function selectPerm(mode: string): void {
   permOpen.value = false;
   emit("setPermissionMode", mode);
@@ -409,10 +442,8 @@ function selectThink(level: string): void {
   emit("setThinkingLevel", level);
 }
 function toggleModelMenu(): void {
+  closeAllPopups("model");
   modelOpen.value = !modelOpen.value;
-  permOpen.value = false;
-  thinkOpen.value = false;
-  modelQuery.value = "";
 }
 function selectModel(model: string): void {
   modelOpen.value = false;
@@ -788,18 +819,15 @@ const filteredBranches = computed(() => {
 });
 
 function toggleProjectMenu(): void {
+  closeAllPopups("project");
   menuOpen.value = !menuOpen.value;
-  branchOpen.value = false;
 }
 
 async function toggleBranchMenu(): Promise<void> {
+  closeAllPopups("branch");
   branchOpen.value = !branchOpen.value;
   if (!branchOpen.value) return;
-  menuOpen.value = false;
-  adding.value = false;
   branchQuery.value = "";
-  branchErr.value = "";
-  creatingBranch.value = false;
   await refreshBranches();
 }
 
@@ -849,21 +877,39 @@ watch([menuOpen, branchOpen, plusOpen, permOpen, thinkOpen, modelOpen, mention, 
 
 function onDocClick(e: MouseEvent): void {
   if (rootEl.value && !rootEl.value.contains(e.target as Node)) {
-    menuOpen.value = false;
-    adding.value = false;
-    menuQuery.value = "";
-    permOpen.value = false;
-    thinkOpen.value = false;
-    modelOpen.value = false;
-    plusOpen.value = false;
-    modelQuery.value = "";
-    branchOpen.value = false;
-    creatingBranch.value = false;
-    branchErr.value = "";
+    closeAllPopups();
   }
 }
-onMounted(() => document.addEventListener("click", onDocClick));
-onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
+
+/** Esc 关闭任一打开的弹层。捕获阶段拦截并吞掉事件：composer 内的弹层先收起，
+ * 同一次按键不再触发父级弹窗（如定时任务表单）的 Esc 关闭；输入法组词中的
+ * Esc 是「取消候选词」，不处理。mention/slash 的 Esc 也由此统一接管。 */
+function onDocKeydown(e: KeyboardEvent): void {
+  if (e.key !== "Escape" || e.isComposing) return;
+  const anyOpen =
+    menuOpen.value ||
+    adding.value ||
+    branchOpen.value ||
+    creatingBranch.value ||
+    plusOpen.value ||
+    permOpen.value ||
+    thinkOpen.value ||
+    modelOpen.value ||
+    mention.value !== null ||
+    slash.value !== null;
+  if (!anyOpen) return;
+  e.stopPropagation();
+  e.preventDefault();
+  closeAllPopups();
+}
+onMounted(() => {
+  document.addEventListener("click", onDocClick);
+  document.addEventListener("keydown", onDocKeydown, true);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("click", onDocClick);
+  document.removeEventListener("keydown", onDocKeydown, true);
+});
 
 /** 供表单父级（如定时任务弹窗的「创建」按钮）触发草稿提交 */
 defineExpose({ submit, submitNow });
@@ -890,6 +936,7 @@ function emitPayload(mode: "send" | "sendNow"): boolean {
   pendingImages.value = [];
   pendingFiles.value = [];
   docWarn.value = "";
+  mention.value = null;
   slash.value = null;
   return true;
 }
@@ -971,7 +1018,7 @@ function onDragUp(): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  // @ 提及弹层打开时：方向键选择、Enter 确认、Esc 关闭（优先于发送）
+  // @ 提及弹层打开时：方向键选择、Enter 确认（Esc 关闭由全局捕获监听统一处理，见 onDocKeydown）
   if (mention.value && mentionMatches.value.length) {
     const n = mentionMatches.value.length;
     if (e.key === "ArrowDown") {
@@ -987,11 +1034,6 @@ function onKeydown(e: KeyboardEvent): void {
     if (e.key === "Enter") {
       e.preventDefault();
       applyMention(mentionMatches.value[mention.value.active] ?? mentionMatches.value[0]!);
-      return;
-    }
-    if (e.key === "Escape") {
-      e.preventDefault();
-      mention.value = null;
       return;
     }
   }
@@ -1011,11 +1053,6 @@ function onKeydown(e: KeyboardEvent): void {
     if (e.key === "Enter") {
       e.preventDefault();
       applySlash(slashMatches.value[slash.value.active] ?? slashMatches.value[0]!);
-      return;
-    }
-    if (e.key === "Escape") {
-      e.preventDefault();
-      slash.value = null;
       return;
     }
   }
@@ -1198,6 +1235,7 @@ function onKeydown(e: KeyboardEvent): void {
       @keydown="onKeydown"
       @input="onTextInput"
       @paste="onPaste"
+      @click="closeAllPopups()"
     />
     <!-- @ 文件提及弹层 -->
     <div v-if="mention && mentionMatches.length" class="mention-menu">
@@ -1354,7 +1392,7 @@ function onKeydown(e: KeyboardEvent): void {
         <button
           class="dd-btn dd-btn-boxed"
           :class="{ active: permissionMode != null && permissionMode !== 'full' }"
-          @click="permOpen = !permOpen; thinkOpen = false; modelOpen = false; mention = null"
+          @click="togglePerm"
         >
           <Icon class="mode-ico" :name="permIcon" :size="14" />
           <span>{{ permLabel }}</span>
@@ -1421,7 +1459,7 @@ function onKeydown(e: KeyboardEvent): void {
 
       <!-- 思考级别 -->
       <div class="dd">
-        <button class="dd-btn" @click="thinkOpen = !thinkOpen; permOpen = false; modelOpen = false; mention = null">
+        <button class="dd-btn" @click="toggleThink">
           <Icon :name="I.gauge" :size="15" />
           <span>{{ thinkLabel }}</span>
           <span class="c-chev" :class="{ open: thinkOpen }"><Icon :name="I.chevD" :size="11" /></span>
