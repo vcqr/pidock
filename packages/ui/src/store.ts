@@ -1839,15 +1839,15 @@ export function createAgentStore(bus: DataBus) {
 
   // -------------------------------------------------------- tools/tree
 
-  /** 会话工具清单（工具管理对话框） */
-  async function listTools(sessionId?: string): Promise<ToolInfoUi[]> {
+  /** 会话工具清单（工具管理对话框）；null = 拉取失败（如项目未信任），区别于空列表 */
+  async function listTools(sessionId?: string): Promise<ToolInfoUi[] | null> {
     const sid = sessionId ?? activeId.value;
     if (!sid) return [];
     try {
       const r = await bus.request("session.list_tools", { session_id: sid });
       return r?.tools ?? [];
     } catch {
-      return [];
+      return null;
     }
   }
 

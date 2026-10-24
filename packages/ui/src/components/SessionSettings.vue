@@ -14,6 +14,8 @@ const autoCompaction = ref(true);
 const autoRetry = ref(true);
 const tools = ref<ToolInfoUi[]>([]);
 const toolsLoading = ref(false);
+/** 工具清单拉取失败（会话未打开/项目未信任），区别于空列表 */
+const toolsFailed = ref(false);
 const treeNodes = ref<TreeNodeUi[]>([]);
 const leafId = ref<string | null>(null);
 const exporting = ref<"html" | "jsonl" | null>(null);
@@ -33,7 +35,9 @@ watch(
     autoRetry.value = info?.auto_retry ?? true;
     toolsLoading.value = true;
     try {
-      tools.value = await props.store.listTools();
+      const list = await props.store.listTools();
+      tools.value = list ?? [];
+      toolsFailed.value = list === null;
       enabledTools.value = new Set(tools.value.filter((t) => t.active).map((t) => t.name));
     } finally {
       toolsLoading.value = false;
@@ -51,9 +55,30 @@ function toggleTool(name: string): void {
   enabledTools.value = next;
 }
 
+/** 全选 / 全不选（本地勾选集一次性重置，保存时才下发） */
+function setAllTools(on: boolean): void {
+  enabledTools.value = on ? new Set(tools.value.map((t) => t.name)) : new Set();
+}
+
+/** 反选：未勾选的全部勾上 */
+function invertTools(): void {
+  enabledTools.value = new Set(
+    tools.value.filter((t) => !enabledTools.value.has(t.name)).map((t) => t.name),
+  );
+}
+
 async function saveTools(): Promise<void> {
-  await props.store.setActiveTools([...enabledTools.value]);
-  notice.value = "工具集已更新";
+  // host 拒绝空工具集（bad_request），提前拦截给出可读提示
+  if (!enabledTools.value.size) {
+    notice.value = "至少保留一个工具";
+    return;
+  }
+  try {
+    await props.store.setActiveTools([...enabledTools.value]);
+    notice.value = "工具集已更新";
+  } catch (err) {
+    notice.value = `保存失败：${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 async function exportSession(format: "html" | "jsonl"): Promise<void> {
@@ -135,15 +160,21 @@ async function compactNow(): Promise<void> {
             工具（{{ enabledTools.size }}/{{ tools.length }} 启用）
             <button class="ss-btn slim" :disabled="toolsLoading" @click="saveTools">保存工具集</button>
           </div>
+          <div class="btn-row">
+            <button class="ss-btn slim" :disabled="toolsLoading || !tools.length" @click="setAllTools(true)">全选</button>
+            <button class="ss-btn slim" :disabled="toolsLoading || !tools.length" @click="setAllTools(false)">全不选</button>
+            <button class="ss-btn slim" :disabled="toolsLoading || !tools.length" @click="invertTools">反选</button>
+          </div>
           <div class="tool-list">
             <div v-if="toolsLoading" class="hint">加载中…</div>
+            <div v-else-if="toolsFailed" class="hint">工具清单加载失败（会话未打开或项目未信任）</div>
             <label v-for="t in tools" :key="t.name" class="tool-row" :title="t.description">
               <input type="checkbox" :checked="enabledTools.has(t.name)" @change="toggleTool(t.name)" />
               <span class="t-name">{{ t.name }}</span>
               <span v-if="t.namespace" class="t-ns">{{ t.namespace }}</span>
               <span class="t-desc">{{ t.description }}</span>
             </label>
-            <div v-if="!toolsLoading && !tools.length" class="hint">没有可用工具</div>
+            <div v-if="!toolsLoading && !toolsFailed && !tools.length" class="hint">没有可用工具</div>
           </div>
           <small class="hint">被排除的工具不进入系统提示，模型无法调用；保存立即生效</small>
         </section>
