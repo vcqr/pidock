@@ -80,8 +80,7 @@ function makeReviewTheme() {
         fontSize: "12.5px",
         backgroundColor: "var(--pd-bg)",
         color: "var(--pd-text-2)",
-      },
-      ".cm-scroller": {
+      },      ".cm-scroller": {
         fontFamily: "Consolas, 'Courier New', monospace",
         lineHeight: "1.7",
       },
@@ -304,6 +303,12 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 .rv-editor :deep(.cm-editor) { height: 100%; }
+/* merge 包 highlightChanges 在变更文字底部画 2px 红/绿渐变条（baseTheme，dark 变体 0.667 透明度），
+   本面板已用整行红绿底色表达增删，条状标记是冗余噪音，抹掉（覆盖 baseTheme 的 0,2,0 特异性） */
+.rv-editor :deep(.cm-changedText),
+.rv-editor :deep(.cm-deletedText) {
+  background: none;
+}
 .rv-note {
   flex: 1;
   display: grid;
