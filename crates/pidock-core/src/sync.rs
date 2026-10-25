@@ -563,15 +563,19 @@ async fn execute_command(
                     .await?;
             return Ok(Some(result));
         }
-        // 本机命令：目录列举 / git 分支信息与切换。同样不经 host —— web console 的
-        // 「打开文件夹」弹层与分支 chip 中继到目标机器，在核心 Rust 侧执行
-        // （与桌面 ipc 的 fs_list / git_* 是同一份实现）
-        local @ ("fs_list" | "git_info" | "git_branches" | "git_checkout") => {
+        // 本机命令：目录列举 / git 分支信息与切换 / 提交历史与变更文件。同样不经 host ——
+        // web console 的「打开文件夹」弹层、分支 chip 与文件面板提交视图中继到目标机器，
+        // 在核心 Rust 侧执行（与桌面 ipc 的 fs_list / git_* 是同一份实现）
+        local @ ("fs_list" | "git_info" | "git_branches" | "git_checkout" | "git_log"
+        | "git_commit_files" | "git_commit_diff") => {
             let result = match local {
                 "fs_list" => crate::fs::list(payload.clone()).await,
                 "git_info" => crate::git::info(payload.clone()).await,
                 "git_branches" => crate::git::branches(payload.clone()).await,
-                _ => crate::git::checkout(payload.clone()).await,
+                "git_checkout" => crate::git::checkout(payload.clone()).await,
+                "git_log" => crate::git::log(payload.clone()).await,
+                "git_commit_files" => crate::git::commit_files(payload.clone()).await,
+                _ => crate::git::commit_diff(payload.clone()).await,
             };
             return result.map(Some);
         }

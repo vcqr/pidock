@@ -34,6 +34,28 @@ export const REVEAL_PATH: InjectionKey<(path: string) => Promise<void>> = Symbol
 /** 用系统默认浏览器打开外部链接（桌面=Tauri 命令；未注入时调用方回落 window.open） */
 export const OPEN_EXTERNAL: InjectionKey<(url: string) => Promise<void>> = Symbol("pidock.openExternal");
 
+/** 单条提交（git_log 返回项，文件面板「提交」视图用） */
+export interface GitCommit {
+  hash: string;
+  short: string;
+  author: string;
+  /** 提交时间（unix 秒） */
+  time: number;
+  subject: string;
+  /** 修饰引用（HEAD -> main、origin/main、tag: v0.1.1 等） */
+  refs: string[];
+}
+
+/** 提交的变更文件（git_commit_files 返回项） */
+export interface CommitFileStat {
+  path: string;
+  /** 状态字母 A/M/D/T 等（--no-renames，无 R；前端按首字母着色） */
+  status: string;
+  /** +/- 行数；二进制为 -1（前端不显示） */
+  added: number;
+  removed: number;
+}
+
 /** git 分支信息与切换（CoreCtx 命令面，桌面与 webhost 都提供）；项目 chip 的分支选择器用 */
 export interface GitApi {
   /** 仓库检测 + 当前分支（非仓库时 is_repo = false） */
@@ -42,6 +64,12 @@ export interface GitApi {
   branches(cwd: string): Promise<{ current: string | null; branches: Array<{ name: string; current: boolean }> }>;
   /** 检出分支；create = 创建并检出 */
   checkout(cwd: string, branch: string, create?: boolean): Promise<{ ok: boolean; branch: string }>;
+  /** 提交历史（HEAD 所在分支，新→旧）；skip 供「加载更多」分页 */
+  log(cwd: string, limit?: number, skip?: number): Promise<{ commits: GitCommit[] }>;
+  /** 提交的变更文件清单 */
+  commitFiles(cwd: string, hash: string): Promise<{ files: CommitFileStat[] }>;
+  /** 提交中单个文件的新旧快照；binary 时文本为空 */
+  commitDiff(cwd: string, hash: string, path: string): Promise<{ old_text: string; new_text: string; binary: boolean }>;
 }
 export const GIT_API: InjectionKey<GitApi> = Symbol("pidock.gitApi");
 

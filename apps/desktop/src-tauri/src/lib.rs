@@ -178,6 +178,44 @@ async fn git_checkout(
 }
 
 #[tauri::command]
+async fn git_log(
+    state: tauri::State<'_, Arc<CoreCtx>>,
+    cwd: String,
+    limit: Option<u64>,
+    skip: Option<u64>,
+) -> Result<Value, String> {
+    state
+        .handle(
+            "git_log",
+            serde_json::json!({ "cwd": cwd, "limit": limit, "skip": skip }),
+        )
+        .await
+}
+
+#[tauri::command]
+async fn git_commit_files(
+    state: tauri::State<'_, Arc<CoreCtx>>,
+    cwd: String,
+    hash: String,
+) -> Result<Value, String> {
+    state
+        .handle("git_commit_files", serde_json::json!({ "cwd": cwd, "hash": hash }))
+        .await
+}
+
+#[tauri::command]
+async fn git_commit_diff(
+    state: tauri::State<'_, Arc<CoreCtx>>,
+    cwd: String,
+    hash: String,
+    path: String,
+) -> Result<Value, String> {
+    state
+        .handle("git_commit_diff", serde_json::json!({ "cwd": cwd, "hash": hash, "path": path }))
+        .await
+}
+
+#[tauri::command]
 async fn fs_list(state: tauri::State<'_, Arc<CoreCtx>>, path: Option<String>) -> Result<Value, String> {
     state.handle("fs_list", serde_json::json!({ "path": path })).await
 }
@@ -211,6 +249,9 @@ pub fn run() {
             git_info,
             git_branches,
             git_checkout,
+            git_log,
+            git_commit_files,
+            git_commit_diff,
             fs_list,
             tray::desktop_config_get,
             tray::desktop_config_set,

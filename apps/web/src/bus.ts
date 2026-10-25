@@ -247,6 +247,26 @@ export function createWebBus(auth: AuthClient): DataBus & {
           });
           return result ?? {};
         }
+        case "git_log": {
+          const result = await command("", "git_log", {
+            cwd: params?.cwd,
+            limit: params?.limit,
+            skip: params?.skip,
+          });
+          return result ?? {};
+        }
+        case "git_commit_files": {
+          const result = await command("", "git_commit_files", { cwd: params?.cwd, hash: params?.hash });
+          return result ?? {};
+        }
+        case "git_commit_diff": {
+          const result = await command("", "git_commit_diff", {
+            cwd: params?.cwd,
+            hash: params?.hash,
+            path: params?.path,
+          });
+          return result ?? {};
+        }
         case "session.remove":
         case "session.delete": {
           // 先命令桌面端删 host 注册表条目（session.delete 连磁盘 JSONL 一并清除），

@@ -533,6 +533,9 @@ provide(GIT_API, {
   branches: (cwd: string) => machineReq("git_branches", { cwd }),
   checkout: (cwd: string, branch: string, create?: boolean) =>
     machineReq("git_checkout", { cwd, branch, create: create ?? false }),
+  log: (cwd: string, limit?: number, skip?: number) => machineReq("git_log", { cwd, limit, skip }),
+  commitFiles: (cwd: string, hash: string) => machineReq("git_commit_files", { cwd, hash }),
+  commitDiff: (cwd: string, hash: string, path: string) => machineReq("git_commit_diff", { cwd, hash, path }),
 });
 provide(FS_LIST, (path?: string) => machineReq("fs_list", { path: path ?? null }));
 

@@ -2,7 +2,7 @@
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { NSplit } from "naive-ui";
 import type { AgentStore, ExpertInfo, UiItem } from "../store.js";
-import { REVEAL_PATH } from "../databus.js";
+import { GIT_API, REVEAL_PATH } from "../databus.js";
 import { formatSpan, greeting, isInsideDefaultWorkspace } from "../utils/time.js";
 import FileIcon from "./FileIcon.vue";
 import { mediaKindOf } from "../fileIcons.js";
@@ -509,6 +509,37 @@ function closeReviewTab(path: string): void {
 function closeReviewAll(): void {
   reviewTabs.value = [];
   reviewActive.value = null;
+}
+
+// ---- 提交历史的变更文件：文件面板上报 → 拉新旧快照 → 审查面板开 diff 标签 ----
+const gitApi = inject(GIT_API, null);
+async function onCommitDiff(p: {
+  hash: string;
+  short: string;
+  subject: string;
+  file: { path: string; status: string; added: number; removed: number };
+}): Promise<void> {
+  const cwd = props.filesCwd?.cwd;
+  if (!cwd || !gitApi) return;
+  // 标签路径带短 hash 前缀：与 AI 改动审查的同名文件标签区分，子标题顺带显示所属提交
+  const tabPath = `${p.short}/${p.file.path}`;
+  try {
+    const r = await gitApi.commitDiff(cwd, p.hash, p.file.path);
+    const data = {
+      path: tabPath,
+      oldText: r.old_text,
+      newText: r.new_text,
+      added: Math.max(0, p.file.added),
+      removed: Math.max(0, p.file.removed),
+      binary: r.binary === true,
+    };
+    const i = reviewTabs.value.findIndex((t) => t.path === tabPath);
+    if (i >= 0) reviewTabs.value[i] = data;
+    else reviewTabs.value.push(data);
+    reviewActive.value = tabPath;
+  } catch (err) {
+    props.store.lastError = `提交文件快照拉取失败：${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 // ---- 审查面板拖拽调宽（NSplit）：size 指对话区（pane1），持久化审查面板宽度 ----
@@ -1293,6 +1324,17 @@ watch(expandedTurns, () => {
       @close="closePreviewTab"
       @close-all="closePreviewAll"
     />
+    <!-- 提交 diff 审查浮层：home 模式没有 conv-row 分栏（内层 ReviewPanel 的宿主），
+         这里用浮层承载；会话模式仍走内层分栏停靠，reviewTabs 两边共享 -->
+    <ReviewPanel
+      v-if="home && reviewTabs.length"
+      class="review-home-overlay"
+      :tabs="reviewTabs"
+      :active="reviewActive ?? reviewTabs[0]!.path"
+      @select="(p: string) => (reviewActive = p)"
+      @close-tab="closeReviewTab"
+      @close="closeReviewAll"
+    />
     </div>
     </template>
     <template #2>
@@ -1305,6 +1347,7 @@ watch(expandedTurns, () => {
         :active-path="activePreviewPath"
         :load-files="store.listWorkspaceFiles"
         @open-file="openPreviewFile"
+        @open-commit-diff="onCommitDiff"
         @close="emit('close-files')"
       />
     </template>
@@ -1401,6 +1444,14 @@ export default { components: { ToolCard, MessageItem } };
   position: absolute;
   inset: 0;
   /* 高于窄屏的文件树/审查/进度浮层（z 45）：从浮层点文件打开的预览要盖住来源 */
+  z-index: 50;
+  border-left: 1px solid var(--pd-border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
+}
+/* home 模式的提交 diff 审查浮层（与 preview-overlay 同位同级；会话模式走 chat-split 内停靠） */
+.review-home-overlay {
+  position: absolute;
+  inset: 0;
   z-index: 50;
   border-left: 1px solid var(--pd-border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);

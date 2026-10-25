@@ -157,6 +157,9 @@ provide(GIT_API, {
   info: (cwd: string) => ipc("git_info", { cwd }),
   branches: (cwd: string) => ipc("git_branches", { cwd }),
   checkout: (cwd: string, branch: string, create?: boolean) => ipc("git_checkout", { cwd, branch, create: create ?? false }),
+  log: (cwd: string, limit?: number, skip?: number) => ipc("git_log", { cwd, limit, skip }),
+  commitFiles: (cwd: string, hash: string) => ipc("git_commit_files", { cwd, hash }),
+  commitDiff: (cwd: string, hash: string, path: string) => ipc("git_commit_diff", { cwd, hash, path }),
 });
 
 // 服务端目录列举：「打开文件夹」与文件选择弹层的数据源（桌面与 webhost 统一，替代系统对话框）
